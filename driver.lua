@@ -1,6 +1,6 @@
 --[[
     Proflame WiFi Fireplace Controller - Control4 Driver
-    Version 2025121701 - Fetch room temperature at startup, map temperature_read field
+    Version 2025121705 - Use PROFLAMECONNECTION to trigger status dump at startup
 ]]
 
 -- =============================================================================
@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2025121701"
+DRIVER_VERSION = "2025121705"
 DRIVER_DATE = "2025-12-17"
 
 NETWORK_BINDING_ID = 6001
@@ -610,14 +610,10 @@ function SendProflameCommand(control, value)
 end
 
 function RequestAllStatus()
-    -- Send a ping first to confirm connection
-    SendPing()
-    -- Request current status by querying a read-only value
-    -- The device responds with full status when it receives any command
-    -- Sending a benign read of current state triggers status push
-    local cmd = '{"command":"status"}'
-    dbg("Requesting full status from device")
-    SendWebSocketMessage(cmd)
+    -- The Proflame device requires PROFLAMECONNECTION to trigger full status dump
+    -- This is similar to PROFLAMEPING/PROFLAMEPONG but for initial connection
+    dbg("Sending PROFLAMECONNECTION to request full status")
+    SendWebSocketMessage("PROFLAMECONNECTION")
 end
 
 function UpdateAllProxies()
@@ -626,6 +622,7 @@ function UpdateAllProxies()
     UpdateRoomTemperature()
     UpdateFanMode()
     UpdateFlameLevel()
+    UpdatePresetMode()
     UpdateExtrasState()
 end
 
@@ -663,6 +660,11 @@ function ParseStatusMessage(data)
     if not data then return end
     if data == "PROFLAMEPONG" then
         C4:UpdateProperty("Last Ping Response", os.date("%Y-%m-%d %H:%M:%S"))
+        return
+    end
+    if data == "PROFLAMECONNECTIONOPEN" then
+        dbg("Connection acknowledged by device")
+        C4:UpdateProperty("Connection Status", "Connected")
         return
     end
     if data:sub(1, 1) == "{" then
@@ -708,6 +710,8 @@ end
 function ProcessStatusUpdate(status, value)
     if not status or not value then return end
     
+    dbg("ProcessStatusUpdate: " .. tostring(status) .. " = " .. tostring(value))
+    
     if status == "temperature_set" then
         local incomingF = DecodeTemperature(value)
         if gPendingSetpointF ~= nil then
@@ -728,6 +732,7 @@ function ProcessStatusUpdate(status, value)
     if status == "main_mode" then
         C4:UpdateProperty("Operating Mode", GetModeString(value))
         UpdateThermostatProxy(value)
+        UpdatePresetMode(value)
     elseif status == "flame_control" then
         C4:UpdateProperty("Flame Level", tostring(value))
         UpdateFlameLevel()
@@ -739,8 +744,9 @@ function ProcessStatusUpdate(status, value)
     elseif status == "temperature_set" then
         C4:UpdateProperty("Temperature Setpoint", DecodeTemperature(value) .. "F")
         UpdateThermostatSetpoint()
-    elseif status == "room_temperature" then
+    elseif status == "room_temperature" or status == "temperature_read" then
         gState.room_temperature = value
+        dbg("Room temperature updated: " .. value .. " (raw) = " .. DecodeTemperature(value) .. "F")
         UpdateRoomTemperature()
     elseif status == "thermo_control" then
         C4:UpdateProperty("Thermostat Enabled", value == "1" and "Yes" or "No")
@@ -801,6 +807,22 @@ function UpdateFlameLevel()
     local flameLevel = tonumber(gState.flame_control) or 0
     local percent = math.floor(flameLevel / 6 * 100)
     C4:SendToProxy(LIGHT_PROXY_ID, "LIGHT_LEVEL", percent)
+end
+
+function UpdatePresetMode(modeOverride)
+    local mode = modeOverride or gState.main_mode
+    local preset = ""
+    if mode == MODE_MANUAL then
+        preset = "Manual"
+    elseif mode == MODE_SMART then
+        preset = "Smart"
+    elseif mode == MODE_ECO then
+        preset = "Eco"
+    end
+    if preset ~= "" then
+        dbg("Updating preset mode to: " .. preset)
+        C4:SendToProxy(THERMOSTAT_PROXY_ID, "PRESET_MODE_CHANGED", { MODE = preset })
+    end
 end
 
 -- =============================================================================
@@ -972,6 +994,21 @@ function HandleThermostatCommand(strCommand, tParams)
         local scale = tParams["SCALE"] or "FAHRENHEIT"
         C4:SendToProxy(THERMOSTAT_PROXY_ID, "SCALE_CHANGED", { SCALE = scale })
         UpdateThermostatSetpoint()
+        
+    elseif strCommand == "SET_PRESET" then
+        local preset = tParams["PRESET"] or tParams["MODE"] or ""
+        dbg("SET_PRESET received: " .. preset)
+        if preset == "Manual" then
+            SendProflameCommand("main_mode", MODE_MANUAL)
+            local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
+            C4:SetTimer(750, function() SendProflameCommand("flame_control", tostring(defaultFlame)) end, false)
+        elseif preset == "Smart" then
+            SendProflameCommand("main_mode", MODE_SMART)
+        elseif preset == "Eco" then
+            SendProflameCommand("main_mode", MODE_ECO)
+        end
+        -- Notify proxy of preset change
+        C4:SendToProxy(THERMOSTAT_PROXY_ID, "PRESET_MODE_CHANGED", { MODE = preset })
     end
 end
 
