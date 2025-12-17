@@ -1,0 +1,479 @@
+<?xml version="1.0"?>
+<devicedata>
+  <copyright>Copyright 2025 Paul Saab. All rights reserved.</copyright>
+  <name>Proflame WiFi Fireplace</name>
+  <small>devices_sm/relaysingle_gasfireplace_close.gif</small>
+  <large>devices_lg/relaysingle_gasfireplace_close.gif</large>
+  <control>lua_gen</control>
+  <controlmethod>IP</controlmethod>
+  <version>2025121701</version>
+  <proxy name="Proflame Fireplace" proxybindingid="5001">thermostatV2</proxy>
+  <proxy name="Flame Control" proxybindingid="5002">light_v2</proxy>
+  <combo>false</combo>
+  <driver>DriverWorks</driver>
+  <composer_categories>
+    <category>HVAC</category>
+  </composer_categories>
+  <states/>
+  <config>
+    <documentation file="www/documentation.html"/>
+    <properties>
+      <property>
+        <name>Driver Version</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>Connection Status</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>IP Address</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>false</readonly>
+      </property>
+      <property>
+        <name>Port</name>
+        <type>RANGED_INTEGER</type>
+        <minimum>1</minimum>
+        <maximum>65535</maximum>
+        <default>88</default>
+        <readonly>false</readonly>
+      </property>
+      <property>
+        <name>Ping Interval (seconds)</name>
+        <type>RANGED_INTEGER</type>
+        <minimum>1</minimum>
+        <maximum>30</maximum>
+        <default>5</default>
+        <readonly>false</readonly>
+      </property>
+      <property>
+        <name>Reconnect Delay (seconds)</name>
+        <type>RANGED_INTEGER</type>
+        <minimum>5</minimum>
+        <maximum>300</maximum>
+        <default>10</default>
+        <readonly>false</readonly>
+      </property>
+      <property>
+        <name>WiFi Signal Strength</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>Last Ping Response</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>Operating Mode</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>Flame Level</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>Fan Level</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>Light Level</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>Temperature Setpoint</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>Room Temperature</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>Thermostat Enabled</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>Pilot Status</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>Aux Output</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>Front Flame (Split)</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>Timer Active</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>Burner Status</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>Default On Mode</name>
+        <type>LIST</type>
+        <items>
+          <item>Manual</item>
+          <item>Smart (Thermostat)</item>
+          <item>Eco</item>
+        </items>
+        <default>Manual</default>
+        <readonly>false</readonly>
+      </property>
+      <property>
+        <name>Default Flame Level</name>
+        <type>RANGED_INTEGER</type>
+        <minimum>0</minimum>
+        <maximum>6</maximum>
+        <default>3</default>
+        <readonly>false</readonly>
+      </property>
+      <property>
+        <name>Temperature Display Source</name>
+        <type>LIST</type>
+        <items>
+          <item>Room Sensor</item>
+          <item>Setpoint</item>
+        </items>
+        <default>Room Sensor</default>
+        <readonly>false</readonly>
+      </property>
+      <property>
+        <name>Debug Mode</name>
+        <type>LIST</type>
+        <items>
+          <item>Off</item>
+          <item>On</item>
+        </items>
+        <default>On</default>
+        <readonly>false</readonly>
+      </property>
+      <property>
+        <name>Debug Level</name>
+        <type>LIST</type>
+        <items>
+          <item>Error</item>
+          <item>Warning</item>
+          <item>Info</item>
+          <item>Debug</item>
+          <item>Trace</item>
+        </items>
+        <default>Debug</default>
+        <readonly>false</readonly>
+      </property>
+    </properties>
+    <commands>
+      <command>
+        <name>Turn On</name>
+        <description>Turn the fireplace on</description>
+      </command>
+      <command>
+        <name>Turn Off</name>
+        <description>Turn the fireplace off</description>
+      </command>
+      <command>
+        <name>Set Mode Manual</name>
+        <description>Set fireplace to Manual mode</description>
+      </command>
+      <command>
+        <name>Set Mode Smart</name>
+        <description>Set fireplace to Smart thermostat mode</description>
+      </command>
+      <command>
+        <name>Set Mode Eco</name>
+        <description>Set fireplace to Eco thermostat mode</description>
+      </command>
+      <command>
+        <name>Set Flame Level</name>
+        <description>Set flame level 0-6</description>
+        <params>
+          <param>
+            <name>Level</name>
+            <type>RANGED_INTEGER</type>
+            <minimum>0</minimum>
+            <maximum>6</maximum>
+          </param>
+        </params>
+      </command>
+      <command>
+        <name>Flame Up</name>
+        <description>Increase flame level</description>
+      </command>
+      <command>
+        <name>Flame Down</name>
+        <description>Decrease flame level</description>
+      </command>
+      <command>
+        <name>Set Fan Level</name>
+        <description>Set fan level 0-6</description>
+        <params>
+          <param>
+            <name>Level</name>
+            <type>RANGED_INTEGER</type>
+            <minimum>0</minimum>
+            <maximum>6</maximum>
+          </param>
+        </params>
+      </command>
+      <command>
+        <name>Fan On</name>
+        <description>Turn fan to max</description>
+      </command>
+      <command>
+        <name>Fan Off</name>
+        <description>Turn fan off</description>
+      </command>
+      <command>
+        <name>Set Light Level</name>
+        <description>Set light level 0-6</description>
+        <params>
+          <param>
+            <name>Level</name>
+            <type>RANGED_INTEGER</type>
+            <minimum>0</minimum>
+            <maximum>6</maximum>
+          </param>
+        </params>
+      </command>
+      <command>
+        <name>Light On</name>
+        <description>Turn light to max</description>
+      </command>
+      <command>
+        <name>Light Off</name>
+        <description>Turn light off</description>
+      </command>
+      <command>
+        <name>Set Temperature</name>
+        <description>Set thermostat temperature 60-90F</description>
+        <params>
+          <param>
+            <name>Temperature</name>
+            <type>RANGED_INTEGER</type>
+            <minimum>60</minimum>
+            <maximum>90</maximum>
+          </param>
+        </params>
+      </command>
+      <command>
+        <name>Toggle Pilot</name>
+        <description>Toggle continuous pilot</description>
+      </command>
+      <command>
+        <name>Pilot On</name>
+        <description>Turn pilot on</description>
+      </command>
+      <command>
+        <name>Pilot Off</name>
+        <description>Turn pilot off</description>
+      </command>
+      <command>
+        <name>Toggle Aux</name>
+        <description>Toggle auxiliary output</description>
+      </command>
+      <command>
+        <name>Toggle Front Flame</name>
+        <description>Toggle front flame</description>
+      </command>
+      <command>
+        <name>Set Timer</name>
+        <description>Set auto-off timer in minutes</description>
+        <params>
+          <param>
+            <name>Minutes</name>
+            <type>RANGED_INTEGER</type>
+            <minimum>1</minimum>
+            <maximum>480</maximum>
+          </param>
+        </params>
+      </command>
+      <command>
+        <name>Cancel Timer</name>
+        <description>Cancel the auto-off timer</description>
+      </command>
+    </commands>
+    <script file="driver.lua" encryption="0" jit="1"/>
+  </config>
+  <events>
+    <event>
+      <id>1</id>
+      <name>Fireplace Turned On</name>
+      <description>Fireplace has been turned on</description>
+    </event>
+    <event>
+      <id>2</id>
+      <name>Fireplace Turned Off</name>
+      <description>Fireplace has been turned off</description>
+    </event>
+    <event>
+      <id>3</id>
+      <name>Mode Changed</name>
+      <description>Operating mode has changed</description>
+    </event>
+    <event>
+      <id>4</id>
+      <name>Connection Lost</name>
+      <description>Connection to fireplace lost</description>
+    </event>
+    <event>
+      <id>5</id>
+      <name>Connection Restored</name>
+      <description>Connection to fireplace restored</description>
+    </event>
+  </events>
+  <connections>
+    <connection>
+      <id>6001</id>
+      <facing>6</facing>
+      <connectionname>Proflame Network</connectionname>
+      <type>4</type>
+      <consumer>True</consumer>
+      <audiosource>False</audiosource>
+      <videosource>False</videosource>
+      <linelevel>False</linelevel>
+      <classes>
+        <class>
+          <classname>TCP</classname>
+          <ports>
+            <port>
+              <number>88</number>
+              <auto_connect>False</auto_connect>
+              <monitor_connection>False</monitor_connection>
+              <keep_connection>False</keep_connection>
+            </port>
+          </ports>
+        </class>
+      </classes>
+    </connection>
+    <connection>
+      <id>5001</id>
+      <facing>6</facing>
+      <connectionname>Thermostat</connectionname>
+      <type>2</type>
+      <consumer>False</consumer>
+      <audiosource>False</audiosource>
+      <videosource>False</videosource>
+      <linelevel>False</linelevel>
+      <classes>
+        <class>
+          <classname>THERMOSTAT</classname>
+        </class>
+      </classes>
+    </connection>
+    <connection>
+      <id>5002</id>
+      <facing>6</facing>
+      <connectionname>Flame Control</connectionname>
+      <type>2</type>
+      <consumer>False</consumer>
+      <audiosource>False</audiosource>
+      <videosource>False</videosource>
+      <linelevel>False</linelevel>
+      <classes>
+        <class>
+          <classname>LIGHT</classname>
+        </class>
+      </classes>
+    </connection>
+    <connection>
+      <id>7000</id>
+      <facing>6</facing>
+      <connectionname>Room Selection</connectionname>
+      <type>7</type>
+      <consumer>False</consumer>
+      <audiosource>False</audiosource>
+      <videosource>False</videosource>
+      <linelevel>False</linelevel>
+      <classes>
+        <class>
+          <autobind>True</autobind>
+          <classname>TEMPERATURE</classname>
+        </class>
+        <class>
+          <autobind>True</autobind>
+          <classname>TEMPERATURE_CONTROL</classname>
+        </class>
+      </classes>
+    </connection>
+  </connections>
+  <manufacturer>SIT Group / Proflame</manufacturer>
+  <creator>Paul Saab</creator>
+  <created>12/02/2025 12:00 PM</created>
+  <modified>12/16/2025 09:00 PM</modified>
+  <model>Proflame 2 WiFi</model>
+  <capabilities>
+    <has_extras>True</has_extras>
+    <current_temperature_min_c>-40</current_temperature_min_c>
+    <current_temperature_max_c>60</current_temperature_max_c>
+    <current_temperature_resolution_c>0.5</current_temperature_resolution_c>
+    <current_temperature_min_f>-40</current_temperature_min_f>
+    <current_temperature_max_f>140</current_temperature_max_f>
+    <current_temperature_resolution_f>1</current_temperature_resolution_f>
+    <can_change_scale>True</can_change_scale>
+    <temperature_scale>FAHRENHEIT</temperature_scale>
+    <can_heat>True</can_heat>
+    <can_cool>False</can_cool>
+    <can_do_auto>False</can_do_auto>
+    <can_preset>True</can_preset>
+    <can_preset_schedule>True</can_preset_schedule>
+    <has_outdoor_temperature>False</has_outdoor_temperature>
+    <split_setpoints>False</split_setpoints>
+    <setpoint_heat_min_c>15.5</setpoint_heat_min_c>
+    <setpoint_heat_max_c>32.2</setpoint_heat_max_c>
+    <setpoint_heat_resolution_c>0.5</setpoint_heat_resolution_c>
+    <setpoint_heat_min_f>60</setpoint_heat_min_f>
+    <setpoint_heat_max_f>90</setpoint_heat_max_f>
+    <setpoint_heat_resolution_f>1</setpoint_heat_resolution_f>
+    <scheduling>False</scheduling>
+    <hvac_modes>Off,Heat</hvac_modes>
+    <hold_modes/>
+    <hvac_states>Off,Heat</hvac_states>
+    <can_set_backlight>False</can_set_backlight>
+    <has_time_settings>False</has_time_settings>
+    <can_change_fan_count>False</can_change_fan_count>
+    <has_emergency_heat>False</has_emergency_heat>
+    <can_change_hvac_modes>True</can_change_hvac_modes>
+    <has_vacation_mode>False</has_vacation_mode>
+    <has_fan_mode>True</has_fan_mode>
+    <can_change_fan_modes>True</can_change_fan_modes>
+    <fan_modes>Off,1,2,3,4,5,6</fan_modes>
+    <has_remote_sensor>False</has_remote_sensor>
+    <has_single_setpoint>True</has_single_setpoint>
+    <can_inc_dec_setpoints>True</can_inc_dec_setpoints>
+  </capabilities>
+</devicedata>

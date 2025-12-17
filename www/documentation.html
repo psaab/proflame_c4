@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Proflame WiFi Fireplace - Control4 Driver Documentation</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            line-height: 1.6;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            color: #333;
+            background: #f9f9f9;
+        }
+        h1 {
+            color: #d35400;
+            border-bottom: 3px solid #d35400;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #e67e22;
+            margin-top: 30px;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 5px;
+        }
+        h3 {
+            color: #555;
+        }
+        .info-box {
+            background: #fff;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            margin: 15px 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .warning-box {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .success-box {
+            background: #d4edda;
+            border-left: 4px solid #28a745;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+            background: #fff;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+        }
+        th {
+            background: #e67e22;
+            color: white;
+        }
+        tr:nth-child(even) {
+            background: #f9f9f9;
+        }
+        code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Consolas', 'Monaco', monospace;
+        }
+        pre {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+        .version-info {
+            background: #fff;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        ul {
+            padding-left: 25px;
+        }
+        li {
+            margin: 8px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔥 Proflame WiFi Fireplace Driver</h1>
+    
+    <div class="version-info">
+        <strong>Version:</strong> 1.0.0<br>
+        <strong>Date:</strong> December 2, 2025<br>
+        <strong>Author:</strong> Paul Saab<br>
+        <strong>Device:</strong> SIT Group Proflame 2 WiFi Controller
+    </div>
+
+    <h2>Overview</h2>
+    <p>This Control4 driver provides complete control over SIT Group Proflame 2 WiFi enabled fireplaces. It connects directly to the fireplace controller via WebSocket and provides real-time status updates and control.</p>
+    
+    <div class="info-box">
+        <strong>Key Features:</strong>
+        <ul>
+            <li>Full power and mode control (Off, Standby, Manual, Smart, Eco)</li>
+            <li>Flame level control (0-6)</li>
+            <li>Fan/blower control (0-6)</li>
+            <li>Accent light control (0-6)</li>
+            <li>Thermostat temperature control (60-90°F)</li>
+            <li>Timer functionality</li>
+            <li>Auxiliary output and split flame control</li>
+            <li>Real-time status monitoring</li>
+        </ul>
+    </div>
+
+    <h2>Installation</h2>
+    <ol>
+        <li>Add the driver to your Control4 project via Composer Pro</li>
+        <li>Configure the IP address of your Proflame WiFi controller</li>
+        <li>The driver will automatically connect and begin receiving status updates</li>
+    </ol>
+
+    <h2>Configuration Properties</h2>
+    
+    <h3>Connection Settings</h3>
+    <table>
+        <tr>
+            <th>Property</th>
+            <th>Description</th>
+            <th>Default</th>
+        </tr>
+        <tr>
+            <td>IP Address</td>
+            <td>IP address of the Proflame WiFi controller</td>
+            <td>(empty)</td>
+        </tr>
+        <tr>
+            <td>Port</td>
+            <td>TCP port number (usually 88)</td>
+            <td>88</td>
+        </tr>
+        <tr>
+            <td>Ping Interval</td>
+            <td>Keep-alive interval in seconds</td>
+            <td>5</td>
+        </tr>
+        <tr>
+            <td>Reconnect Delay</td>
+            <td>Seconds to wait before reconnecting after disconnect</td>
+            <td>10</td>
+        </tr>
+    </table>
+
+    <h3>Default Behavior Settings</h3>
+    <table>
+        <tr>
+            <th>Property</th>
+            <th>Description</th>
+            <th>Default</th>
+        </tr>
+        <tr>
+            <td>Default On Mode</td>
+            <td>Mode to use when turning on: Manual, Smart (Thermostat), or Eco</td>
+            <td>Manual</td>
+        </tr>
+        <tr>
+            <td>Default Flame Level</td>
+            <td>Flame level to set when turning on (0-6)</td>
+            <td>3</td>
+        </tr>
+        <tr>
+            <td>Default Fan Level</td>
+            <td>Fan level when turning on (0-6)</td>
+            <td>0</td>
+        </tr>
+        <tr>
+            <td>Default Light Level</td>
+            <td>Accent light level when turning on (0-6)</td>
+            <td>0</td>
+        </tr>
+    </table>
+
+    <h2>Operating Modes</h2>
+    <table>
+        <tr>
+            <th>Mode</th>
+            <th>Description</th>
+            <th>Power State</th>
+        </tr>
+        <tr>
+            <td>Off</td>
+            <td>Fireplace completely off</td>
+            <td>OFF</td>
+        </tr>
+        <tr>
+            <td>Standby</td>
+            <td>Pilot only, not heating</td>
+            <td>OFF</td>
+        </tr>
+        <tr>
+            <td>Manual</td>
+            <td>Fixed flame height - you control flame level directly</td>
+            <td>ON</td>
+        </tr>
+        <tr>
+            <td>Smart</td>
+            <td>Thermostat mode - auto-adjusts flame to reach target temperature</td>
+            <td>ON</td>
+        </tr>
+        <tr>
+            <td>Eco</td>
+            <td>Energy-saving thermostat mode</td>
+            <td>ON</td>
+        </tr>
+    </table>
+
+    <div class="warning-box">
+        <strong>⚠️ Note:</strong> Temperature setpoint control only works in Smart and Eco modes. In Manual mode, the flame level is fixed regardless of temperature.
+    </div>
+
+    <h2>Control4 Integration</h2>
+    
+    <h3>Thermostat Proxy</h3>
+    <p>The driver implements a ThermostatV2 proxy for seamless integration with Control4 interfaces:</p>
+    <ul>
+        <li>Heat mode maps to fireplace ON (Manual/Smart/Eco based on default setting)</li>
+        <li>Off mode turns the fireplace completely off</li>
+        <li>Temperature setpoint adjusts the thermostat target (Smart/Eco modes)</li>
+        <li>Fan mode adjusts the blower level</li>
+    </ul>
+
+    <h3>Available Commands</h3>
+    <p>These commands can be used in programming:</p>
+    
+    <h4>Power &amp; Mode</h4>
+    <ul>
+        <li><code>Turn On</code> - Turn on using default mode</li>
+        <li><code>Turn Off</code> - Turn fireplace off</li>
+        <li><code>Set Mode Manual</code> - Switch to manual mode</li>
+        <li><code>Set Mode Smart</code> - Switch to thermostat mode</li>
+        <li><code>Set Mode Eco</code> - Switch to eco mode</li>
+        <li><code>Set Mode Standby</code> - Switch to standby (pilot only)</li>
+    </ul>
+
+    <h4>Flame Control</h4>
+    <ul>
+        <li><code>Set Flame Level</code> - Set flame (0-6)</li>
+        <li><code>Flame Up</code> - Increase flame by 1</li>
+        <li><code>Flame Down</code> - Decrease flame by 1</li>
+    </ul>
+
+    <h4>Fan Control</h4>
+    <ul>
+        <li><code>Set Fan Level</code> - Set fan (0-6)</li>
+        <li><code>Fan On</code> - Fan to maximum</li>
+        <li><code>Fan Off</code> - Fan off</li>
+    </ul>
+
+    <h4>Light Control</h4>
+    <ul>
+        <li><code>Set Light Level</code> - Set accent light (0-6)</li>
+        <li><code>Light On</code> - Light to maximum</li>
+        <li><code>Light Off</code> - Light off</li>
+    </ul>
+
+    <h4>Temperature</h4>
+    <ul>
+        <li><code>Set Temperature</code> - Set thermostat target (60-90°F)</li>
+    </ul>
+
+    <h4>Other Controls</h4>
+    <ul>
+        <li><code>Toggle Pilot</code> / <code>Pilot On</code> / <code>Pilot Off</code> - Continuous pilot control</li>
+        <li><code>Toggle Aux</code> - Toggle auxiliary output</li>
+        <li><code>Toggle Front Flame</code> - Toggle split flow / front flame</li>
+        <li><code>Set Timer</code> - Set auto-off timer (minutes)</li>
+        <li><code>Cancel Timer</code> - Cancel active timer</li>
+    </ul>
+
+    <h3>Events</h3>
+    <p>The following events are fired for use in programming:</p>
+    <ul>
+        <li><strong>Fireplace Turned On</strong> - When fireplace changes from off to on</li>
+        <li><strong>Fireplace Turned Off</strong> - When fireplace changes from on to off</li>
+        <li><strong>Mode Changed</strong> - When operating mode changes</li>
+        <li><strong>Connection Lost</strong> - When connection to controller is lost</li>
+        <li><strong>Connection Restored</strong> - When connection is re-established</li>
+        <li><strong>Temperature Setpoint Reached</strong> - When target temperature is reached</li>
+        <li><strong>Timer Expired</strong> - When auto-off timer completes</li>
+    </ul>
+
+    <h2>Troubleshooting</h2>
+    
+    <h3>Connection Issues</h3>
+    <div class="info-box">
+        <ol>
+            <li>Verify the fireplace controller is powered on and connected to WiFi</li>
+            <li>Confirm the IP address is correct (check your router or use the Proflame app)</li>
+            <li>Ensure port 88 is not blocked by any firewall</li>
+            <li>Try the "Reconnect" action in Composer Pro</li>
+            <li>Check WiFi Signal Strength property - poor signal may cause disconnects</li>
+        </ol>
+    </div>
+
+    <h3>Debug Mode</h3>
+    <p>Enable Debug Mode in the driver properties to see detailed logging in Composer Pro's Lua output. Debug levels:</p>
+    <ul>
+        <li><strong>Error</strong> - Only critical errors</li>
+        <li><strong>Warning</strong> - Warnings and errors</li>
+        <li><strong>Info</strong> - General information (default)</li>
+        <li><strong>Debug</strong> - Detailed debugging info</li>
+        <li><strong>Trace</strong> - All messages including raw data</li>
+    </ul>
+
+    <h2>Technical Details</h2>
+    
+    <h3>Protocol</h3>
+    <ul>
+        <li>WebSocket over TCP on port 88</li>
+        <li>No authentication required</li>
+        <li>Keep-alive via PROFLAMEPING/PROFLAMEPONG every 5 seconds</li>
+        <li>Device pushes status updates (no polling required)</li>
+    </ul>
+
+    <h3>Temperature Encoding</h3>
+    <p>Temperatures are encoded as Fahrenheit × 10. For example:</p>
+    <ul>
+        <li>70°F is sent as "700"</li>
+        <li>75°F is sent as "750"</li>
+        <li>Range: 60-90°F (sent as 600-900)</li>
+    </ul>
+
+    <div class="success-box">
+        <strong>✓ Tip:</strong> For best results with the thermostat feature, use Smart mode which actively adjusts flame height to maintain the target temperature.
+    </div>
+
+    <h2>Support</h2>
+    <p>For support or feature requests, please contact:</p>
+    <ul>
+        <li><strong>Author:</strong> Paul Saab</li>
+        <li><strong>Version:</strong> 1.0.0</li>
+        <li><strong>Date:</strong> December 2, 2025</li>
+    </ul>
+
+    <hr>
+    <p style="text-align: center; color: #777; font-size: 12px;">
+        Proflame WiFi Fireplace Control4 Driver &copy; 2025 Paul Saab. All rights reserved.<br>
+        Proflame is a trademark of SIT Group.
+    </p>
+</body>
+</html>
