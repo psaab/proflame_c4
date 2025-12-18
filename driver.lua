@@ -1,6 +1,6 @@
 --[[
     Proflame WiFi Fireplace Controller - Control4 Driver
-    Version 2025121719 - Embed current values in extras_setup XML for proper initialization
+    Version 2025121720 - Changed flame level minimum to 1
 ]]
 
 -- =============================================================================
@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2025121719"
+DRIVER_VERSION = "2025121720"
 DRIVER_DATE = "2025-12-17"
 
 NETWORK_BINDING_ID = 6001
@@ -371,7 +371,7 @@ function GetExtrasXML()
           '</object>' ..
         '</section>' ..
         '<section label="Fireplace Controls">' ..
-          '<object type="slider" id="pf_flame" label="Flame Level" command="SET_FLAME_LEVEL" min="0" max="6" value="' .. flame .. '"/>' ..
+          '<object type="slider" id="pf_flame" label="Flame Level" command="SET_FLAME_LEVEL" min="1" max="6" value="' .. flame .. '"/>' ..
           '<object type="slider" id="pf_fan" label="Fan Speed" command="SET_FAN_LEVEL" min="0" max="6" value="' .. fan .. '"/>' ..
           '<object type="slider" id="pf_light" label="Downlight" command="SET_LIGHT_LEVEL" min="0" max="6" value="' .. light .. '"/>' ..
         '</section>' ..
