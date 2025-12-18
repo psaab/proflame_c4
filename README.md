@@ -1,550 +1,525 @@
-# Proflame WiFi Control4 Driver - Complete Specification
+# Proflame WiFi Control4 Driver Specification
 
-**Document Version:** 1.0  
-**Last Updated:** December 16, 2025  
-**Author:** Paul Saab  
+## Document Version
+Version 1.0 - December 17, 2025
 
 ---
 
 ## Table of Contents
-
-1. [Overview](#overview)
-2. [Proflame WiFi Protocol Specification](#proflame-wifi-protocol-specification)
-3. [Control4 Driver Architecture](#control4-driver-architecture)
-4. [Key Lessons Learned](#key-lessons-learned)
-5. [Building the C4Z Package](#building-the-c4z-package)
-6. [Current Driver Status](#current-driver-status)
+1. [Proflame WiFi Protocol](#proflame-wifi-protocol)
+2. [Control4 Driver Architecture](#control4-driver-architecture)
+3. [Control4 Thermostat Extras Menu](#control4-thermostat-extras-menu)
+4. [Control4 Proxy Communication](#control4-proxy-communication)
+5. [Complete XML Examples](#complete-xml-examples)
 
 ---
 
-## Overview
-
-This document describes a Control4 driver for SIT Group Proflame 2 WiFi fireplace controllers. The driver provides full fireplace control through the Control4 ecosystem including thermostat integration, flame level control, fan control, lighting, and more.
-
-### Features
-
-- **Thermostat Proxy (thermostatV2):** HVAC mode control, temperature setpoint, fan speed
-- **Light Proxy (light_v2):** Flame level as dimmer (0-100% → 0-6 levels)
-- **Full Control:** Flame, fan, light, pilot, aux output, timer
-- **Operating Modes:** Off, Standby, Manual, Smart (Thermostat), Eco
-- **Real-time Status:** Push notifications from device via WebSocket
-- **Extras Menu:** Flame height slider in iOS/Android app extras tab
-
----
-
-## Proflame WiFi Protocol Specification
+## Proflame WiFi Protocol
 
 ### Connection Details
-
-| Parameter | Value |
-|-----------|-------|
-| Protocol | WebSocket (RFC 6455) |
-| Port | 88 (TCP) |
-| Keep-Alive | PROFLAMEPING/PROFLAMEPONG every 5 seconds |
+- **Transport**: WebSocket over TCP
+- **Default Port**: 88
+- **Host**: Device IP address (e.g., 172.16.1.81)
 
 ### WebSocket Handshake
-
-The device requires a standard WebSocket handshake:
+The Proflame device uses a standard WebSocket handshake:
 
 ```
 GET / HTTP/1.1
-Host: <device_ip>:88
+Host: {ip}:{port}
 Upgrade: websocket
 Connection: Upgrade
-Sec-WebSocket-Key: <base64-encoded-random-key>
+Sec-WebSocket-Key: {base64-encoded-random-key}
 Sec-WebSocket-Version: 13
 ```
 
-The device responds with HTTP 101 Switching Protocols and the connection upgrades to WebSocket.
-
-### Keep-Alive Mechanism
-
-**CRITICAL:** The device uses a custom keep-alive mechanism, NOT standard WebSocket ping/pong frames.
-
-- Send text message `PROFLAMEPING` every 5 seconds
-- Expect text response `PROFLAMEPONG`
-- If no pong received, connection may be stale - reconnect
-
-### Command Format
-
-**CRITICAL:** JSON must be compact with NO SPACES after colons or commas. The device silently ignores malformed commands.
-
-```json
-{"control0":"<control>","value0":"<value>"}
+The device responds with:
+```
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: {computed-accept-key}
 ```
 
-✅ Correct: `{"control0":"main_mode","value0":"5"}`  
-❌ Wrong: `{"control0": "main_mode", "value0": "5"}` (has spaces - will be ignored!)
+The `Sec-WebSocket-Accept` is computed as:
+```
+Base64(SHA1(Sec-WebSocket-Key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+```
+
+### Keep-Alive Protocol
+- **Ping Message**: `PROFLAMEPING` (sent every 5 seconds)
+- **Pong Response**: `PROFLAMEPONG` (device responds)
+- **Connection Request**: `PROFLAMECONNECTION` (triggers full status dump)
+
+### Command Format
+**CRITICAL**: JSON commands must have NO SPACES after colons or commas. The device silently ignores malformed commands.
+
+#### Correct Format:
+```json
+{"command":"set_control","name":"flame_control","value":"6"}
+```
+
+#### Incorrect Format (will be ignored):
+```json
+{"command": "set_control", "name": "flame_control", "value": "6"}
+```
+
+### Status Updates
+The device sends status updates as JSON with indexed status/value pairs:
+
+```json
+{"status0":"flame_control","value0":"6","status1":"fan_control","value1":"0","status2":"main_mode","value2":"5"}
+```
+
+### Temperature Encoding
+- **Format**: Fahrenheit × 10
+- **Example**: 70°F = 700, 68.5°F = 685
+- **Decode**: `value / 10` = temperature in Fahrenheit
+- **Encode**: `temperature * 10` = encoded value
 
 ### Operating Modes (main_mode)
-
 | Value | Mode | Description |
 |-------|------|-------------|
 | 0 | Off | Fireplace completely off |
 | 1 | Standby | Pilot on, burner off |
 | 5 | Manual | Manual flame control |
-| 6 | Smart | Thermostat with modulating flame |
+| 6 | Smart | Thermostat mode |
 | 7 | Eco | Energy-saving thermostat mode |
 
-**Note:** `main_mode` is the authoritative power state. Do NOT derive power state from `burner_status` or other fields.
-
 ### Control Parameters
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| flame_control | 0-6 | Flame height (0=off, 6=max) |
+| fan_control | 0-6 | Fan speed (0=off, 6=max) |
+| lamp_control | 0-6 | Downlight brightness |
+| temperature_set | 600-900 | Target temp (encoded) |
+| pilot_mode | 0-1 | Pilot light on/off |
+| auxiliary_out | 0-1 | Auxiliary output |
+| split_flow | 0-1 | Split flame mode |
 
-| Control | Range | Description |
-|---------|-------|-------------|
-| main_mode | 0,1,5,6,7 | Operating mode |
-| flame_control | 0-6 | Flame height level |
-| fan_control | 0-6 | Blower fan speed |
-| lamp_control | 0-6 | Accent lighting level |
-| temperature_set | 600-900 | Target temp (°F × 10) |
-| pilot_control | 0, 1 | Continuous pilot on/off |
-| aux_control | 0, 1 | Auxiliary relay on/off |
-| split_flow | 0, 1 | Front flame (split burner) |
-| timer_set | 0-28800000 | Auto-off timer (milliseconds) |
+### Example Commands
 
-### Temperature Encoding
-
-**CRITICAL:** All temperatures in the Proflame protocol are Fahrenheit × 10.
-
-- **Encode:** `temperature_F × 10` (e.g., 72°F → 720)
-- **Decode:** `value / 10` (e.g., 720 → 72°F)
-- **Range:** 600-900 (60°F to 90°F)
-
-### Command Examples
-
+**Turn on in Manual mode with flame level 6:**
 ```json
-Turn On (Manual):     {"control0":"main_mode","value0":"5"}
-Turn Off:             {"control0":"main_mode","value0":"0"}
-Set to Standby:       {"control0":"main_mode","value0":"1"}
-Set Smart Mode:       {"control0":"main_mode","value0":"6"}
-Set Eco Mode:         {"control0":"main_mode","value0":"7"}
-Set Flame Level 4:    {"control0":"flame_control","value0":"4"}
-Set Temp 72°F:        {"control0":"temperature_set","value0":"720"}
-Set Fan Level 3:      {"control0":"fan_control","value0":"3"}
-Set Light Level 5:    {"control0":"lamp_control","value0":"5"}
-Pilot On:             {"control0":"pilot_control","value0":"1"}
-Aux On:               {"control0":"aux_control","value0":"1"}
-60min Timer:          {"control0":"timer_set","value0":"3600000"}
-Cancel Timer:         {"control0":"timer_set","value0":"0"}
+{"command":"set_control","name":"main_mode","value":"5"}
+{"command":"set_control","name":"flame_control","value":"6"}
 ```
 
-### Status Response Format
-
-The device sends JSON status updates (push notifications) with all current state:
-
+**Set thermostat to 72°F:**
 ```json
-{
-  "main_mode": "5",
-  "flame_control": "3",
-  "fan_control": "2",
-  "lamp_control": "0",
-  "temperature_set": "720",
-  "temperature_read": "685",
-  "pilot_control": "0",
-  "aux_control": "0",
-  "split_flow": "0",
-  "timer_set": "0",
-  "timer_read": "0",
-  "burner_status": "1",
-  "errors": "0",
-  "rssi": "-45"
-}
+{"command":"set_control","name":"temperature_set","value":"720"}
 ```
 
-Key fields:
-- `temperature_read`: Current room temperature (°F × 10)
-- `timer_read`: Remaining timer in milliseconds
-- `rssi`: WiFi signal strength in dBm
-- `errors`: Error code (0 = no errors)
+**Set fan to medium:**
+```json
+{"command":"set_control","name":"fan_control","value":"3"}
+```
 
 ---
 
 ## Control4 Driver Architecture
 
-### Proxy Configuration
-
-The driver exposes two proxies:
-
-1. **Thermostat Proxy (ID 5001):** `thermostatV2`
-   - Main control interface
-   - Temperature display and setpoint
-   - HVAC mode (Off/Heat)
-   - Fan mode control
-
-2. **Light Proxy (ID 5002):** `light_v2`
-   - Flame level as dimmer
-   - 0-100% maps to 0-6 flame levels
-
-### Network Connection (ID 6001)
-
-- TCP connection on port 88
-- Manual connection management (not auto-connect)
-- Driver handles WebSocket upgrade internally
-
-### Room Selection Connection (ID 7000)
-
-- TEMPERATURE class for room binding
-- TEMPERATURE_CONTROL class for thermostat binding
-- Autobind enabled
-
-### XML Capabilities (Critical Settings)
+### Driver XML Structure (driver.xml)
 
 ```xml
-<capabilities>
-    <has_extras>True</has_extras>
+<?xml version="1.0"?>
+<devicedata>
+  <copyright>Copyright 2025</copyright>
+  <n>Proflame WiFi Fireplace</n>
+  <control>lua_gen</control>
+  <controlmethod>IP</controlmethod>
+  <version>2025121721</version>
+  
+  <proxies>
+    <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
+  </proxies>
+  
+  <capabilities>
+    <has_extras>true</has_extras>
     <can_heat>True</can_heat>
     <can_cool>False</can_cool>
-    <can_do_auto>False</can_do_auto>
-    <temperature_scale>FAHRENHEIT</temperature_scale>
-    <can_change_scale>True</can_change_scale>
-    
-    <!-- Current temperature range -->
-    <current_temperature_min_c>-40</current_temperature_min_c>
-    <current_temperature_max_c>60</current_temperature_max_c>
-    <current_temperature_resolution_c>0.5</current_temperature_resolution_c>
-    <current_temperature_min_f>-40</current_temperature_min_f>
-    <current_temperature_max_f>140</current_temperature_max_f>
-    <current_temperature_resolution_f>1</current_temperature_resolution_f>
-    
-    <!-- Setpoint range (MUST define both C and F!) -->
-    <setpoint_heat_min_c>15.5</setpoint_heat_min_c>
-    <setpoint_heat_max_c>32.2</setpoint_heat_max_c>
-    <setpoint_heat_resolution_c>0.5</setpoint_heat_resolution_c>
-    <setpoint_heat_min_f>60</setpoint_heat_min_f>
-    <setpoint_heat_max_f>90</setpoint_heat_max_f>
-    <setpoint_heat_resolution_f>1</setpoint_heat_resolution_f>
-    
-    <!-- Single setpoint mode (NOT split heat/cool) -->
     <has_single_setpoint>True</has_single_setpoint>
-    <split_setpoints>False</split_setpoints>
-    <can_inc_dec_setpoints>True</can_inc_dec_setpoints>
-    
-    <!-- Fan modes -->
     <has_fan_mode>True</has_fan_mode>
-    <can_change_fan_modes>True</can_change_fan_modes>
-    <fan_modes>Off,1,2,3,4,5,6</fan_modes>
+    <!-- ... additional capabilities ... -->
+  </capabilities>
+  
+  <connections>
+    <connection>
+      <id>6001</id>
+      <connectionname>Network</connectionname>
+      <type>4</type>
+      <classes>
+        <class>
+          <classname>TCP</classname>
+          <ports>
+            <port><number>88</number></port>
+          </ports>
+        </class>
+      </classes>
+    </connection>
+    <connection>
+      <id>5001</id>
+      <connectionname>Thermostat</connectionname>
+      <type>2</type>
+      <classes>
+        <class>
+          <classname>THERMOSTAT</classname>
+        </class>
+      </classes>
+    </connection>
+  </connections>
+</devicedata>
+```
+
+### Key Capability: has_extras
+The `<has_extras>true</has_extras>` capability MUST be set to enable the Extras tab in the Control4 UI. Note: Use lowercase `true`, not `True`.
+
+### Proxy Binding IDs
+- **5001**: Thermostat proxy (thermostatV2)
+- **6001**: Network connection (TCP)
+- **7000**: Room selection (for temperature binding)
+
+---
+
+## Control4 Thermostat Extras Menu
+
+### Overview
+The Extras menu provides custom controls beyond standard thermostat functionality. This is the most complex and underdocumented part of Control4 driver development.
+
+### CRITICAL: XML Format Discovery
+The official Control4 documentation shows one format, but **the actual working format is completely different**. The working format was discovered by analyzing Composer Pro logs from working Ecobee thermostat drivers.
+
+### Extras XML Structure (WORKING FORMAT)
+
+```xml
+<extras_setup>
+  <extra>
+    <section label="Section Name">
+      <object type="list" id="unique_id" label="Display Label" command="COMMAND_NAME">
+        <list maxselections="1" minselections="1">
+          <item text="Display Text" value="value1"/>
+          <item text="Display Text 2" value="value2"/>
+        </list>
+      </object>
+      <object type="slider" id="slider_id" label="Slider Label" command="SLIDER_COMMAND" min="0" max="100" value="50"/>
+      <object type="text" id="text_id" label="Text Label" value="Display Value"/>
+      <object type="button" id="btn_id" label="Button Label" buttontext="Click Me" command="BUTTON_COMMAND"/>
+    </section>
+  </extra>
+</extras_setup>
+```
+
+### WRONG FORMAT (From Documentation - Does NOT Work)
+```xml
+<!-- THIS FORMAT DOES NOT WORK -->
+<extras_setup>
+  <extras>
+    <extra>
+      <type>LIST</type>
+      <id>my_list</id>
+      <description>My List</description>
+      <items>
+        <item><id>1</id><text>Option 1</text></item>
+      </items>
+    </extra>
+  </extras>
+</extras_setup>
+```
+
+### Object Types
+
+#### 1. List (Dropdown)
+```xml
+<object type="list" id="unique_id" label="Display Label" command="COMMAND_NAME">
+  <list maxselections="1" minselections="1">
+    <item text="Option 1" value="opt1"/>
+    <item text="Option 2" value="opt2"/>
+    <item text="Option 3" value="opt3"/>
+  </list>
+</object>
+```
+
+**Important**: The FIRST item in the list appears as the selected value. To show the current selection, reorder the items so the current value is first.
+
+#### 2. Slider
+```xml
+<object type="slider" id="slider_id" label="Slider Label" command="CMD" min="0" max="6" value="3"/>
+```
+
+Attributes:
+- `min`: Minimum value
+- `max`: Maximum value  
+- `value`: Current value (CRITICAL for initialization)
+
+#### 3. Text (Read-only display)
+```xml
+<object type="text" id="text_id" label="Label" value="Display Value"/>
+```
+
+#### 4. Button
+```xml
+<object type="button" id="btn_id" label="Label" buttontext="Button Text" command="CMD" hidden="false"/>
+```
+
+### Sending Extras to UI
+
+#### Method 1: SendDataToUI (PRIMARY - Required)
+```lua
+C4:SendDataToUI(xml)
+```
+This sends the XML directly to the UI and is the method that actually works.
+
+#### Method 2: SendToProxy (Secondary)
+```lua
+C4:SendToProxy(PROXY_ID, "EXTRAS_SETUP_CHANGED", {XML = xml})
+```
+Send as backup, but `SendDataToUI` is the primary method.
+
+### Handling Extras Commands
+
+When a user interacts with an extras control, the driver receives commands via `ReceivedFromProxy`:
+
+```lua
+function ReceivedFromProxy(idBinding, strCommand, tParams)
+    if strCommand == "SELECT_MODE" then
+        local value = tParams["VALUE"] or tParams["value"]
+        -- Handle mode selection
+    elseif strCommand == "SET_FLAME_LEVEL" then
+        local value = tonumber(tParams["VALUE"] or tParams["value"])
+        -- Handle slider change
+    end
+end
+```
+
+### Updating Extras Values
+
+**CRITICAL**: Values are embedded IN the extras_setup XML, not sent separately. To update displayed values:
+
+1. Regenerate the `extras_setup` XML with new values
+2. Call `C4:SendDataToUI(xml)` again
+
+```lua
+function GetExtrasXML()
+    local flame = tonumber(gState.flame_control) or 0
+    local fan = tonumber(gState.fan_control) or 0
     
-    <!-- HVAC modes -->
-    <hvac_modes>Off,Heat</hvac_modes>
-    <hvac_states>Off,Heat</hvac_states>
-    <can_change_hvac_modes>True</can_change_hvac_modes>
-</capabilities>
+    local xml = 
+    '<extras_setup>' ..
+      '<extra>' ..
+        '<section label="Controls">' ..
+          '<object type="slider" id="pf_flame" label="Flame" command="SET_FLAME" min="1" max="6" value="' .. flame .. '"/>' ..
+          '<object type="slider" id="pf_fan" label="Fan" command="SET_FAN" min="0" max="6" value="' .. fan .. '"/>' ..
+        '</section>' ..
+      '</extra>' ..
+    '</extras_setup>'
+    return xml
+end
+
+function UpdateExtrasState()
+    C4:SendDataToUI(GetExtrasXML())
+end
+```
+
+### Throttling Updates
+
+During initialization, many status updates arrive rapidly. Throttle extras updates to avoid UI flickering:
+
+```lua
+gExtrasThrottle = false
+
+function UpdateExtrasState()
+    if gExtrasThrottle then return end
+    gExtrasThrottle = true
+    C4:SetTimer(500, function() 
+        gExtrasThrottle = false 
+        C4:SendDataToUI(GetExtrasXML())
+    end, false)
+end
+```
+
+---
+
+## Control4 Proxy Communication
+
+### Thermostat Proxy Notifications
+
+#### Temperature Updates
+```lua
+-- Send temperature in Celsius
+C4:SendToProxy(PROXY_ID, "TEMPERATURE_CHANGED", {TEMPERATURE = tempC, SCALE = "C"})
+```
+
+#### Setpoint Updates
+```lua
+C4:SendToProxy(PROXY_ID, "HEAT_SETPOINT_CHANGED", {SETPOINT = tempC, SCALE = "C"})
+C4:SendToProxy(PROXY_ID, "SINGLE_SETPOINT_CHANGED", {SETPOINT = tempC, SCALE = "C"})
+```
+
+#### HVAC Mode Updates
+```lua
+C4:SendToProxy(PROXY_ID, "HVAC_MODE_CHANGED", {MODE = "Heat"})  -- "Off", "Heat", "Cool", "Auto"
+C4:SendToProxy(PROXY_ID, "HVAC_STATE_CHANGED", {STATE = "Heat"}) -- Current state
+```
+
+#### Fan Mode Updates
+```lua
+C4:SendToProxy(PROXY_ID, "FAN_MODE_CHANGED", {MODE = "Low"})  -- "Off", "Low", "Medium", "High"
+```
+
+#### Allowed Modes
+```lua
+C4:SendToProxy(PROXY_ID, "ALLOWED_HVAC_MODES_CHANGED", {MODES = "Off,Heat"})
+C4:SendToProxy(PROXY_ID, "ALLOWED_FAN_MODES_CHANGED", {MODES = "Off,Low,Medium,High"})
+```
+
+#### Preset Mode Updates
+```lua
+C4:SendToProxy(PROXY_ID, "PRESET_CHANGED", {PRESET = "Manual"})
+C4:SendToProxy(PROXY_ID, "PRESET_MODE_CHANGED", {MODE = "Manual"})
+```
+
+### Handling Proxy Commands
+
+```lua
+function ReceivedFromProxy(idBinding, strCommand, tParams)
+    if strCommand == "GET_EXTRAS_SETUP" then
+        return GetExtrasXML()  -- Return XML directly
+    end
+    
+    if strCommand == "SET_MODE_HVAC" then
+        local mode = tParams["MODE"]
+        -- Handle HVAC mode change
+    elseif strCommand == "SET_SETPOINT_HEAT" then
+        local tempC = tParams["CELSIUS"]
+        local tempF = tParams["FAHRENHEIT"]
+        -- Handle setpoint change
+    elseif strCommand == "SET_MODE_FAN" then
+        local mode = tParams["MODE"]
+        -- Handle fan mode change
+    end
+end
+```
+
+---
+
+## Complete XML Examples
+
+### Full Extras Setup Example
+
+```xml
+<extras_setup>
+  <extra>
+    <section label="Operating Mode">
+      <object type="list" id="pf_mode" label="Mode" command="SELECT_MODE">
+        <list maxselections="1" minselections="1">
+          <item text="Smart Thermostat" value="smart"/>
+          <item text="Manual" value="manual"/>
+          <item text="Eco" value="eco"/>
+        </list>
+      </object>
+    </section>
+    <section label="Fireplace Controls">
+      <object type="slider" id="pf_flame" label="Flame Level" command="SET_FLAME_LEVEL" min="1" max="6" value="6"/>
+      <object type="slider" id="pf_fan" label="Fan Speed" command="SET_FAN_LEVEL" min="0" max="6" value="0"/>
+      <object type="slider" id="pf_light" label="Downlight" command="SET_LIGHT_LEVEL" min="0" max="6" value="0"/>
+    </section>
+  </extra>
+</extras_setup>
+```
+
+### Ecobee-Style Example (From Working Driver)
+
+```xml
+<extras_setup>
+  <extra>
+    <section label="Comfort Setting Select">
+      <object type="list" id="comfortSwitch" label="Comfort Setting" command="EXTRAS_CHANGE_COMFORT">
+        <list maxselections="1" minselections="1">
+          <item text="Home" value="home"/>
+          <item text="Away" value="away"/>
+          <item text="Sleep" value="sleep"/>
+        </list>
+      </object>
+    </section>
+    <section label="Ecobee Setup">
+      <object type="text" id="ECOBEE_ACCOUNT" label="Ecobee Account" value="Linked"/>
+      <object type="button" id="GetPINCODE" label="Get PIN Code For Ecobee" buttontext="Get PIN" command="GetPINCODE" hidden="true"/>
+      <object type="text" id="PINCODE" label="PIN Code" value="" hidden="true"/>
+    </section>
+  </extra>
+</extras_setup>
 ```
 
 ---
 
 ## Key Lessons Learned
 
-### 1. JSON Formatting is Critical
+### 1. Proflame Protocol
+- **No spaces in JSON** - Commands with spaces are silently ignored
+- **Temperature encoding** - Always multiply/divide by 10
+- **WebSocket on port 88** - Non-standard port
+- **PROFLAMEPING/PONG** - Custom keep-alive protocol
 
-The Proflame device is extremely picky about JSON formatting. Commands with ANY whitespace after colons or commas are silently ignored.
+### 2. Control4 Extras
+- **Documentation is wrong** - The documented XML format does not work
+- **Use SendDataToUI()** - This is the primary method that works
+- **Embed values in setup XML** - Don't rely on separate state updates
+- **First list item = selected** - Reorder to show current selection
+- **Throttle updates** - Avoid spamming during initialization
 
-```lua
--- CORRECT
-local cmd = '{"control0":"' .. control .. '","value0":"' .. value .. '"}'
-
--- WRONG - will be silently ignored!
-local cmd = '{"control0": "' .. control .. '", "value0": "' .. value .. '"}'
-```
-
-### 2. Temperature Scale Handling ("The Golden Rule")
-
-This caused extensive debugging. The solution:
-
-1. **XML Definition:** Set to FAHRENHEIT (native scale of device/user)
-2. **Proxy Communication:** ALWAYS send CELSIUS with `SCALE="C"`
-
-This is because Control4's thermostat proxy internally works in Celsius and handles the conversion for display. If you send Fahrenheit values, they get double-converted and produce wrong results (like 120°F display or slider snapping to 90°F max).
-
-```lua
-function FahrenheitToCelsius(f)
-    local c = (f - 32) * 5 / 9
-    return math.floor(c * 10 + 0.5) / 10  -- Round to 1 decimal
-end
-
--- Sending temperature to proxy
-local tempF = DecodeTemperature(gState.temperature_set)  -- e.g., 72
-local tempC = FahrenheitToCelsius(tempF)                  -- e.g., 22.2
-C4:SendToProxy(THERMOSTAT_PROXY_ID, "TEMPERATURE_CHANGED", {TEMPERATURE = tempC, SCALE = "C"})
-```
-
-### 3. Single Setpoint vs Heat Setpoint
-
-**CRITICAL:** When `<has_single_setpoint>True</has_single_setpoint>` is set in XML, you MUST use:
-
-```lua
--- CORRECT for single setpoint mode
-C4:SendToProxy(THERMOSTAT_PROXY_ID, "SINGLE_SETPOINT_CHANGED", {SETPOINT = tempC, SCALE = "C"})
-
--- WRONG - will be ignored when has_single_setpoint is True!
-C4:SendToProxy(THERMOSTAT_PROXY_ID, "HEAT_SETPOINT_CHANGED", {SETPOINT = tempC, SCALE = "C"})
-```
-
-### 4. Proxy Notification Format
-
-**CRITICAL:** Always use table format with SCALE key for temperature notifications:
-
-```lua
--- CORRECT
-C4:SendToProxy(5001, "TEMPERATURE_CHANGED", {TEMPERATURE = 22.2, SCALE = "C"})
-C4:SendToProxy(5001, "SINGLE_SETPOINT_CHANGED", {SETPOINT = 21.1, SCALE = "C"})
-
--- WRONG - causes "--" display or wrong values
-C4:SendToProxy(5001, "TEMPERATURE_CHANGED", 70)
-C4:SendToProxy(5001, "HEAT_SETPOINT_CHANGED", "72")
-```
-
-### 5. Extras Menu Implementation
-
-To show controls in the iOS/Android app's "Extras" tab, you must:
-
-1. Set `<has_extras>True</has_extras>` in XML capabilities
-2. Handle `GET_EXTRAS_SETUP` in `ReceivedFromProxy`
-3. Return properly formatted XML with extras definition
-
-```lua
-function ReceivedFromProxy(idBinding, sCommand, tParams)
-    if sCommand == "GET_EXTRAS_SETUP" then
-        local extrasXml = [[<extras_setup>
-<section label="Fireplace Controls">
-    <extra id="flame_level" label="Flame Height" type="slider" min="0" max="6" value="]] .. (gState.flame_control or "0") .. [["/>
-</section>
-</extras_setup>]]
-        return extrasXml
-    end
-    -- ... handle other commands
-end
-```
-
-### 6. WebSocket Frame Handling
-
-Control4's Lua environment doesn't have built-in WebSocket support. You must implement:
-
-- WebSocket handshake (HTTP upgrade)
-- Frame encoding/decoding (masking for client-to-server)
-- Text frame handling (opcode 0x81)
-- Custom PROFLAMEPING/PROFLAMEPONG keep-alive
-
-```lua
-function CreateWebSocketFrame(payload)
-    local len = #payload
-    local frame = string.char(0x81)  -- Text frame, FIN bit set
-    
-    if len < 126 then
-        frame = frame .. string.char(0x80 + len)  -- Masked + length
-    elseif len < 65536 then
-        frame = frame .. string.char(0x80 + 126)
-        frame = frame .. string.char(math.floor(len / 256))
-        frame = frame .. string.char(len % 256)
-    end
-    
-    -- Add masking key and masked payload
-    local maskKey = {math.random(0,255), math.random(0,255), math.random(0,255), math.random(0,255)}
-    for i, k in ipairs(maskKey) do
-        frame = frame .. string.char(k)
-    end
-    
-    for i = 1, len do
-        local byte = string.byte(payload, i)
-        local masked = bit.bxor(byte, maskKey[((i-1) % 4) + 1])
-        frame = frame .. string.char(masked)
-    end
-    
-    return frame
-end
-```
-
-### 7. Lua Code Organization
-
-**CRITICAL:** Helper functions and utilities MUST be defined BEFORE they are used. Lua is single-pass, so forward references don't work.
-
-Recommended order:
-1. Constants
-2. Bit operations (if not available natively)
-3. Utility functions (dbg, helpers)
-4. Crypto functions (for WebSocket key)
-5. Global state variables
-6. WebSocket functions
-7. Command functions
-8. Proxy handlers
-9. Network handlers
-10. Initialization
-
-### 8. XML Element Order
-
-Control4 XML is sensitive to element order in properties:
-
-```xml
-<!-- CORRECT order -->
-<property>
-    <n>Property Name</n>
-    <type>STRING</type>
-    <default>value</default>
-    <readonly>true</readonly>
-</property>
-
-<!-- Element order matters! -->
-```
-
-### 9. Driver Updates Require Delete/Re-add
-
-When changing XML capabilities (especially thermostat capabilities), you often need to:
-1. Delete the driver from the project
-2. Re-add the driver
-
-Simply updating the driver won't apply capability changes.
-
-### 10. Debugging Tips
-
-- Use `print()` statements liberally - they appear in Composer Pro's Lua tab
-- Set Debug Mode property to "On" and Debug Level to "Trace" during development
-- Check Composer Pro's Lua output window for errors
-- WebSocket issues often manifest as silent failures - add logging to all network functions
+### 3. Control4 Driver Development
+- **has_extras must be lowercase** - `true` not `True`
+- **Proxy IDs start at 5001** - Convention for thermostat drivers
+- **Test with Composer logs** - Debug output shows actual XML being sent
+- **Check working drivers** - Analyze successful implementations
 
 ---
 
-## Building the C4Z Package
-
-A `.c4z` file is simply a ZIP archive with a specific structure:
-
-```
-proflame_wifi_connect_v4.c4z
-├── driver.xml          # Device definition, proxies, capabilities
-├── driver.lua          # Main driver logic
-└── www/
-    └── documentation.html  # In-driver help (optional)
-```
-
-### Build Process
-
-```bash
-# Create build directory
-mkdir -p c4z_build/www
-
-# Copy files
-cp driver.lua c4z_build/
-cp driver.xml c4z_build/
-cp documentation.html c4z_build/www/
-
-# Create c4z (just a zip file)
-cd c4z_build
-zip -r ../proflame_wifi_connect_v4.c4z driver.xml driver.lua www/
-```
-
-### Version Numbering Convention
-
-Format: `YYYYMMDDNN` where NN is build number for that day
-
-Example: `2025121617` = December 16, 2025, build 17
-
-Update in three places:
-1. `driver.lua` - `DRIVER_VERSION` constant
-2. `driver.lua` - Header comment
-3. `driver.xml` - `<version>` element
-
----
-
-## Current Driver Status
-
-### Latest Version: 2025121617
-
-**Fixes included:**
-- Network Connection (Helpers moved to top)
-- Extras Menu (Flame Slider)
-- Room Temperature Sensor Mapping
-- Single Setpoint handling (SINGLE_SETPOINT_CHANGED)
-- Temperature scale conversion (Fahrenheit device → Celsius proxy)
-- Compact JSON formatting for commands
-- WebSocket keep-alive (PROFLAMEPING/PROFLAMEPONG)
-
-### Known Working Features
-
-- ✅ Connect to Proflame WiFi device
-- ✅ Turn fireplace on/off
-- ✅ Set operating mode (Off, Standby, Manual, Smart, Eco)
-- ✅ Control flame level (0-6)
-- ✅ Control fan level (0-6)
-- ✅ Control light level (0-6)
-- ✅ Set temperature setpoint
-- ✅ Display current room temperature
-- ✅ Thermostat proxy integration
-- ✅ Light proxy for flame control
-- ✅ Real-time status updates
-
-### Outstanding Items / Future Work
-
-- Extras menu flame slider (implementation attempted, may need refinement)
-- Timer control via UI
-- Pilot control via UI
-- Aux output control via UI
-- Error status display
-- Connection status events
-
----
-
-## File Locations
-
-When working with this driver:
-
-- **User Uploads:** `/mnt/user-data/uploads/`
-- **Build Directory:** `/home/claude/c4z_build/`
-- **Output Directory:** `/mnt/user-data/outputs/`
-- **Documentation from ZIP:** `/home/claude/c4z_extract/www/documentation.html`
-
----
-
-## Quick Reference
-
-### Mode Constants
-```lua
-MODE_OFF = "0"
-MODE_STANDBY = "1"
-MODE_MANUAL = "5"
-MODE_SMART = "6"
-MODE_ECO = "7"
-```
-
-### Proxy IDs
-```lua
-NETWORK_BINDING_ID = 6001
-THERMOSTAT_PROXY_ID = 5001
-LIGHT_PROXY_ID = 5002
-```
+## Appendix: Lua Helper Functions
 
 ### Temperature Conversion
 ```lua
--- Proflame to Fahrenheit
-local tempF = tonumber(encoded) / 10
+function FahrenheitToCelsius(f)
+    return math.floor((f - 32) * 5 / 9 * 10 + 0.5) / 10
+end
 
--- Fahrenheit to Proflame
-local encoded = tostring(math.floor(tempF * 10))
+function CelsiusToFahrenheit(c)
+    return math.floor(c * 9 / 5 + 32 + 0.5)
+end
 
--- Fahrenheit to Celsius (for proxy)
-local tempC = math.floor((tempF - 32) * 5 / 9 * 10 + 0.5) / 10
+function DecodeTemperature(encoded)
+    return tonumber(encoded) / 10
+end
+
+function EncodeTemperature(tempF)
+    return tostring(math.floor(tempF * 10))
+end
 ```
 
-### Send Command to Device
+### JSON Command Builder
 ```lua
-local cmd = '{"control0":"' .. control .. '","value0":"' .. value .. '"}'
-local frame = CreateWebSocketFrame(cmd)
-C4:SendToNetwork(NETWORK_BINDING_ID, frame)
+function MakeCommand(control, value)
+    -- NO SPACES - Critical for Proflame protocol
+    return '{"command":"set_control","name":"' .. control .. '","value":"' .. tostring(value) .. '"}'
+end
 ```
 
-### Send to Thermostat Proxy
+### WebSocket Frame Builder
 ```lua
--- Temperature
-C4:SendToProxy(THERMOSTAT_PROXY_ID, "TEMPERATURE_CHANGED", {TEMPERATURE = tempC, SCALE = "C"})
-
--- Setpoint (single setpoint mode)
-C4:SendToProxy(THERMOSTAT_PROXY_ID, "SINGLE_SETPOINT_CHANGED", {SETPOINT = tempC, SCALE = "C"})
-
--- HVAC Mode
-C4:SendToProxy(THERMOSTAT_PROXY_ID, "HVAC_MODE_CHANGED", "Heat")
-
--- Fan Mode
-C4:SendToProxy(THERMOSTAT_PROXY_ID, "FAN_MODE_CHANGED", tostring(level))
+function CreateWebSocketFrame(payload, opcode)
+    local len = #payload
+    local frame = string.char(0x80 + opcode)  -- FIN + opcode
+    if len < 126 then
+        frame = frame .. string.char(len)
+    elseif len < 65536 then
+        frame = frame .. string.char(126, 
+            math.floor(len / 256), len % 256)
+    end
+    return frame .. payload
+end
 ```
 
 ---
 
-*End of Specification*
+## Document History
+- **v1.0** (2025-12-17): Initial specification based on driver development
