@@ -1,6 +1,6 @@
 --[[
     Proflame WiFi Fireplace Controller - Control4 Driver
-    Version 2025121714 - Simplified extras XML structure for thermostat proxy
+    Version 2025121719 - Embed current values in extras_setup XML for proper initialization
 ]]
 
 -- =============================================================================
@@ -8,12 +8,11 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2025121714"
+DRIVER_VERSION = "2025121719"
 DRIVER_DATE = "2025-12-17"
 
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
-LIGHT_PROXY_ID = 5002
 
 MODE_OFF = "0"
 MODE_STANDBY = "1"
@@ -99,6 +98,7 @@ gPingTimerId = nil
 gReconnectTimerId = nil
 gWebSocketKey = nil
 gDebugLevel = DEBUG_DEBUG
+gExtrasThrottle = false
 
 gPendingSetpointF = nil
 gPendingTimer = nil
@@ -335,77 +335,70 @@ end
 -- =============================================================================
 
 function GetExtrasXML()
-    -- Simplified XML structure for thermostat proxy
+    -- Get current values
+    local flame = tonumber(gState.flame_control) or 0
+    local fan = tonumber(gState.fan_control) or 0
+    local light = tonumber(gState.lamp_control) or 0
+    
+    -- Determine current mode
+    local mode = gState.main_mode or MODE_OFF
+    local modeValue = "manual"
+    if mode == MODE_SMART then
+        modeValue = "smart"
+    elseif mode == MODE_ECO then
+        modeValue = "eco"
+    end
+    
+    -- Build mode items with current mode first (this is how Ecobee does it)
+    local modeItems = ""
+    if modeValue == "manual" then
+        modeItems = '<item text="Manual" value="manual"/><item text="Smart Thermostat" value="smart"/><item text="Eco" value="eco"/>'
+    elseif modeValue == "smart" then
+        modeItems = '<item text="Smart Thermostat" value="smart"/><item text="Manual" value="manual"/><item text="Eco" value="eco"/>'
+    else
+        modeItems = '<item text="Eco" value="eco"/><item text="Manual" value="manual"/><item text="Smart Thermostat" value="smart"/>'
+    end
+    
+    -- XML structure matching working Ecobee thermostat format - include value attributes for sliders
     local xml = 
     '<extras_setup>' ..
       '<extra>' ..
-        '<type>LIST</type>' ..
-        '<id>pf_flame_preset</id>' ..
-        '<n>Flame Level</n>' ..
-        '<items>' ..
-          '<item><id>1</id><text>Low</text></item>' ..
-          '<item><id>3</id><text>Medium</text></item>' ..
-          '<item><id>6</id><text>High</text></item>' ..
-        '</items>' ..
-      '</extra>' ..
-      '<extra>' ..
-        '<type>SLIDER</type>' ..
-        '<id>pf_flame</id>' ..
-        '<n>Flame Fine Adjust</n>' ..
-        '<minimum>0</minimum>' ..
-        '<maximum>6</maximum>' ..
-      '</extra>' ..
-      '<extra>' ..
-        '<type>SLIDER</type>' ..
-        '<id>pf_fan</id>' ..
-        '<n>Fan Speed</n>' ..
-        '<minimum>0</minimum>' ..
-        '<maximum>6</maximum>' ..
-      '</extra>' ..
-      '<extra>' ..
-        '<type>SLIDER</type>' ..
-        '<id>pf_light</id>' ..
-        '<n>Downlight</n>' ..
-        '<minimum>0</minimum>' ..
-        '<maximum>6</maximum>' ..
+        '<section label="Operating Mode">' ..
+          '<object type="list" id="pf_mode" label="Mode" command="SELECT_MODE">' ..
+            '<list maxselections="1" minselections="1">' ..
+              modeItems ..
+            '</list>' ..
+          '</object>' ..
+        '</section>' ..
+        '<section label="Fireplace Controls">' ..
+          '<object type="slider" id="pf_flame" label="Flame Level" command="SET_FLAME_LEVEL" min="0" max="6" value="' .. flame .. '"/>' ..
+          '<object type="slider" id="pf_fan" label="Fan Speed" command="SET_FAN_LEVEL" min="0" max="6" value="' .. fan .. '"/>' ..
+          '<object type="slider" id="pf_light" label="Downlight" command="SET_LIGHT_LEVEL" min="0" max="6" value="' .. light .. '"/>' ..
+        '</section>' ..
       '</extra>' ..
     '</extras_setup>'
     return xml
 end
 
 function SetupExtras()
-    dbg("Sending EXTRAS_SETUP_CHANGED to Proxy")
+    dbg("Sending extras setup via DataToUI")
     local xml = GetExtrasXML()
     dbg("Extras XML: " .. xml)
-    -- Send with XML table parameter
+    -- Send via DataToUI (this is the primary method that works)
+    C4:SendDataToUI(xml)
+    -- Also send via proxy notification
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "EXTRAS_SETUP_CHANGED", {XML = xml})
 end
 
 function UpdateExtrasState()
-    local flame = gState.flame_control or "0"
-    local fan = gState.fan_control or "0"
-    local light = gState.lamp_control or "0"
-    
-    -- Determine flame preset based on current level
-    local flameNum = tonumber(flame) or 0
-    local flamePreset = "1"  -- Default to Low
-    if flameNum >= 5 then
-        flamePreset = "6"  -- High
-    elseif flameNum >= 2 then
-        flamePreset = "3"  -- Medium
-    end
-    
-    local xml = 
-    '<extras_state>' ..
-      '<extra><id>pf_flame_preset</id><value>' .. flamePreset .. '</value></extra>' ..
-      '<extra><id>pf_flame</id><value>' .. flame .. '</value></extra>' ..
-      '<extra><id>pf_fan</id><value>' .. fan .. '</value></extra>' ..
-      '<extra><id>pf_light</id><value>' .. light .. '</value></extra>' ..
-    '</extras_state>'
-    
-    dbg("Extras State XML: " .. xml)
-    -- Send with XML table parameter
-    C4:SendToProxy(THERMOSTAT_PROXY_ID, "EXTRAS_STATE_CHANGED", {XML = xml})
+    -- Since values are embedded in extras_setup XML, resend the setup
+    -- But throttle to avoid spamming during initialization
+    if gExtrasThrottle then return end
+    gExtrasThrottle = true
+    C4:SetTimer(500, function() 
+        gExtrasThrottle = false 
+        SetupExtras()
+    end, false)
 end
 
 -- =============================================================================
@@ -638,11 +631,6 @@ function UpdateAllProxies()
     UpdatePresetMode()
     UpdateExtrasState()
     
-    -- Initialize light proxy capabilities
-    C4:SendToProxy(LIGHT_PROXY_ID, "ONLINE_CHANGED", { STATE = true })
-    C4:SendToProxy(LIGHT_PROXY_ID, "CAPABILITY_CHANGED", { NAME = "dimmer", VALUE = true })
-    C4:SendToProxy(LIGHT_PROXY_ID, "CAPABILITY_CHANGED", { NAME = "on_off", VALUE = true })
-    
     -- Also send extras setup when proxies update
     SetupExtras()
 end
@@ -838,17 +826,6 @@ function UpdateFlameLevel()
     local flameLevel = tonumber(gState.flame_control) or 0
     local percent = math.floor(flameLevel / 6 * 100)
     local isOn = (flameLevel > 0) and (gState.main_mode ~= MODE_OFF and gState.main_mode ~= MODE_STANDBY)
-    
-    -- Send ON/OFF state first
-    if isOn then
-        C4:SendToProxy(LIGHT_PROXY_ID, "LIGHT_ON", {})
-    else
-        C4:SendToProxy(LIGHT_PROXY_ID, "LIGHT_OFF", {})
-    end
-    
-    -- Send level
-    C4:SendToProxy(LIGHT_PROXY_ID, "LIGHT_LEVEL", percent)
-    C4:SendToProxy(LIGHT_PROXY_ID, "LIGHT_BRIGHTNESS_CHANGED", { LIGHT_BRIGHTNESS_CURRENT = percent })
     dbg("Flame level updated: " .. flameLevel .. " = " .. percent .. "%, on=" .. tostring(isOn))
 end
 
@@ -967,41 +944,21 @@ function ReceivedFromProxy(idBinding, strCommand, tParams)
     
     -- Handle Request for Extras
     if strCommand == "GET_EXTRAS_SETUP" then
-        dbg("GET_EXTRAS_SETUP received - sending extras setup")
+        dbg("GET_EXTRAS_SETUP received - returning extras setup XML directly")
         local xml = GetExtrasXML()
         dbg("Extras XML: " .. xml)
-        -- Return extras setup XML with table parameter
-        C4:SendToProxy(THERMOSTAT_PROXY_ID, "EXTRAS_SETUP_CHANGED", {XML = xml})
-        -- Also send current state
-        UpdateExtrasState()
-        return
+        -- Return the XML directly as the response
+        return xml
+    end
+    
+    -- Handle Request for Extras State
+    if strCommand == "GET_EXTRAS_STATE" then
+        dbg("GET_EXTRAS_STATE received - returning extras setup XML with current values")
+        -- Return the setup XML which contains current values embedded
+        return GetExtrasXML()
     end
     
     if idBinding == THERMOSTAT_PROXY_ID then HandleThermostatCommand(strCommand, tParams)
-    elseif idBinding == LIGHT_PROXY_ID then HandleLightCommand(strCommand, tParams)
-    end
-end
-
-function HandleLightCommand(strCommand, tParams)
-    if strCommand == "ON" then
-        local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
-        if gState.main_mode == MODE_OFF or gState.main_mode == MODE_STANDBY then
-            SendProflameCommand("main_mode", MODE_MANUAL)
-            C4:SetTimer(750, function() SendProflameCommand("flame_control", tostring(defaultFlame)) end, false)
-        else
-            SendProflameCommand("flame_control", tostring(defaultFlame))
-        end
-    elseif strCommand == "OFF" then
-        SendProflameCommand("flame_control", "0")
-    elseif strCommand == "SET_LEVEL" or strCommand == "RAMP_TO_LEVEL" then
-        local level = tonumber(tParams["LEVEL"]) or 50
-        local flameLevel = math.floor(level / 100 * 6 + 0.5)
-        if gState.main_mode ~= MODE_MANUAL then
-             SendProflameCommand("main_mode", MODE_MANUAL)
-             C4:SetTimer(750, function() SendProflameCommand("flame_control", tostring(flameLevel)) end, false)
-        else
-             SendProflameCommand("flame_control", tostring(flameLevel))
-        end
     end
 end
 
@@ -1142,6 +1099,54 @@ function HandleThermostatCommand(strCommand, tParams)
             end
             C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "High Flame" })
         end
+        
+    -- New extras commands (matching Ecobee-style format)
+    elseif strCommand == "SELECT_MODE" then
+        local val = tParams["VALUE"] or tParams["value"] or ""
+        dbg("SELECT_MODE: " .. tostring(val))
+        if val == "manual" then
+            SendProflameCommand("main_mode", MODE_MANUAL)
+            local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
+            C4:SetTimer(750, function() SendProflameCommand("flame_control", tostring(defaultFlame)) end, false)
+        elseif val == "smart" then
+            SendProflameCommand("main_mode", MODE_SMART)
+        elseif val == "eco" then
+            SendProflameCommand("main_mode", MODE_ECO)
+        end
+        
+    elseif strCommand == "SELECT_FLAME_PRESET" then
+        local val = tonumber(tParams["VALUE"] or tParams["value"])
+        dbg("SELECT_FLAME_PRESET: " .. tostring(val))
+        if val then
+            if gState.main_mode ~= MODE_MANUAL then
+                SendProflameCommand("main_mode", MODE_MANUAL)
+                C4:SetTimer(750, function() SendProflameCommand("flame_control", tostring(val)) end, false)
+            else
+                SendProflameCommand("flame_control", tostring(val))
+            end
+        end
+        
+    elseif strCommand == "SET_FLAME_LEVEL" then
+        local val = tonumber(tParams["VALUE"] or tParams["value"])
+        dbg("SET_FLAME_LEVEL: " .. tostring(val))
+        if val then
+            if gState.main_mode ~= MODE_MANUAL then
+                SendProflameCommand("main_mode", MODE_MANUAL)
+                C4:SetTimer(750, function() SendProflameCommand("flame_control", tostring(val)) end, false)
+            else
+                SendProflameCommand("flame_control", tostring(val))
+            end
+        end
+        
+    elseif strCommand == "SET_FAN_LEVEL" then
+        local val = tonumber(tParams["VALUE"] or tParams["value"])
+        dbg("SET_FAN_LEVEL: " .. tostring(val))
+        if val then SendProflameCommand("fan_control", tostring(val)) end
+        
+    elseif strCommand == "SET_LIGHT_LEVEL" then
+        local val = tonumber(tParams["VALUE"] or tParams["value"])
+        dbg("SET_LIGHT_LEVEL: " .. tostring(val))
+        if val then SendProflameCommand("lamp_control", tostring(val)) end
     end
 end
 
