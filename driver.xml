@@ -6,9 +6,11 @@
   <large>devices_lg/relaysingle_gasfireplace_close.gif</large>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
-  <version>2025121705</version>
-  <proxy name="Proflame Fireplace" proxybindingid="5001">thermostatV2</proxy>
-  <proxy name="Flame Control" proxybindingid="5002">light_v2</proxy>
+  <version>2025121714</version>
+  <proxies>
+    <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
+    <proxy proxybindingid="5002" name="Flame Control">light_v2</proxy>
+  </proxies>
   <combo>false</combo>
   <driver>DriverWorks</driver>
   <composer_categories>
@@ -451,6 +453,7 @@
     <can_do_auto>False</can_do_auto>
     <can_preset>True</can_preset>
     <can_preset_schedule>True</can_preset_schedule>
+    <preset_fields>Name</preset_fields>
     <preset_modes>Manual,Smart,Eco</preset_modes>
     <has_outdoor_temperature>False</has_outdoor_temperature>
     <split_setpoints>False</split_setpoints>
@@ -460,9 +463,10 @@
     <setpoint_heat_min_f>60</setpoint_heat_min_f>
     <setpoint_heat_max_f>90</setpoint_heat_max_f>
     <setpoint_heat_resolution_f>1</setpoint_heat_resolution_f>
-    <scheduling>False</scheduling>
+    <scheduling>True</scheduling>
+    <can_schedule>True</can_schedule>
     <hvac_modes>Off,Heat</hvac_modes>
-    <hold_modes/>
+    <hold_modes></hold_modes>
     <hvac_states>Off,Heat</hvac_states>
     <can_set_backlight>False</can_set_backlight>
     <has_time_settings>False</has_time_settings>
@@ -472,7 +476,7 @@
     <has_vacation_mode>False</has_vacation_mode>
     <has_fan_mode>True</has_fan_mode>
     <can_change_fan_modes>True</can_change_fan_modes>
-    <fan_modes>Off,1,2,3,4,5,6</fan_modes>
+    <fan_modes>Off,Low,Medium,High</fan_modes>
     <has_remote_sensor>False</has_remote_sensor>
     <has_single_setpoint>True</has_single_setpoint>
     <can_inc_dec_setpoints>True</can_inc_dec_setpoints>

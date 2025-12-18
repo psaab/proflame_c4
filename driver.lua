@@ -1,6 +1,6 @@
 --[[
     Proflame WiFi Fireplace Controller - Control4 Driver
-    Version 2025121705 - Use PROFLAMECONNECTION to trigger status dump at startup
+    Version 2025121714 - Simplified extras XML structure for thermostat proxy
 ]]
 
 -- =============================================================================
@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2025121705"
+DRIVER_VERSION = "2025121714"
 DRIVER_DATE = "2025-12-17"
 
 NETWORK_BINDING_ID = 6001
@@ -335,43 +335,40 @@ end
 -- =============================================================================
 
 function GetExtrasXML()
-    -- Clean XML without experimental tags like slider_mode
+    -- Simplified XML structure for thermostat proxy
     local xml = 
     '<extras_setup>' ..
-      '<extras>' ..
-        '<extra>' ..
-          '<type>SLIDER</type>' ..
-          '<id>pf_flame</id>' ..
-          '<description>Flame Height</description>' ..
-          '<min>0</min>' ..
-          '<max>6</max>' ..
-          '<resolution>1</resolution>' ..
-        '</extra>' ..
-        '<extra>' ..
-          '<type>SLIDER</type>' ..
-          '<id>pf_fan</id>' ..
-          '<description>Fan Speed</description>' ..
-          '<min>0</min>' ..
-          '<max>6</max>' ..
-          '<resolution>1</resolution>' ..
-        '</extra>' ..
-        '<extra>' ..
-          '<type>SLIDER</type>' ..
-          '<id>pf_light</id>' ..
-          '<description>Downlight</description>' ..
-          '<min>0</min>' ..
-          '<max>6</max>' ..
-          '<resolution>1</resolution>' ..
-        '</extra>' ..
-      '</extras>' ..
-      '<sections>' ..
-        '<section>' ..
-          '<name>Fireplace Controls</name>' ..
-          '<object>pf_flame</object>' ..
-          '<object>pf_fan</object>' ..
-          '<object>pf_light</object>' ..
-        '</section>' ..
-      '</sections>' ..
+      '<extra>' ..
+        '<type>LIST</type>' ..
+        '<id>pf_flame_preset</id>' ..
+        '<n>Flame Level</n>' ..
+        '<items>' ..
+          '<item><id>1</id><text>Low</text></item>' ..
+          '<item><id>3</id><text>Medium</text></item>' ..
+          '<item><id>6</id><text>High</text></item>' ..
+        '</items>' ..
+      '</extra>' ..
+      '<extra>' ..
+        '<type>SLIDER</type>' ..
+        '<id>pf_flame</id>' ..
+        '<n>Flame Fine Adjust</n>' ..
+        '<minimum>0</minimum>' ..
+        '<maximum>6</maximum>' ..
+      '</extra>' ..
+      '<extra>' ..
+        '<type>SLIDER</type>' ..
+        '<id>pf_fan</id>' ..
+        '<n>Fan Speed</n>' ..
+        '<minimum>0</minimum>' ..
+        '<maximum>6</maximum>' ..
+      '</extra>' ..
+      '<extra>' ..
+        '<type>SLIDER</type>' ..
+        '<id>pf_light</id>' ..
+        '<n>Downlight</n>' ..
+        '<minimum>0</minimum>' ..
+        '<maximum>6</maximum>' ..
+      '</extra>' ..
     '</extras_setup>'
     return xml
 end
@@ -379,8 +376,9 @@ end
 function SetupExtras()
     dbg("Sending EXTRAS_SETUP_CHANGED to Proxy")
     local xml = GetExtrasXML()
-    -- Send with multiple keys for compatibility (XML and DATA)
-    C4:SendToProxy(THERMOSTAT_PROXY_ID, "EXTRAS_SETUP_CHANGED", {XML = xml, DATA = xml}, "NOTIFY")
+    dbg("Extras XML: " .. xml)
+    -- Send with XML table parameter
+    C4:SendToProxy(THERMOSTAT_PROXY_ID, "EXTRAS_SETUP_CHANGED", {XML = xml})
 end
 
 function UpdateExtrasState()
@@ -388,15 +386,26 @@ function UpdateExtrasState()
     local fan = gState.fan_control or "0"
     local light = gState.lamp_control or "0"
     
+    -- Determine flame preset based on current level
+    local flameNum = tonumber(flame) or 0
+    local flamePreset = "1"  -- Default to Low
+    if flameNum >= 5 then
+        flamePreset = "6"  -- High
+    elseif flameNum >= 2 then
+        flamePreset = "3"  -- Medium
+    end
+    
     local xml = 
     '<extras_state>' ..
+      '<extra><id>pf_flame_preset</id><value>' .. flamePreset .. '</value></extra>' ..
       '<extra><id>pf_flame</id><value>' .. flame .. '</value></extra>' ..
       '<extra><id>pf_fan</id><value>' .. fan .. '</value></extra>' ..
       '<extra><id>pf_light</id><value>' .. light .. '</value></extra>' ..
     '</extras_state>'
     
-    -- Send with multiple keys
-    C4:SendToProxy(THERMOSTAT_PROXY_ID, "EXTRAS_STATE_CHANGED", {XML = xml, DATA = xml}, "NOTIFY")
+    dbg("Extras State XML: " .. xml)
+    -- Send with XML table parameter
+    C4:SendToProxy(THERMOSTAT_PROXY_ID, "EXTRAS_STATE_CHANGED", {XML = xml})
 end
 
 -- =============================================================================
@@ -617,6 +626,10 @@ function RequestAllStatus()
 end
 
 function UpdateAllProxies()
+    -- Send allowed modes first
+    C4:SendToProxy(THERMOSTAT_PROXY_ID, "ALLOWED_FAN_MODES_CHANGED", { MODES = "Off,Low,Medium,High" })
+    C4:SendToProxy(THERMOSTAT_PROXY_ID, "ALLOWED_HVAC_MODES_CHANGED", { MODES = "Off,Heat" })
+    
     UpdateThermostatProxy()
     UpdateThermostatSetpoint()
     UpdateRoomTemperature()
@@ -624,6 +637,14 @@ function UpdateAllProxies()
     UpdateFlameLevel()
     UpdatePresetMode()
     UpdateExtrasState()
+    
+    -- Initialize light proxy capabilities
+    C4:SendToProxy(LIGHT_PROXY_ID, "ONLINE_CHANGED", { STATE = true })
+    C4:SendToProxy(LIGHT_PROXY_ID, "CAPABILITY_CHANGED", { NAME = "dimmer", VALUE = true })
+    C4:SendToProxy(LIGHT_PROXY_ID, "CAPABILITY_CHANGED", { NAME = "on_off", VALUE = true })
+    
+    -- Also send extras setup when proxies update
+    SetupExtras()
 end
 
 function UpdateRoomTemperature()
@@ -736,6 +757,7 @@ function ProcessStatusUpdate(status, value)
     elseif status == "flame_control" then
         C4:UpdateProperty("Flame Level", tostring(value))
         UpdateFlameLevel()
+        UpdateHoldModeFromFlame()
     elseif status == "fan_control" then
         C4:UpdateProperty("Fan Level", tostring(value))
         UpdateFanMode()
@@ -796,17 +818,53 @@ function UpdateThermostatSetpoint()
 end
 
 function UpdateFanMode()
-    local displayLevel = gState.fan_control or "0"
+    local levelNum = tonumber(gState.fan_control) or 0
     local fanMode = "Off"
-    local levelNum = tonumber(displayLevel) or 0
-    if levelNum > 0 then fanMode = tostring(levelNum) end
+    -- Map 0-6 levels to Off/Low/Medium/High
+    if levelNum == 0 then
+        fanMode = "Off"
+    elseif levelNum <= 2 then
+        fanMode = "Low"
+    elseif levelNum <= 4 then
+        fanMode = "Medium"
+    else
+        fanMode = "High"
+    end
+    dbg("Fan mode updated: level " .. levelNum .. " = " .. fanMode)
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "FAN_MODE_CHANGED", { MODE = fanMode })
 end
 
 function UpdateFlameLevel()
     local flameLevel = tonumber(gState.flame_control) or 0
     local percent = math.floor(flameLevel / 6 * 100)
+    local isOn = (flameLevel > 0) and (gState.main_mode ~= MODE_OFF and gState.main_mode ~= MODE_STANDBY)
+    
+    -- Send ON/OFF state first
+    if isOn then
+        C4:SendToProxy(LIGHT_PROXY_ID, "LIGHT_ON", {})
+    else
+        C4:SendToProxy(LIGHT_PROXY_ID, "LIGHT_OFF", {})
+    end
+    
+    -- Send level
     C4:SendToProxy(LIGHT_PROXY_ID, "LIGHT_LEVEL", percent)
+    C4:SendToProxy(LIGHT_PROXY_ID, "LIGHT_BRIGHTNESS_CHANGED", { LIGHT_BRIGHTNESS_CURRENT = percent })
+    dbg("Flame level updated: " .. flameLevel .. " = " .. percent .. "%, on=" .. tostring(isOn))
+end
+
+function UpdateHoldModeFromFlame()
+    -- Update hold mode to reflect current flame level
+    local flameLevel = tonumber(gState.flame_control) or 0
+    local holdMode = "Low Flame"
+    if flameLevel <= 2 then
+        holdMode = "Low Flame"
+    elseif flameLevel <= 4 then
+        holdMode = "Medium Flame"
+    else
+        holdMode = "High Flame"
+    end
+    C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = holdMode })
+    dbg("Hold mode updated to: " .. holdMode .. " (flame level " .. flameLevel .. ")")
 end
 
 function UpdatePresetMode(modeOverride)
@@ -821,6 +879,9 @@ function UpdatePresetMode(modeOverride)
     end
     if preset ~= "" then
         dbg("Updating preset mode to: " .. preset)
+        -- Send PRESET_CHANGED for standard preset update
+        C4:SendToProxy(THERMOSTAT_PROXY_ID, "PRESET_CHANGED", { PRESET = preset })
+        -- Also send PRESET_MODE_CHANGED for newer proxy versions
         C4:SendToProxy(THERMOSTAT_PROXY_ID, "PRESET_MODE_CHANGED", { MODE = preset })
     end
 end
@@ -906,7 +967,13 @@ function ReceivedFromProxy(idBinding, strCommand, tParams)
     
     -- Handle Request for Extras
     if strCommand == "GET_EXTRAS_SETUP" then
-        SetupExtras()
+        dbg("GET_EXTRAS_SETUP received - sending extras setup")
+        local xml = GetExtrasXML()
+        dbg("Extras XML: " .. xml)
+        -- Return extras setup XML with table parameter
+        C4:SendToProxy(THERMOSTAT_PROXY_ID, "EXTRAS_SETUP_CHANGED", {XML = xml})
+        -- Also send current state
+        UpdateExtrasState()
         return
     end
     
@@ -966,11 +1033,38 @@ function HandleThermostatCommand(strCommand, tParams)
     elseif strCommand == "SET_MODE_FAN" then
         local mode = tParams["MODE"]
         local level = 0
-        if mode ~= "Off" then level = tonumber(mode) or 0 end
+        -- Map standard names to levels
+        if mode == "Off" then
+            level = 0
+        elseif mode == "Low" then
+            level = 2
+        elseif mode == "Medium" then
+            level = 4
+        elseif mode == "High" then
+            level = 6
+        else
+            -- Try parsing as number for backwards compatibility
+            level = tonumber(mode) or 0
+        end
+        dbg("SET_MODE_FAN: " .. tostring(mode) .. " -> level " .. level)
         SendProflameCommand("fan_control", tostring(level))
         
     elseif strCommand == "SET_EXTRAS" then
         dbg("Received SET_EXTRAS command")
+        -- Handle flame preset (Low/Medium/High quick select)
+        if tParams["pf_flame_preset"] then
+            local val = tonumber(tParams["pf_flame_preset"])
+            if val then
+                dbg("Flame preset selected: " .. val)
+                if gState.main_mode ~= MODE_MANUAL then
+                    SendProflameCommand("main_mode", MODE_MANUAL)
+                    C4:SetTimer(750, function() SendProflameCommand("flame_control", tostring(val)) end, false)
+                else
+                    SendProflameCommand("flame_control", tostring(val))
+                end
+            end
+        end
+        -- Handle flame slider (fine adjustment)
         if tParams["pf_flame"] then
             local val = tonumber(tParams["pf_flame"])
             if val then
@@ -996,7 +1090,7 @@ function HandleThermostatCommand(strCommand, tParams)
         UpdateThermostatSetpoint()
         
     elseif strCommand == "SET_PRESET" then
-        local preset = tParams["PRESET"] or tParams["MODE"] or ""
+        local preset = tParams["PRESET"] or tParams["MODE"] or tParams["NAME"] or ""
         dbg("SET_PRESET received: " .. preset)
         if preset == "Manual" then
             SendProflameCommand("main_mode", MODE_MANUAL)
@@ -1007,8 +1101,47 @@ function HandleThermostatCommand(strCommand, tParams)
         elseif preset == "Eco" then
             SendProflameCommand("main_mode", MODE_ECO)
         end
-        -- Notify proxy of preset change
-        C4:SendToProxy(THERMOSTAT_PROXY_ID, "PRESET_MODE_CHANGED", { MODE = preset })
+        -- Notify proxy of preset change immediately
+        UpdatePresetMode(
+            preset == "Manual" and MODE_MANUAL or
+            preset == "Smart" and MODE_SMART or
+            preset == "Eco" and MODE_ECO or
+            gState.main_mode
+        )
+        
+    elseif strCommand == "SET_MODE_HOLD" then
+        -- Hold modes repurposed for quick flame control:
+        -- "Low Flame" = level 1, "Medium Flame" = level 3, "High Flame" = level 6
+        local holdMode = tParams["MODE"] or ""
+        dbg("SET_MODE_HOLD received: " .. holdMode)
+        if holdMode == "Low Flame" then
+            -- Low flame (level 1)
+            if gState.main_mode ~= MODE_MANUAL then
+                SendProflameCommand("main_mode", MODE_MANUAL)
+                C4:SetTimer(750, function() SendProflameCommand("flame_control", "1") end, false)
+            else
+                SendProflameCommand("flame_control", "1")
+            end
+            C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "Low Flame" })
+        elseif holdMode == "Medium Flame" then
+            -- Medium flame (level 3)
+            if gState.main_mode ~= MODE_MANUAL then
+                SendProflameCommand("main_mode", MODE_MANUAL)
+                C4:SetTimer(750, function() SendProflameCommand("flame_control", "3") end, false)
+            else
+                SendProflameCommand("flame_control", "3")
+            end
+            C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "Medium Flame" })
+        elseif holdMode == "High Flame" then
+            -- High flame (level 6)
+            if gState.main_mode ~= MODE_MANUAL then
+                SendProflameCommand("main_mode", MODE_MANUAL)
+                C4:SetTimer(750, function() SendProflameCommand("flame_control", "6") end, false)
+            else
+                SendProflameCommand("flame_control", "6")
+            end
+            C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "High Flame" })
+        end
     end
 end
 
