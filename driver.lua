@@ -1,6 +1,6 @@
 --[[
     Proflame WiFi Fireplace Controller - Control4 Driver
-    Version 2025121721 - Changed defaults: Smart mode, flame level 6
+    Version 2025121722 - Removed Temperature Display Source property
 ]]
 
 -- =============================================================================
@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2025121721"
+DRIVER_VERSION = "2025121722"
 DRIVER_DATE = "2025-12-17"
 
 NETWORK_BINDING_ID = 6001
@@ -640,11 +640,8 @@ function UpdateRoomTemperature()
     local tempF = DecodeTemperature(tempEncoded)
     local tempC = FahrenheitToCelsius(tempF)
     C4:UpdateProperty("Room Temperature", tostring(tempF) .. "F")
-    local source = Properties["Temperature Display Source"] or "Room Sensor"
-    if source == "Room Sensor" then
-        dbg("Sending room temperature to proxy: " .. tempF .. "F (" .. tempC .. "C)")
-        C4:SendToProxy(THERMOSTAT_PROXY_ID, "TEMPERATURE_CHANGED", {TEMPERATURE = tempC, SCALE = "C"})
-    end
+    dbg("Sending room temperature to proxy: " .. tempF .. "F (" .. tempC .. "C)")
+    C4:SendToProxy(THERMOSTAT_PROXY_ID, "TEMPERATURE_CHANGED", {TEMPERATURE = tempC, SCALE = "C"})
 end
 
 -- =============================================================================
@@ -798,11 +795,6 @@ function UpdateThermostatSetpoint()
     
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "HEAT_SETPOINT_CHANGED", {SETPOINT = tempC, SCALE = "C"})
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "SINGLE_SETPOINT_CHANGED", {SETPOINT = tempC, SCALE = "C"})
-    
-    local source = Properties["Temperature Display Source"] or "Room Sensor"
-    if source == "Setpoint" then
-        C4:SendToProxy(THERMOSTAT_PROXY_ID, "TEMPERATURE_CHANGED", {TEMPERATURE = tempC, SCALE = "C"})
-    end
 end
 
 function UpdateFanMode()
@@ -868,11 +860,7 @@ end
 -- =============================================================================
 
 function OnPropertyChanged(strProperty)
-    if strProperty == "Temperature Display Source" then
-        local tempEncoded = gState.room_temperature or "700"
-        ProcessStatusUpdate("room_temperature", tempEncoded)
-        UpdateThermostatSetpoint()
-    elseif strProperty == "IP Address" then 
+    if strProperty == "IP Address" then 
         Connect()
     end
 end
