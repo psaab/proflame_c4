@@ -1,6 +1,6 @@
 --[[
     Proflame WiFi Fireplace Controller - Control4 Driver
-    Version 2025121720 - Changed flame level minimum to 1
+    Version 2025121721 - Changed defaults: Smart mode, flame level 6
 ]]
 
 -- =============================================================================
@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2025121720"
+DRIVER_VERSION = "2025121721"
 DRIVER_DATE = "2025-12-17"
 
 NETWORK_BINDING_ID = 6001
