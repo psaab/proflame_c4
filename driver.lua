@@ -8,8 +8,8 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2025121722"
-DRIVER_DATE = "2025-12-17"
+DRIVER_VERSION = "2025012318"
+DRIVER_DATE = "2025-01-23"
 
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -102,6 +102,8 @@ gExtrasThrottle = false
 
 gPendingSetpointF = nil
 gPendingTimer = nil
+gPendingFlame = nil
+gPendingDefaultTimer = nil
 
 gState = {
     main_mode = "0",
@@ -293,6 +295,11 @@ function MakeCommand(control, value)
     return '{"control0":"' .. control .. '","value0":"' .. tostring(value) .. '"}'
 end
 
+-- Alternative command format from spec - {"command":"set_control","name":"X","value":"Y"}
+function MakeCommandAlt(control, value)
+    return '{"command":"set_control","name":"' .. control .. '","value":"' .. tostring(value) .. '"}'
+end
+
 function DecodeTemperature(encoded)
     local temp = tonumber(encoded) or 700
     return math.floor(temp / 10)
@@ -339,6 +346,25 @@ function GetExtrasXML()
     local flame = tonumber(gState.flame_control) or 0
     local fan = tonumber(gState.fan_control) or 0
     local light = tonumber(gState.lamp_control) or 0
+    -- Convert timer from milliseconds to minutes for display
+    local timerMs = tonumber(gState.timer_set) or 0
+    local timerMinutes = math.floor(timerMs / 60000)
+    
+    -- Format timer label as hours and minutes (e.g., "1h30m" or "45m")
+    local timerLabel
+    if timerMinutes <= 0 then
+        timerLabel = "Off"
+    elseif timerMinutes >= 60 then
+        local hours = math.floor(timerMinutes / 60)
+        local mins = timerMinutes % 60
+        if mins > 0 then
+            timerLabel = string.format("%dh%dm", hours, mins)
+        else
+            timerLabel = string.format("%dh", hours)
+        end
+    else
+        timerLabel = string.format("%dm", timerMinutes)
+    end
     
     -- Determine current mode
     local mode = gState.main_mode or MODE_OFF
@@ -375,6 +401,9 @@ function GetExtrasXML()
           '<object type="slider" id="pf_fan" label="Fan Speed" command="SET_FAN_LEVEL" min="0" max="6" value="' .. fan .. '"/>' ..
           '<object type="slider" id="pf_light" label="Downlight" command="SET_LIGHT_LEVEL" min="0" max="6" value="' .. light .. '"/>' ..
         '</section>' ..
+        '<section label="Auto-Off Timer">' ..
+          '<object type="slider" id="pf_timer" label="Timer (' .. timerLabel .. ')" command="SET_TIMER_MINUTES" min="0" max="360" value="' .. timerMinutes .. '"/>' ..
+        '</section>' ..
       '</extra>' ..
     '</extras_setup>'
     return xml
@@ -399,6 +428,12 @@ function UpdateExtrasState()
         gExtrasThrottle = false 
         SetupExtras()
     end, false)
+end
+
+-- Separate function for timer updates - always sends immediately
+function UpdateTimerExtras()
+    dbg("Updating timer extras (minutes changed)")
+    SetupExtras()
 end
 
 -- =============================================================================
@@ -441,6 +476,43 @@ function StopReconnectTimer()
         gReconnectTimerId:Cancel()
         gReconnectTimerId = nil
     end
+end
+
+function OnHeatModeTimer()
+    -- Called after mode switch to Heat - set flame and timer
+    local flame = gPendingFlame or 3
+    local timer = gPendingDefaultTimer or 120
+    SendProflameCommand("flame_control", tostring(flame))
+    if timer > 0 then
+        -- Convert minutes to milliseconds
+        local msValue = timer * 60000
+        SendProflameCommand("timer_set", tostring(msValue))
+        gState.timer_set = tostring(msValue)
+        -- Start the timer
+        C4:SetTimer(200, function()
+            SendProflameCommand("timer_status", "1")
+        end, false)
+        UpdateExtrasState()
+    end
+    gPendingFlame = nil
+    gPendingDefaultTimer = nil
+end
+
+function OnSmartEcoModeTimer()
+    -- Called after mode switch to Smart/Eco - just set timer (no flame override)
+    local timer = gPendingDefaultTimer or 120
+    if timer > 0 then
+        -- Convert minutes to milliseconds
+        local msValue = timer * 60000
+        SendProflameCommand("timer_set", tostring(msValue))
+        gState.timer_set = tostring(msValue)
+        -- Start the timer
+        C4:SetTimer(200, function()
+            SendProflameCommand("timer_status", "1")
+        end, false)
+        UpdateExtrasState()
+    end
+    gPendingDefaultTimer = nil
 end
 
 -- =============================================================================
@@ -611,6 +683,13 @@ function SendProflameCommand(control, value)
     return SendWebSocketMessage(cmd)
 end
 
+-- Send command using alternative format (for timer control)
+function SendProflameCommandAlt(control, value)
+    local cmd = MakeCommandAlt(control, value)
+    dbg("Sending alt command: " .. cmd)
+    return SendWebSocketMessage(cmd)
+end
+
 function RequestAllStatus()
     -- The Proflame device requires PROFLAMECONNECTION to trigger full status dump
     -- This is similar to PROFLAMEPING/PROFLAMEPONG but for initial connection
@@ -767,6 +846,51 @@ function ProcessStatusUpdate(status, value)
         C4:UpdateProperty("WiFi Signal Strength", "-" .. tostring(value) .. " dBm")
     elseif status == "timer_status" then
         C4:UpdateProperty("Timer Active", value == "1" and "Yes" or "No")
+        -- If timer is turned off by device, clear remaining time and reset slider
+        if value == "0" then
+            C4:UpdateProperty("Timer Remaining", "Off")
+            gState.timer_set = "0"
+            gState.timer_count = "0"
+            UpdateTimerExtras()
+        end
+    elseif status == "timer_set" then
+        gState.timer_set = value
+        -- Convert ms to minutes for debug log
+        local minutes = math.floor(tonumber(value) / 60000)
+        dbg("Timer set updated: " .. tostring(value) .. " ms (" .. minutes .. " minutes)")
+    elseif status == "timer_count" then
+        local newCount = tonumber(value) or 0
+        local newMinutes = math.floor(newCount / 60000)
+        
+        -- Get old minutes from timer_set (which we control)
+        local oldTimerSet = tonumber(gState.timer_set) or 0
+        local oldMinutes = math.floor(oldTimerSet / 60000)
+        
+        -- Store the raw count
+        gState.timer_count = value
+        
+        -- Convert milliseconds to hours:minutes:seconds for display
+        local totalSeconds = math.floor(newCount / 1000)
+        local hours = math.floor(totalSeconds / 3600)
+        local minutes = math.floor((totalSeconds % 3600) / 60)
+        local seconds = totalSeconds % 60
+        local timeStr
+        if hours > 0 then
+            timeStr = string.format("%d:%02d:%02d", hours, minutes, seconds)
+        else
+            timeStr = string.format("%d:%02d", minutes, seconds)
+        end
+        C4:UpdateProperty("Timer Remaining", timeStr)
+        
+        -- Update the slider to show remaining minutes (sync at minute boundaries)
+        -- Compare against timer_set which we control, not timer_count which device controls
+        dbg("Timer count: " .. newCount .. "ms (" .. newMinutes .. "m), timer_set was: " .. oldTimerSet .. "ms (" .. oldMinutes .. "m)")
+        if oldMinutes ~= newMinutes then
+            dbg("Timer minute changed: " .. oldMinutes .. " -> " .. newMinutes .. ", updating slider")
+            -- Update timer_set to match remaining time so slider shows correct value
+            gState.timer_set = tostring(newMinutes * 60000)
+            UpdateTimerExtras()
+        end
     elseif status == "burner_status" then
         C4:UpdateProperty("Burner Status", tostring(value))
     end
@@ -860,8 +984,34 @@ end
 -- =============================================================================
 
 function OnPropertyChanged(strProperty)
+    dbg("OnPropertyChanged: " .. tostring(strProperty))
     if strProperty == "IP Address" then 
-        Connect()
+        dbg("IP Address changed, disconnecting and reconnecting...")
+        Disconnect()
+        local ipAddress = Properties["IP Address"] or ""
+        if ipAddress ~= "" then
+            -- Small delay to ensure clean disconnect before reconnect
+            C4:SetTimer(500, function() Connect() end, false)
+        else
+            C4:UpdateProperty("Connection Status", "Not Configured")
+        end
+    elseif strProperty == "Port" then
+        dbg("Port changed, disconnecting and reconnecting...")
+        Disconnect()
+        C4:SetTimer(500, function() Connect() end, false)
+    elseif strProperty == "Debug Level" then
+        local level = Properties["Debug Level"]
+        if level == "Error" then gDebugLevel = DEBUG_ERROR
+        elseif level == "Warning" then gDebugLevel = DEBUG_WARN
+        elseif level == "Info" then gDebugLevel = DEBUG_INFO
+        elseif level == "Debug" then gDebugLevel = DEBUG_DEBUG
+        elseif level == "Trace" then gDebugLevel = DEBUG_TRACE
+        end
+        dbg("Debug level set to: " .. tostring(gDebugLevel))
+    elseif strProperty == "Ping Interval (seconds)" then
+        if gConnected and gHandshakeComplete then
+            StartPingTimer()  -- Restart with new interval
+        end
     end
 end
 
@@ -955,10 +1105,32 @@ function HandleThermostatCommand(strCommand, tParams)
         local mode = tParams["MODE"]
         if mode == "Off" then
             SendProflameCommand("main_mode", MODE_OFF)
+            -- Don't reset timer - let it persist or let user control it manually
         elseif mode == "Heat" then
             SendProflameCommand("main_mode", MODE_MANUAL)
-            local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
-            C4:SetTimer(750, function() SendProflameCommand("flame_control", tostring(defaultFlame)) end, false)
+            -- Store values in globals for timer callback
+            gPendingFlame = tonumber(Properties["Default Flame Level"]) or 3
+            gPendingDefaultTimer = tonumber(Properties["Default Timer (minutes)"]) or 120
+            dbg("Setting up timer callback - flame: " .. tostring(gPendingFlame) .. ", timer: " .. tostring(gPendingDefaultTimer))
+            C4:SetTimer(750, function(timer)
+                dbg("Heat mode timer fired")
+                local flame = gPendingFlame or 3
+                local timerMin = gPendingDefaultTimer or 120
+                SendProflameCommand("flame_control", tostring(flame))
+                if timerMin > 0 then
+                    local msValue = timerMin * 60000
+                    dbg("Setting timer to " .. tostring(msValue) .. " ms (" .. tostring(timerMin) .. " min)")
+                    SendProflameCommand("timer_set", tostring(msValue))
+                    gState.timer_set = tostring(msValue)
+                    C4:SetTimer(200, function(timer2)
+                        dbg("Starting timer (timer_status = 1)")
+                        SendProflameCommand("timer_status", "1")
+                    end, false)
+                    UpdateExtrasState()
+                end
+                gPendingFlame = nil
+                gPendingDefaultTimer = nil
+            end, false)
         end
         
     elseif strCommand == "SET_SETPOINT_HEAT" or strCommand == "SET_SETPOINT_SINGLE" then
@@ -1092,14 +1264,59 @@ function HandleThermostatCommand(strCommand, tParams)
     elseif strCommand == "SELECT_MODE" then
         local val = tParams["VALUE"] or tParams["value"] or ""
         dbg("SELECT_MODE: " .. tostring(val))
+        gPendingDefaultTimer = tonumber(Properties["Default Timer (minutes)"]) or 120
         if val == "manual" then
             SendProflameCommand("main_mode", MODE_MANUAL)
-            local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
-            C4:SetTimer(750, function() SendProflameCommand("flame_control", tostring(defaultFlame)) end, false)
+            gPendingFlame = tonumber(Properties["Default Flame Level"]) or 3
+            C4:SetTimer(750, function(timer)
+                dbg("Manual mode timer fired")
+                local flame = gPendingFlame or 3
+                local timerMin = gPendingDefaultTimer or 120
+                SendProflameCommand("flame_control", tostring(flame))
+                if timerMin > 0 then
+                    local msValue = timerMin * 60000
+                    SendProflameCommand("timer_set", tostring(msValue))
+                    gState.timer_set = tostring(msValue)
+                    C4:SetTimer(200, function(timer2)
+                        SendProflameCommand("timer_status", "1")
+                    end, false)
+                    UpdateExtrasState()
+                end
+                gPendingFlame = nil
+                gPendingDefaultTimer = nil
+            end, false)
         elseif val == "smart" then
             SendProflameCommand("main_mode", MODE_SMART)
+            C4:SetTimer(750, function(timer)
+                dbg("Smart mode timer fired")
+                local timerMin = gPendingDefaultTimer or 120
+                if timerMin > 0 then
+                    local msValue = timerMin * 60000
+                    SendProflameCommand("timer_set", tostring(msValue))
+                    gState.timer_set = tostring(msValue)
+                    C4:SetTimer(200, function(timer2)
+                        SendProflameCommand("timer_status", "1")
+                    end, false)
+                    UpdateExtrasState()
+                end
+                gPendingDefaultTimer = nil
+            end, false)
         elseif val == "eco" then
             SendProflameCommand("main_mode", MODE_ECO)
+            C4:SetTimer(750, function(timer)
+                dbg("Eco mode timer fired")
+                local timerMin = gPendingDefaultTimer or 120
+                if timerMin > 0 then
+                    local msValue = timerMin * 60000
+                    SendProflameCommand("timer_set", tostring(msValue))
+                    gState.timer_set = tostring(msValue)
+                    C4:SetTimer(200, function(timer2)
+                        SendProflameCommand("timer_status", "1")
+                    end, false)
+                    UpdateExtrasState()
+                end
+                gPendingDefaultTimer = nil
+            end, false)
         end
         
     elseif strCommand == "SELECT_FLAME_PRESET" then
@@ -1135,6 +1352,27 @@ function HandleThermostatCommand(strCommand, tParams)
         local val = tonumber(tParams["VALUE"] or tParams["value"])
         dbg("SET_LIGHT_LEVEL: " .. tostring(val))
         if val then SendProflameCommand("lamp_control", tostring(val)) end
+        
+    elseif strCommand == "SET_TIMER_MINUTES" then
+        local val = tonumber(tParams["VALUE"] or tParams["value"])
+        dbg("SET_TIMER_MINUTES: " .. tostring(val) .. " minutes")
+        if val and val >= 0 then
+            -- Convert minutes to milliseconds (device uses milliseconds)
+            local msValue = val * 60000
+            if val > 0 then
+                -- Set timer value in milliseconds
+                SendProflameCommand("timer_set", tostring(msValue))
+                gState.timer_set = tostring(msValue)
+                -- Start the timer
+                C4:SetTimer(200, function()
+                    SendProflameCommand("timer_status", "1")
+                end, false)
+            else
+                -- Stop the timer
+                SendProflameCommand("timer_status", "0")
+            end
+            UpdateExtrasState()
+        end
     end
 end
 
@@ -1180,6 +1418,7 @@ function InitializePropertiesFromState()
     C4:UpdateProperty("Aux Output", gState.aux_control == "1" and "On" or "Off")
     C4:UpdateProperty("Front Flame (Split)", gState.split_control == "1" and "On" or "Off")
     C4:UpdateProperty("Timer Active", gState.timer_status == "1" and "Yes" or "No")
+    C4:UpdateProperty("Timer Remaining", "Off")
     C4:UpdateProperty("Burner Status", gState.burner_status)
     C4:UpdateProperty("WiFi Signal Strength", "-" .. gState.wifi_signal_str .. " dBm")
     UpdateThermostatSetpoint()

@@ -6,7 +6,7 @@
   <large>devices_lg/relaysingle_gasfireplace_close.gif</large>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
-  <version>2025121722</version>
+  <version>2025012318</version>
   <proxies>
     <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
   </proxies>
@@ -140,6 +140,12 @@
         <readonly>true</readonly>
       </property>
       <property>
+        <name>Timer Remaining</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
+      <property>
         <name>Burner Status</name>
         <type>STRING</type>
         <default/>
@@ -162,6 +168,14 @@
         <minimum>1</minimum>
         <maximum>6</maximum>
         <default>6</default>
+        <readonly>false</readonly>
+      </property>
+      <property>
+        <name>Default Timer (minutes)</name>
+        <type>RANGED_INTEGER</type>
+        <minimum>0</minimum>
+        <maximum>480</maximum>
+        <default>120</default>
         <readonly>false</readonly>
       </property>
       <property>
