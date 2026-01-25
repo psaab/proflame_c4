@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2025012318"
+DRIVER_VERSION = "2025012324"
 DRIVER_DATE = "2025-01-23"
 
 NETWORK_BINDING_ID = 6001
@@ -818,6 +818,13 @@ function ProcessStatusUpdate(status, value)
         C4:UpdateProperty("Operating Mode", GetModeString(value))
         UpdateThermostatProxy(value)
         UpdatePresetMode(value)
+        -- If fireplace turns off, reset timer slider to 0
+        if value == MODE_OFF or value == MODE_STANDBY then
+            gState.timer_set = "0"
+            gState.timer_count = "0"
+            C4:UpdateProperty("Timer Remaining", "Off")
+            UpdateTimerExtras()
+        end
     elseif status == "flame_control" then
         C4:UpdateProperty("Flame Level", tostring(value))
         UpdateFlameLevel()
@@ -1105,31 +1112,22 @@ function HandleThermostatCommand(strCommand, tParams)
         local mode = tParams["MODE"]
         if mode == "Off" then
             SendProflameCommand("main_mode", MODE_OFF)
-            -- Don't reset timer - let it persist or let user control it manually
         elseif mode == "Heat" then
             SendProflameCommand("main_mode", MODE_MANUAL)
-            -- Store values in globals for timer callback
-            gPendingFlame = tonumber(Properties["Default Flame Level"]) or 3
-            gPendingDefaultTimer = tonumber(Properties["Default Timer (minutes)"]) or 120
-            dbg("Setting up timer callback - flame: " .. tostring(gPendingFlame) .. ", timer: " .. tostring(gPendingDefaultTimer))
+            -- Set flame level and start default timer
+            local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
+            local defaultTimer = tonumber(Properties["Default Timer (minutes)"]) or 120
             C4:SetTimer(750, function(timer)
-                dbg("Heat mode timer fired")
-                local flame = gPendingFlame or 3
-                local timerMin = gPendingDefaultTimer or 120
-                SendProflameCommand("flame_control", tostring(flame))
-                if timerMin > 0 then
-                    local msValue = timerMin * 60000
-                    dbg("Setting timer to " .. tostring(msValue) .. " ms (" .. tostring(timerMin) .. " min)")
+                SendProflameCommand("flame_control", tostring(defaultFlame))
+                if defaultTimer > 0 then
+                    local msValue = defaultTimer * 60000
                     SendProflameCommand("timer_set", tostring(msValue))
                     gState.timer_set = tostring(msValue)
                     C4:SetTimer(200, function(timer2)
-                        dbg("Starting timer (timer_status = 1)")
                         SendProflameCommand("timer_status", "1")
                     end, false)
                     UpdateExtrasState()
                 end
-                gPendingFlame = nil
-                gPendingDefaultTimer = nil
             end, false)
         end
         
@@ -1264,17 +1262,14 @@ function HandleThermostatCommand(strCommand, tParams)
     elseif strCommand == "SELECT_MODE" then
         local val = tParams["VALUE"] or tParams["value"] or ""
         dbg("SELECT_MODE: " .. tostring(val))
-        gPendingDefaultTimer = tonumber(Properties["Default Timer (minutes)"]) or 120
+        local defaultTimer = tonumber(Properties["Default Timer (minutes)"]) or 120
         if val == "manual" then
             SendProflameCommand("main_mode", MODE_MANUAL)
-            gPendingFlame = tonumber(Properties["Default Flame Level"]) or 3
+            local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
             C4:SetTimer(750, function(timer)
-                dbg("Manual mode timer fired")
-                local flame = gPendingFlame or 3
-                local timerMin = gPendingDefaultTimer or 120
-                SendProflameCommand("flame_control", tostring(flame))
-                if timerMin > 0 then
-                    local msValue = timerMin * 60000
+                SendProflameCommand("flame_control", tostring(defaultFlame))
+                if defaultTimer > 0 then
+                    local msValue = defaultTimer * 60000
                     SendProflameCommand("timer_set", tostring(msValue))
                     gState.timer_set = tostring(msValue)
                     C4:SetTimer(200, function(timer2)
@@ -1282,41 +1277,33 @@ function HandleThermostatCommand(strCommand, tParams)
                     end, false)
                     UpdateExtrasState()
                 end
-                gPendingFlame = nil
-                gPendingDefaultTimer = nil
             end, false)
         elseif val == "smart" then
             SendProflameCommand("main_mode", MODE_SMART)
-            C4:SetTimer(750, function(timer)
-                dbg("Smart mode timer fired")
-                local timerMin = gPendingDefaultTimer or 120
-                if timerMin > 0 then
-                    local msValue = timerMin * 60000
+            if defaultTimer > 0 then
+                C4:SetTimer(750, function(timer)
+                    local msValue = defaultTimer * 60000
                     SendProflameCommand("timer_set", tostring(msValue))
                     gState.timer_set = tostring(msValue)
                     C4:SetTimer(200, function(timer2)
                         SendProflameCommand("timer_status", "1")
                     end, false)
                     UpdateExtrasState()
-                end
-                gPendingDefaultTimer = nil
-            end, false)
+                end, false)
+            end
         elseif val == "eco" then
             SendProflameCommand("main_mode", MODE_ECO)
-            C4:SetTimer(750, function(timer)
-                dbg("Eco mode timer fired")
-                local timerMin = gPendingDefaultTimer or 120
-                if timerMin > 0 then
-                    local msValue = timerMin * 60000
+            if defaultTimer > 0 then
+                C4:SetTimer(750, function(timer)
+                    local msValue = defaultTimer * 60000
                     SendProflameCommand("timer_set", tostring(msValue))
                     gState.timer_set = tostring(msValue)
                     C4:SetTimer(200, function(timer2)
                         SendProflameCommand("timer_status", "1")
                     end, false)
                     UpdateExtrasState()
-                end
-                gPendingDefaultTimer = nil
-            end, false)
+                end, false)
+            end
         end
         
     elseif strCommand == "SELECT_FLAME_PRESET" then
@@ -1355,23 +1342,45 @@ function HandleThermostatCommand(strCommand, tParams)
         
     elseif strCommand == "SET_TIMER_MINUTES" then
         local val = tonumber(tParams["VALUE"] or tParams["value"])
-        dbg("SET_TIMER_MINUTES: " .. tostring(val) .. " minutes")
+        dbg("SET_TIMER_MINUTES: " .. tostring(val) .. " minutes, current mode: " .. tostring(gState.main_mode))
         if val and val >= 0 then
             -- Convert minutes to milliseconds (device uses milliseconds)
             local msValue = val * 60000
             if val > 0 then
-                -- Set timer value in milliseconds
-                SendProflameCommand("timer_set", tostring(msValue))
-                gState.timer_set = tostring(msValue)
-                -- Start the timer
-                C4:SetTimer(200, function()
-                    SendProflameCommand("timer_status", "1")
-                end, false)
+                -- If fireplace is off, turn it on first
+                if gState.main_mode == MODE_OFF or gState.main_mode == MODE_STANDBY then
+                    dbg("Fireplace is off, turning on with timer")
+                    SendProflameCommand("main_mode", MODE_MANUAL)
+                    local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
+                    C4:SetTimer(750, function(timer)
+                        SendProflameCommand("flame_control", tostring(defaultFlame))
+                        -- Set timer value in milliseconds
+                        SendProflameCommand("timer_set", tostring(msValue))
+                        gState.timer_set = tostring(msValue)
+                        -- Start the timer
+                        C4:SetTimer(200, function(timer2)
+                            SendProflameCommand("timer_status", "1")
+                        end, false)
+                        UpdateExtrasState()
+                    end, false)
+                else
+                    -- Fireplace already on, just set timer
+                    SendProflameCommand("timer_set", tostring(msValue))
+                    gState.timer_set = tostring(msValue)
+                    -- Start the timer
+                    C4:SetTimer(200, function(timer)
+                        SendProflameCommand("timer_status", "1")
+                    end, false)
+                    UpdateExtrasState()
+                end
             else
-                -- Stop the timer
+                -- Timer set to 0 - turn off fireplace
+                dbg("Timer set to 0, turning off fireplace")
                 SendProflameCommand("timer_status", "0")
+                SendProflameCommand("main_mode", MODE_OFF)
+                gState.timer_set = "0"
+                UpdateExtrasState()
             end
-            UpdateExtrasState()
         end
     end
 end
@@ -1380,9 +1389,45 @@ end
 -- INITIALIZATION
 -- =============================================================================
 
+function ResetDriverState()
+    -- Reset all connection state
+    gConnected = false
+    gConnecting = false
+    gHandshakeComplete = false
+    gReceiveBuffer = ""
+    gExtrasThrottle = false
+    
+    -- Cancel any pending timers
+    StopPingTimer()
+    StopReconnectTimer()
+    
+    -- Reset device state
+    gState = {
+        main_mode = "0",
+        flame_control = "0",
+        fan_control = "0",
+        lamp_control = "0",
+        temperature_set = "700",
+        room_temperature = "700",
+        thermo_control = "0",
+        pilot_control = "0",
+        aux_control = "0",
+        split_control = "0",
+        burner_status = "0",
+        wifi_signal_str = "0",
+        timer_status = "0",
+        timer_set = "0",
+        timer_count = "0"
+    }
+    
+    dbg("Driver state reset")
+end
+
 function OnDriverInit()
     local success, err = pcall(function()
+        dbg("OnDriverInit - resetting state")
         math.randomseed(os.time())
+        ResetDriverState()
         InitializePropertiesFromState()
     end)
     if not success then print("OnDriverInit Error: " .. tostring(err)) end
@@ -1393,12 +1438,16 @@ function OnDriverLateInit()
     local success, err = pcall(function()
         C4:UpdateProperty("Driver Version", DRIVER_VERSION .. " (" .. DRIVER_DATE .. ")")
         
+        -- Ensure clean state before connecting
+        Disconnect()
+        
         -- DELAYED EXTRAS SETUP TO ENSURE PROXY IS READY
         C4:SetTimer(2000, function() SetupExtras() end, false)
         
         local ipAddress = Properties["IP Address"] or ""
         if ipAddress ~= "" then
-            Connect()
+            -- Delay connection slightly to ensure network is ready
+            C4:SetTimer(500, function() Connect() end, false)
         else
             C4:UpdateProperty("Connection Status", "Not Configured")
         end
@@ -1425,5 +1474,63 @@ function InitializePropertiesFromState()
 end
 
 function OnDriverDestroyed()
+    dbg("OnDriverDestroyed - cleaning up")
+    StopPingTimer()
+    StopReconnectTimer()
     Disconnect()
+end
+
+function OnDriverUpdated()
+    -- Called when driver is updated/reloaded
+    dbg("OnDriverUpdated - driver updated to version " .. DRIVER_VERSION)
+    
+    -- Clean up old state
+    StopPingTimer()
+    StopReconnectTimer()
+    Disconnect()
+    
+    -- Reset state
+    ResetDriverState()
+    
+    -- Update version display
+    C4:UpdateProperty("Driver Version", DRIVER_VERSION .. " (" .. DRIVER_DATE .. ")")
+    
+    -- Reinitialize
+    InitializePropertiesFromState()
+    
+    -- Reconnect after delay
+    C4:SetTimer(1000, function()
+        SetupExtras()
+        local ipAddress = Properties["IP Address"] or ""
+        if ipAddress ~= "" then
+            Connect()
+        end
+    end, false)
+end
+
+function ExecuteCommand(strCommand, tParams)
+    dbg("ExecuteCommand: " .. tostring(strCommand))
+    
+    if strCommand == "Reconnect" then
+        dbg("Action: Reconnect")
+        Disconnect()
+        C4:SetTimer(500, function() Connect() end, false)
+        
+    elseif strCommand == "Refresh Driver" then
+        dbg("Action: Refresh Driver")
+        -- Full reset and reconnect
+        StopPingTimer()
+        StopReconnectTimer()
+        Disconnect()
+        ResetDriverState()
+        C4:UpdateProperty("Driver Version", DRIVER_VERSION .. " (" .. DRIVER_DATE .. ")")
+        InitializePropertiesFromState()
+        C4:SetTimer(1000, function()
+            SetupExtras()
+            local ipAddress = Properties["IP Address"] or ""
+            if ipAddress ~= "" then
+                Connect()
+            end
+        end, false)
+    end
 end
