@@ -1,6 +1,6 @@
 --[[
     Proflame WiFi Fireplace Controller - Control4 Driver
-    Version 2025121722 - Removed Temperature Display Source property
+    Copyright 2025 Paul Saab. All rights reserved.
 ]]
 
 -- =============================================================================
@@ -8,8 +8,8 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2025012324"
-DRIVER_DATE = "2025-01-23"
+DRIVER_VERSION = "2025012905"
+DRIVER_DATE = "2025-01-29"
 
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -26,6 +26,67 @@ DEBUG_WARN = 2
 DEBUG_INFO = 3
 DEBUG_DEBUG = 4
 DEBUG_TRACE = 5
+
+-- =============================================================================
+-- DRIVER LOAD CLEANUP
+-- When the Lua file is loaded/reloaded, this code runs immediately
+-- =============================================================================
+
+-- Force cleanup of any existing timers from previous driver instance
+if gPingTimerId then
+    pcall(function() gPingTimerId:Cancel() end)
+    gPingTimerId = nil
+end
+if gReconnectTimerId then
+    pcall(function() gReconnectTimerId:Cancel() end)
+    gReconnectTimerId = nil
+end
+
+-- Force disconnect if we were connected
+if gConnected then
+    pcall(function()
+        local port = 88
+        if Properties and Properties["Port"] then
+            port = tonumber(Properties["Port"]) or 88
+        end
+        C4:NetDisconnect(NETWORK_BINDING_ID, port)
+    end)
+end
+
+-- Log that we're loading
+print("[Proflame] Driver loading - Version " .. DRIVER_VERSION .. " (" .. DRIVER_DATE .. ")")
+
+-- Force reset of gState to ensure clean state on driver reload
+gState = {
+    main_mode = "0",
+    flame_control = "0",
+    fan_control = "0",
+    lamp_control = "0",
+    temperature_set = "700",
+    room_temperature = "700",
+    thermo_control = "0",
+    pilot_control = "0",
+    aux_control = "0",
+    split_control = "0",
+    burner_status = "0",
+    wifi_signal_str = "0",
+    timer_status = "0",
+    timer_set = "0",
+    timer_count = "0"
+}
+gSuppressTimerUpdates = false
+gExtrasThrottle = false
+
+-- Build timestamp for cache busting - this changes every build
+BUILD_TIMESTAMP = "20250129-160000"
+
+-- Try to update version property immediately on load
+pcall(function()
+    if C4 and C4.UpdateProperty then
+        C4:UpdateProperty("Driver Version", DRIVER_VERSION .. " (" .. DRIVER_DATE .. ") [" .. BUILD_TIMESTAMP .. "]")
+        print("[Proflame] Updated Driver Version property at load time")
+    end
+end)
 
 -- =============================================================================
 -- BIT OPERATIONS
@@ -99,6 +160,7 @@ gReconnectTimerId = nil
 gWebSocketKey = nil
 gDebugLevel = DEBUG_DEBUG
 gExtrasThrottle = false
+gSuppressTimerUpdates = false  -- Suppress device timer_count updates while we're setting timer
 
 gPendingSetpointF = nil
 gPendingTimer = nil
@@ -818,8 +880,8 @@ function ProcessStatusUpdate(status, value)
         C4:UpdateProperty("Operating Mode", GetModeString(value))
         UpdateThermostatProxy(value)
         UpdatePresetMode(value)
-        -- If fireplace turns off, reset timer slider to 0
-        if value == MODE_OFF or value == MODE_STANDBY then
+        -- If fireplace turns off and we're not suppressing, reset timer slider to 0
+        if (value == MODE_OFF or value == MODE_STANDBY) and not gSuppressTimerUpdates then
             gState.timer_set = "0"
             gState.timer_count = "0"
             C4:UpdateProperty("Timer Remaining", "Off")
@@ -853,25 +915,32 @@ function ProcessStatusUpdate(status, value)
         C4:UpdateProperty("WiFi Signal Strength", "-" .. tostring(value) .. " dBm")
     elseif status == "timer_status" then
         C4:UpdateProperty("Timer Active", value == "1" and "Yes" or "No")
-        -- If timer is turned off by device, clear remaining time and reset slider
-        if value == "0" then
+        -- If timer is turned off by device and we're not suppressing, clear remaining time and reset slider
+        if value == "0" and not gSuppressTimerUpdates then
             C4:UpdateProperty("Timer Remaining", "Off")
             gState.timer_set = "0"
             gState.timer_count = "0"
             UpdateTimerExtras()
         end
     elseif status == "timer_set" then
-        gState.timer_set = value
-        -- Convert ms to minutes for debug log
+        -- Don't update gState.timer_set from device responses
+        -- We only set timer_set from our own commands to avoid sync issues
+        -- Just log the device's reported value for debugging
         local minutes = math.floor(tonumber(value) / 60000)
-        dbg("Timer set updated: " .. tostring(value) .. " ms (" .. minutes .. " minutes)")
+        dbg("Device timer_set: " .. tostring(value) .. " ms (" .. minutes .. " minutes), our timer_set: " .. tostring(gState.timer_set))
     elseif status == "timer_count" then
+        -- Skip timer_count updates while we're actively setting the timer
+        if gSuppressTimerUpdates then
+            dbg("Timer count update suppressed: " .. tostring(value))
+            return
+        end
+        
         local newCount = tonumber(value) or 0
         local newMinutes = math.floor(newCount / 60000)
         
-        -- Get old minutes from timer_set (which we control)
-        local oldTimerSet = tonumber(gState.timer_set) or 0
-        local oldMinutes = math.floor(oldTimerSet / 60000)
+        -- Get old minutes from timer_count (for detecting minute changes)
+        local oldCount = tonumber(gState.timer_count) or 0
+        local oldMinutes = math.floor(oldCount / 60000)
         
         -- Store the raw count
         gState.timer_count = value
@@ -884,17 +953,18 @@ function ProcessStatusUpdate(status, value)
         local timeStr
         if hours > 0 then
             timeStr = string.format("%d:%02d:%02d", hours, minutes, seconds)
-        else
+        elseif newCount > 0 then
             timeStr = string.format("%d:%02d", minutes, seconds)
+        else
+            timeStr = "Off"
         end
         C4:UpdateProperty("Timer Remaining", timeStr)
         
-        -- Update the slider to show remaining minutes (sync at minute boundaries)
-        -- Compare against timer_set which we control, not timer_count which device controls
-        dbg("Timer count: " .. newCount .. "ms (" .. newMinutes .. "m), timer_set was: " .. oldTimerSet .. "ms (" .. oldMinutes .. "m)")
+        -- Update the slider when minute changes
+        dbg("Timer count: " .. newCount .. "ms (" .. newMinutes .. "m), old count: " .. oldCount .. "ms (" .. oldMinutes .. "m)")
         if oldMinutes ~= newMinutes then
             dbg("Timer minute changed: " .. oldMinutes .. " -> " .. newMinutes .. ", updating slider")
-            -- Update timer_set to match remaining time so slider shows correct value
+            -- Update timer_set to match for slider display
             gState.timer_set = tostring(newMinutes * 60000)
             UpdateTimerExtras()
         end
@@ -1344,9 +1414,15 @@ function HandleThermostatCommand(strCommand, tParams)
         local val = tonumber(tParams["VALUE"] or tParams["value"])
         dbg("SET_TIMER_MINUTES: " .. tostring(val) .. " minutes, current mode: " .. tostring(gState.main_mode))
         if val and val >= 0 then
+            -- Suppress device timer updates while we're setting
+            gSuppressTimerUpdates = true
+            
             -- Convert minutes to milliseconds (device uses milliseconds)
             local msValue = val * 60000
             if val > 0 then
+                -- Set our state immediately
+                gState.timer_set = tostring(msValue)
+                
                 -- If fireplace is off, turn it on first
                 if gState.main_mode == MODE_OFF or gState.main_mode == MODE_STANDBY then
                     dbg("Fireplace is off, turning on with timer")
@@ -1356,30 +1432,47 @@ function HandleThermostatCommand(strCommand, tParams)
                         SendProflameCommand("flame_control", tostring(defaultFlame))
                         -- Set timer value in milliseconds
                         SendProflameCommand("timer_set", tostring(msValue))
-                        gState.timer_set = tostring(msValue)
                         -- Start the timer
                         C4:SetTimer(200, function(timer2)
                             SendProflameCommand("timer_status", "1")
+                            -- Clear suppression after commands are sent
+                            C4:SetTimer(2000, function(timer3)
+                                gSuppressTimerUpdates = false
+                                dbg("Timer suppression cleared")
+                            end, false)
                         end, false)
-                        UpdateExtrasState()
+                        -- Use UpdateTimerExtras for immediate update
+                        UpdateTimerExtras()
                     end, false)
                 else
                     -- Fireplace already on, just set timer
                     SendProflameCommand("timer_set", tostring(msValue))
-                    gState.timer_set = tostring(msValue)
                     -- Start the timer
                     C4:SetTimer(200, function(timer)
                         SendProflameCommand("timer_status", "1")
+                        -- Clear suppression after commands are sent
+                        C4:SetTimer(2000, function(timer2)
+                            gSuppressTimerUpdates = false
+                            dbg("Timer suppression cleared")
+                        end, false)
                     end, false)
-                    UpdateExtrasState()
+                    -- Use UpdateTimerExtras for immediate update
+                    UpdateTimerExtras()
                 end
             else
                 -- Timer set to 0 - turn off fireplace
                 dbg("Timer set to 0, turning off fireplace")
+                gState.timer_set = "0"
+                gState.timer_count = "0"
                 SendProflameCommand("timer_status", "0")
                 SendProflameCommand("main_mode", MODE_OFF)
-                gState.timer_set = "0"
-                UpdateExtrasState()
+                -- Use UpdateTimerExtras for immediate update (not throttled)
+                UpdateTimerExtras()
+                -- Clear suppression after a delay
+                C4:SetTimer(2000, function(timer)
+                    gSuppressTimerUpdates = false
+                    dbg("Timer suppression cleared")
+                end, false)
             end
         end
     end
@@ -1396,6 +1489,7 @@ function ResetDriverState()
     gHandshakeComplete = false
     gReceiveBuffer = ""
     gExtrasThrottle = false
+    gSuppressTimerUpdates = false
     
     -- Cancel any pending timers
     StopPingTimer()
@@ -1434,9 +1528,9 @@ function OnDriverInit()
 end
 
 function OnDriverLateInit()
-    dbg("OnDriverLateInit")
+    dbg("OnDriverLateInit - Build: " .. BUILD_TIMESTAMP)
     local success, err = pcall(function()
-        C4:UpdateProperty("Driver Version", DRIVER_VERSION .. " (" .. DRIVER_DATE .. ")")
+        C4:UpdateProperty("Driver Version", DRIVER_VERSION .. " (" .. DRIVER_DATE .. ") [" .. BUILD_TIMESTAMP .. "]")
         
         -- Ensure clean state before connecting
         Disconnect()
@@ -1506,31 +1600,4 @@ function OnDriverUpdated()
             Connect()
         end
     end, false)
-end
-
-function ExecuteCommand(strCommand, tParams)
-    dbg("ExecuteCommand: " .. tostring(strCommand))
-    
-    if strCommand == "Reconnect" then
-        dbg("Action: Reconnect")
-        Disconnect()
-        C4:SetTimer(500, function() Connect() end, false)
-        
-    elseif strCommand == "Refresh Driver" then
-        dbg("Action: Refresh Driver")
-        -- Full reset and reconnect
-        StopPingTimer()
-        StopReconnectTimer()
-        Disconnect()
-        ResetDriverState()
-        C4:UpdateProperty("Driver Version", DRIVER_VERSION .. " (" .. DRIVER_DATE .. ")")
-        InitializePropertiesFromState()
-        C4:SetTimer(1000, function()
-            SetupExtras()
-            local ipAddress = Properties["IP Address"] or ""
-            if ipAddress ~= "" then
-                Connect()
-            end
-        end, false)
-    end
 end

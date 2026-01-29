@@ -2,11 +2,12 @@
 <devicedata>
   <copyright>Copyright 2025 Paul Saab. All rights reserved.</copyright>
   <name>Proflame WiFi Fireplace</name>
+  <modified>2025-01-29 16:00:00</modified>
   <small>devices_sm/relaysingle_gasfireplace_close.gif</small>
   <large>devices_lg/relaysingle_gasfireplace_close.gif</large>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
-  <version>2025012324</version>
+  <version>2025012905</version>
   <proxies>
     <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
   </proxies>
@@ -332,16 +333,6 @@
         <description>Cancel the auto-off timer</description>
       </command>
     </commands>
-    <actions>
-      <action>
-        <name>Reconnect</name>
-        <description>Disconnect and reconnect to the fireplace</description>
-      </action>
-      <action>
-        <name>Refresh Driver</name>
-        <description>Reset driver state and reconnect</description>
-      </action>
-    </actions>
     <script file="driver.lua" encryption="0" jit="1"/>
   </config>
   <events>
@@ -434,7 +425,7 @@
   <manufacturer>SIT Group / Proflame</manufacturer>
   <creator>Paul Saab</creator>
   <created>12/02/2025 12:00 PM</created>
-  <modified>12/16/2025 09:00 PM</modified>
+  <modified>01/29/2025 03:50 PM</modified>
   <model>Proflame 2 WiFi</model>
   <capabilities>
     <has_extras>true</has_extras>
