@@ -1,21 +1,22 @@
-<?xml version="1.0"?>
 <devicedata>
+  <small image_source="c4z">images/icon_16.gif</small>
+  <large image_source="c4z">images/icon_32.gif</large>
+  <agent>false</agent>
   <copyright>Copyright 2025 Paul Saab. All rights reserved.</copyright>
+  <creator>Paul Saab</creator>
   <name>Proflame WiFi Fireplace</name>
-  <modified>2025-01-29 16:00:00</modified>
-  <small>devices_sm/relaysingle_gasfireplace_close.gif</small>
-  <large>devices_lg/relaysingle_gasfireplace_close.gif</large>
-  <control>lua_gen</control>
-  <controlmethod>IP</controlmethod>
-  <version>2025012905</version>
-  <proxies>
-    <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
-  </proxies>
-  <combo>false</combo>
+  <model>Proflame 2 WiFi</model>
+  <manufacturer>SIT Group / Proflame</manufacturer>
   <driver>DriverWorks</driver>
-  <composer_categories>
-    <category>HVAC</category>
-  </composer_categories>
+  <control>lua_gen</control>
+  <version>2025013001</version>
+  <created>12/02/2025 12:00 PM</created>
+  <modified>01/29/2026 04:00 PM</modified>
+  <auto_update>true</auto_update>
+  <minimum_auto_update_version>1</minimum_auto_update_version>
+  <proxies>
+    <proxy proxybindingid="5001" name="Proflame Fireplace" small_image="images/icon_16.gif" large_image="images/icon_32.gif" image_source="c4z">thermostatV2</proxy>
+  </proxies>
   <states/>
   <config>
     <documentation file="www/documentation.html"/>
@@ -176,7 +177,7 @@
         <type>RANGED_INTEGER</type>
         <minimum>0</minimum>
         <maximum>480</maximum>
-        <default>120</default>
+        <default>180</default>
         <readonly>false</readonly>
       </property>
       <property>
@@ -333,7 +334,7 @@
         <description>Cancel the auto-off timer</description>
       </command>
     </commands>
-    <script file="driver.lua" encryption="0" jit="1"/>
+    <script file="driver.lua" encryption="0" jit="1"></script>
   </config>
   <events>
     <event>
@@ -422,11 +423,6 @@
       </classes>
     </connection>
   </connections>
-  <manufacturer>SIT Group / Proflame</manufacturer>
-  <creator>Paul Saab</creator>
-  <created>12/02/2025 12:00 PM</created>
-  <modified>01/29/2025 03:50 PM</modified>
-  <model>Proflame 2 WiFi</model>
   <capabilities>
     <has_extras>true</has_extras>
     <current_temperature_min_c>-40</current_temperature_min_c>
@@ -469,5 +465,12 @@
     <has_remote_sensor>False</has_remote_sensor>
     <has_single_setpoint>True</has_single_setpoint>
     <can_inc_dec_setpoints>True</can_inc_dec_setpoints>
+    <navigator_display_option proxybindingid="5001">
+      <display_icons>
+        <Icon width="70" height="70">controller://driver/proflame_wifi_connect/icons/70.png</Icon>
+        <Icon width="90" height="90">controller://driver/proflame_wifi_connect/icons/90.png</Icon>
+        <Icon width="300" height="300">controller://driver/proflame_wifi_connect/icons/300.png</Icon>
+      </display_icons>
+    </navigator_display_option>
   </capabilities>
 </devicedata>

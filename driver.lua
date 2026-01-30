@@ -8,8 +8,8 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2025012905"
-DRIVER_DATE = "2025-01-29"
+DRIVER_VERSION = "2025013001"
+DRIVER_DATE = "2026-01-30"
 
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -78,7 +78,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20250129-160000"
+BUILD_TIMESTAMP = "20260130-070000"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -409,8 +409,14 @@ function GetExtrasXML()
     local fan = tonumber(gState.fan_control) or 0
     local light = tonumber(gState.lamp_control) or 0
     -- Convert timer from milliseconds to minutes for display
-    local timerMs = tonumber(gState.timer_set) or 0
+    -- Use timer_count (remaining time) not timer_set (original setting)
+    -- But if fireplace is off, show timer as 0 regardless of device's timer_count
+    local timerMs = tonumber(gState.timer_count) or 0
     local timerMinutes = math.floor(timerMs / 60000)
+    local mode = gState.main_mode or MODE_OFF
+    if mode == MODE_OFF then
+        timerMinutes = 0
+    end
     
     -- Format timer label as hours and minutes (e.g., "1h30m" or "45m")
     local timerLabel
