@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2025013005"
+DRIVER_VERSION = "2025013009"
 DRIVER_DATE = "2026-01-30"
 
 NETWORK_BINDING_ID = 6001
@@ -78,7 +78,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260130-073000"
+BUILD_TIMESTAMP = "20260130-080000"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -423,7 +423,9 @@ function GetExtrasXML()
         timerMinutes = math.floor(timerMs / 60000)
     end
 
-    if mode == MODE_OFF then
+    -- Only force timer to 0 if fireplace is off AND timer is not active
+    -- This prevents showing 0 during startup when we're setting a timer
+    if mode == MODE_OFF and timerStatus ~= 1 then
         timerMinutes = 0
     end
 
@@ -887,8 +889,11 @@ function ProcessStatusUpdate(status, value)
         end
     end
     
-    if gState[status] ~= nil then gState[status] = value end
-    
+    -- Don't auto-update timer_count and timer_status - their handlers manage this with suppression
+    if gState[status] ~= nil and status ~= "timer_count" and status ~= "timer_status" then
+        gState[status] = value
+    end
+
     UpdateExtrasState()
     
     if status == "main_mode" then
@@ -929,9 +934,15 @@ function ProcessStatusUpdate(status, value)
     elseif status == "wifi_signal_str" then
         C4:UpdateProperty("WiFi Signal Strength", "-" .. tostring(value) .. " dBm")
     elseif status == "timer_status" then
+        -- Skip timer_status updates while we're actively setting the timer
+        if gSuppressTimerUpdates then
+            dbg("Timer status update suppressed: " .. tostring(value))
+            return
+        end
+        gState.timer_status = value
         C4:UpdateProperty("Timer Active", value == "1" and "Yes" or "No")
-        -- If timer is turned off by device and we're not suppressing, clear remaining time and reset slider
-        if value == "0" and not gSuppressTimerUpdates then
+        -- If timer is turned off by device, clear remaining time and reset slider
+        if value == "0" then
             C4:UpdateProperty("Timer Remaining", "Off")
             gState.timer_set = "0"
             gState.timer_count = "0"
@@ -1435,9 +1446,11 @@ function HandleThermostatCommand(strCommand, tParams)
             -- Convert minutes to milliseconds (device uses milliseconds)
             local msValue = val * 60000
             if val > 0 then
-                -- Set our state immediately
+                -- Set our state immediately so any extras updates show the correct value
                 gState.timer_set = tostring(msValue)
-                
+                gState.timer_count = tostring(msValue)
+                gState.timer_status = "1"
+
                 -- If fireplace is off, turn it on first
                 if gState.main_mode == MODE_OFF or gState.main_mode == MODE_STANDBY then
                     dbg("Fireplace is off, turning on with timer")
@@ -1479,6 +1492,7 @@ function HandleThermostatCommand(strCommand, tParams)
                 dbg("Timer set to 0, turning off fireplace")
                 gState.timer_set = "0"
                 gState.timer_count = "0"
+                gState.timer_status = "0"
                 C4:UpdateProperty("Timer Remaining", "Off")
                 SendProflameCommand("timer_status", "0")
                 SendProflameCommand("timer_set", "0")
