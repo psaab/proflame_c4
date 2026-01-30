@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2025013009"
+DRIVER_VERSION = "2025013010"
 DRIVER_DATE = "2026-01-30"
 
 NETWORK_BINDING_ID = 6001
@@ -78,7 +78,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260130-080000"
+BUILD_TIMESTAMP = "20260130-090000"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -159,6 +159,7 @@ gPingTimerId = nil
 gReconnectTimerId = nil
 gWebSocketKey = nil
 gDebugLevel = DEBUG_DEBUG
+gDebugEnabled = true
 gExtrasThrottle = false
 gSuppressTimerUpdates = false  -- Suppress device timer_count updates while we're setting timer
 
@@ -190,6 +191,7 @@ gState = {
 -- =============================================================================
 
 function Log(msg, level)
+    if not gDebugEnabled then return end
     level = level or DEBUG_INFO
     if level <= gDebugLevel then
         print("[Proflame] " .. tostring(msg))
@@ -1102,6 +1104,8 @@ function OnPropertyChanged(strProperty)
         dbg("Port changed, disconnecting and reconnecting...")
         Disconnect()
         C4:SetTimer(500, function() Connect() end, false)
+    elseif strProperty == "Debug Mode" then
+        gDebugEnabled = (Properties["Debug Mode"] == "On")
     elseif strProperty == "Debug Level" then
         local level = Properties["Debug Level"]
         if level == "Error" then gDebugLevel = DEBUG_ERROR
@@ -1559,6 +1563,16 @@ function OnDriverInit()
 end
 
 function OnDriverLateInit()
+    -- Initialize debug settings from properties before any logging
+    gDebugEnabled = (Properties["Debug Mode"] == "On")
+    local level = Properties["Debug Level"]
+    if level == "Error" then gDebugLevel = DEBUG_ERROR
+    elseif level == "Warning" then gDebugLevel = DEBUG_WARN
+    elseif level == "Info" then gDebugLevel = DEBUG_INFO
+    elseif level == "Debug" then gDebugLevel = DEBUG_DEBUG
+    elseif level == "Trace" then gDebugLevel = DEBUG_TRACE
+    end
+
     dbg("OnDriverLateInit - Build: " .. BUILD_TIMESTAMP)
     local success, err = pcall(function()
         C4:UpdateProperty("Driver Version", DRIVER_VERSION .. " (" .. DRIVER_DATE .. ") [" .. BUILD_TIMESTAMP .. "]")
