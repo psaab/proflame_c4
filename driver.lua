@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2025013001"
+DRIVER_VERSION = "2025013005"
 DRIVER_DATE = "2026-01-30"
 
 NETWORK_BINDING_ID = 6001
@@ -78,7 +78,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260130-070000"
+BUILD_TIMESTAMP = "20260130-073000"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -412,12 +412,21 @@ function GetExtrasXML()
     -- Use timer_count (remaining time) not timer_set (original setting)
     -- But if fireplace is off, show timer as 0 regardless of device's timer_count
     local timerMs = tonumber(gState.timer_count) or 0
-    local timerMinutes = math.floor(timerMs / 60000)
+    local timerStatus = tonumber(gState.timer_status) or 0
     local mode = gState.main_mode or MODE_OFF
+    local timerMinutes
+
+    -- Use ceil when timer is active so we show at least 1m until it truly expires
+    if timerStatus == 1 and timerMs > 0 then
+        timerMinutes = math.ceil(timerMs / 60000)
+    else
+        timerMinutes = math.floor(timerMs / 60000)
+    end
+
     if mode == MODE_OFF then
         timerMinutes = 0
     end
-    
+
     -- Format timer label as hours and minutes (e.g., "1h30m" or "45m")
     local timerLabel
     if timerMinutes <= 0 then
@@ -1470,7 +1479,9 @@ function HandleThermostatCommand(strCommand, tParams)
                 dbg("Timer set to 0, turning off fireplace")
                 gState.timer_set = "0"
                 gState.timer_count = "0"
+                C4:UpdateProperty("Timer Remaining", "Off")
                 SendProflameCommand("timer_status", "0")
+                SendProflameCommand("timer_set", "0")
                 SendProflameCommand("main_mode", MODE_OFF)
                 -- Use UpdateTimerExtras for immediate update (not throttled)
                 UpdateTimerExtras()
