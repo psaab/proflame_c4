@@ -1,6 +1,6 @@
 <devicedata>
-  <small image_source="c4z">images/icon_16.gif</small>
-  <large image_source="c4z">images/icon_32.gif</large>
+  <small image_source="c4z">icons/device_sm.png</small>
+  <large image_source="c4z">icons/device_lg.png</large>
   <agent>false</agent>
   <copyright>Copyright 2025 Paul Saab. All rights reserved.</copyright>
   <creator>Paul Saab</creator>
@@ -9,13 +9,13 @@
   <manufacturer>SIT Group / Proflame</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2025013011</version>
+  <version>2025013124</version>
   <created>12/02/2025 12:00 PM</created>
-  <modified>01/30/2026 10:39 AM</modified>
+  <modified>01/31/2026 3:15 PM</modified>
   <auto_update>true</auto_update>
   <minimum_auto_update_version>1</minimum_auto_update_version>
   <proxies>
-    <proxy proxybindingid="5001" name="Proflame Fireplace" small_image="images/icon_16.gif" large_image="images/icon_32.gif" image_source="c4z">thermostatV2</proxy>
+    <proxy proxybindingid="5001" name="Proflame Fireplace" small_image="icons/device_sm.png" large_image="icons/device_lg.png" image_source="c4z">thermostatV2</proxy>
   </proxies>
   <states/>
   <config>

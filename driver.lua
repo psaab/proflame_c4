@@ -8,8 +8,8 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2025013011"
-DRIVER_DATE = "2026-01-30"
+DRIVER_VERSION = "2025013124"
+DRIVER_DATE = "2026-01-31"
 
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -78,7 +78,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260130-103900"
+BUILD_TIMESTAMP = "20260131-151500"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -162,6 +162,7 @@ gDebugLevel = DEBUG_DEBUG
 gDebugEnabled = true
 gExtrasThrottle = false
 gSuppressTimerUpdates = false  -- Suppress device timer_count updates while we're setting timer
+gTimerExpired = false  -- Set when timer reaches 0, cleared when timer_status goes to 1
 
 gPendingSetpointF = nil
 gPendingTimer = nil
@@ -199,6 +200,14 @@ function Log(msg, level)
 end
 
 function dbg(msg)
+    Log(msg, DEBUG_ERROR)
+end
+
+function dbg_err(msg)
+    Log(msg, DEBUG_ERROR)
+end
+
+function dbg_all(msg)
     Log(msg, DEBUG_DEBUG)
 end
 
@@ -393,6 +402,17 @@ function GetModeString(mode)
     end
 end
 
+function GetDefaultOnMode()
+    local defaultMode = Properties["Default On Mode"] or "Manual"
+    if defaultMode == "Smart (Thermostat)" then
+        return MODE_SMART
+    elseif defaultMode == "Eco" then
+        return MODE_ECO
+    else
+        return MODE_MANUAL
+    end
+end
+
 function GenerateRandomBytes(count)
     local bytes = ""
     for i = 1, count do
@@ -491,9 +511,9 @@ function GetExtrasXML()
 end
 
 function SetupExtras()
-    dbg("Sending extras setup via DataToUI")
+    dbg_all("Sending extras setup via DataToUI")
     local xml = GetExtrasXML()
-    dbg("Extras XML: " .. xml)
+    dbg_all("Extras XML: " .. xml)
     -- Send via DataToUI (this is the primary method that works)
     C4:SendDataToUI(xml)
     -- Also send via proxy notification
@@ -513,7 +533,7 @@ end
 
 -- Separate function for timer updates - always sends immediately
 function UpdateTimerExtras()
-    dbg("Updating timer extras (minutes changed)")
+    dbg_err("Updating timer extras (minutes changed)")
     SetupExtras()
 end
 
@@ -528,7 +548,7 @@ end
 function OnReconnectTimer()
     gReconnectTimerId = nil
     if not gConnected and not gConnecting then
-        dbg("Reconnect timer fired")
+        dbg_err("Reconnect timer fired")
         Connect()
     end
 end
@@ -741,7 +761,7 @@ end
 
 function SendProflameCommand(control, value)
     local cmd = MakeCommand(control, value)
-    dbg("Sending command: " .. cmd)
+    dbg_err("Sending command: " .. cmd)
     if gState[control] ~= nil then gState[control] = value end
     
     if control == "main_mode" then
@@ -767,14 +787,14 @@ end
 -- Send command using alternative format (for timer control)
 function SendProflameCommandAlt(control, value)
     local cmd = MakeCommandAlt(control, value)
-    dbg("Sending alt command: " .. cmd)
+    dbg_err("Sending alt command: " .. cmd)
     return SendWebSocketMessage(cmd)
 end
 
 function RequestAllStatus()
     -- The Proflame device requires PROFLAMECONNECTION to trigger full status dump
     -- This is similar to PROFLAMEPING/PROFLAMEPONG but for initial connection
-    dbg("Sending PROFLAMECONNECTION to request full status")
+    dbg_err("Sending PROFLAMECONNECTION to request full status")
     SendWebSocketMessage("PROFLAMECONNECTION")
 end
 
@@ -800,7 +820,7 @@ function UpdateRoomTemperature()
     local tempF = DecodeTemperature(tempEncoded)
     local tempC = FahrenheitToCelsius(tempF)
     C4:UpdateProperty("Room Temperature", tostring(tempF) .. "F")
-    dbg("Sending room temperature to proxy: " .. tempF .. "F (" .. tempC .. "C)")
+    dbg_err("Sending room temperature to proxy: " .. tempF .. "F (" .. tempC .. "C)")
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "TEMPERATURE_CHANGED", {TEMPERATURE = tempC, SCALE = "C"})
 end
 
@@ -810,10 +830,10 @@ end
 
 function SetPendingSetpoint(tempF)
     gPendingSetpointF = tempF
-    dbg("SetPendingSetpoint locked: " .. tostring(tempF))
+    dbg_err("SetPendingSetpoint locked: " .. tostring(tempF))
     if gPendingTimer then gPendingTimer:Cancel() end
     gPendingTimer = C4:SetTimer(5000, function()
-        dbg("Pending setpoint timer expired, unlocking")
+        dbg_err("Pending setpoint timer expired, unlocking")
         gPendingSetpointF = nil
     end, false)
 end
@@ -829,12 +849,12 @@ function ParseStatusMessage(data)
         return
     end
     if data == "PROFLAMECONNECTIONOPEN" then
-        dbg("Connection acknowledged by device")
+        dbg_err("Connection acknowledged by device")
         C4:UpdateProperty("Connection Status", "Connected")
         return
     end
     if data:sub(1, 1) == "{" then
-        dbg("Received JSON: " .. data:sub(1, 200))
+        dbg_err("Received JSON: " .. data:sub(1, 200))
         local json = JsonDecode(data)
         
         -- First try indexed format (status0/value0, status1/value1, etc.)
@@ -876,16 +896,16 @@ end
 function ProcessStatusUpdate(status, value)
     if not status or not value then return end
     
-    dbg("ProcessStatusUpdate: " .. tostring(status) .. " = " .. tostring(value))
+    dbg_err("ProcessStatusUpdate: " .. tostring(status) .. " = " .. tostring(value))
     
     if status == "temperature_set" then
         local incomingF = DecodeTemperature(value)
         if gPendingSetpointF ~= nil then
             if math.abs(incomingF - gPendingSetpointF) < 1 then
-                dbg("Pending setpoint confirmed: " .. incomingF)
+                dbg_err("Pending setpoint confirmed: " .. incomingF)
                 gPendingSetpointF = nil
             else
-                dbg("Ignoring stale setpoint: " .. incomingF)
+                dbg_err("Ignoring stale setpoint: " .. incomingF)
                 return
             end
         end
@@ -923,7 +943,7 @@ function ProcessStatusUpdate(status, value)
         UpdateThermostatSetpoint()
     elseif status == "room_temperature" or status == "temperature_read" then
         gState.room_temperature = value
-        dbg("Room temperature updated: " .. value .. " (raw) = " .. DecodeTemperature(value) .. "F")
+        dbg_err("Room temperature updated: " .. value .. " (raw) = " .. DecodeTemperature(value) .. "F")
         UpdateRoomTemperature()
     elseif status == "thermo_control" then
         C4:UpdateProperty("Thermostat Enabled", value == "1" and "Yes" or "No")
@@ -938,16 +958,21 @@ function ProcessStatusUpdate(status, value)
     elseif status == "timer_status" then
         -- Skip timer_status updates while we're actively setting the timer
         if gSuppressTimerUpdates then
-            dbg("Timer status update suppressed: " .. tostring(value))
+            dbg_err("Timer status update suppressed: " .. tostring(value))
             return
         end
         gState.timer_status = value
         C4:UpdateProperty("Timer Active", value == "1" and "Yes" or "No")
+        -- If timer becomes active, clear the expired flag
+        if value == "1" then
+            gTimerExpired = false
+        end
         -- If timer is turned off by device, clear remaining time and reset slider
         if value == "0" then
             C4:UpdateProperty("Timer Remaining", "Off")
             gState.timer_set = "0"
             gState.timer_count = "0"
+            gTimerExpired = true  -- Also set expired flag to ignore any stale timer_count updates
             UpdateTimerExtras()
         end
     elseif status == "timer_set" then
@@ -955,24 +980,53 @@ function ProcessStatusUpdate(status, value)
         -- We only set timer_set from our own commands to avoid sync issues
         -- Just log the device's reported value for debugging
         local minutes = math.floor(tonumber(value) / 60000)
-        dbg("Device timer_set: " .. tostring(value) .. " ms (" .. minutes .. " minutes), our timer_set: " .. tostring(gState.timer_set))
+        dbg_err("Device timer_set: " .. tostring(value) .. " ms (" .. minutes .. " minutes), our timer_set: " .. tostring(gState.timer_set))
     elseif status == "timer_count" then
         -- Skip timer_count updates while we're actively setting the timer
         if gSuppressTimerUpdates then
-            dbg("Timer count update suppressed: " .. tostring(value))
+            dbg_err("Timer count update suppressed: " .. tostring(value))
             return
         end
-        
+
+        -- Ignore timer_count updates when timer has expired (device sends default values)
+        if gTimerExpired then
+            dbg_err("Timer count ignored (timer expired): " .. tostring(value))
+            return
+        end
+
+        -- Ignore timer_count updates when fireplace is off/standby or timer is disabled
+        -- The device sends default timer values when entering standby which we should ignore
+        local mode = gState.main_mode
+        if mode == MODE_OFF or mode == MODE_STANDBY then
+            dbg_err("Timer count ignored (mode=" .. tostring(mode) .. "): " .. tostring(value))
+            return
+        end
+        if gState.timer_status == "0" then
+            dbg_err("Timer count ignored (timer_status=0): " .. tostring(value))
+            return
+        end
+
         local newCount = tonumber(value) or 0
         local newMinutes = math.floor(newCount / 60000)
-        
+
         -- Get old minutes from timer_count (for detecting minute changes)
         local oldCount = tonumber(gState.timer_count) or 0
         local oldMinutes = math.floor(oldCount / 60000)
-        
+
+        -- Detect timer expiry: count reaches 0
+        if newCount == 0 and oldCount > 0 then
+            dbg_err("Timer expired (count reached 0)")
+            gTimerExpired = true
+            gState.timer_count = "0"
+            gState.timer_set = "0"
+            C4:UpdateProperty("Timer Remaining", "Off")
+            UpdateTimerExtras()
+            return
+        end
+
         -- Store the raw count
         gState.timer_count = value
-        
+
         -- Convert milliseconds to hours:minutes:seconds for display
         local totalSeconds = math.floor(newCount / 1000)
         local hours = math.floor(totalSeconds / 3600)
@@ -987,17 +1041,19 @@ function ProcessStatusUpdate(status, value)
             timeStr = "Off"
         end
         C4:UpdateProperty("Timer Remaining", timeStr)
-        
+
         -- Update the slider when minute changes
-        dbg("Timer count: " .. newCount .. "ms (" .. newMinutes .. "m), old count: " .. oldCount .. "ms (" .. oldMinutes .. "m)")
+        dbg_err("Timer count: " .. newCount .. "ms (" .. newMinutes .. "m), old count: " .. oldCount .. "ms (" .. oldMinutes .. "m)")
         if oldMinutes ~= newMinutes then
-            dbg("Timer minute changed: " .. oldMinutes .. " -> " .. newMinutes .. ", updating slider")
+            dbg_err("Timer minute changed: " .. oldMinutes .. " -> " .. newMinutes .. ", updating slider")
             -- Update timer_set to match for slider display
             gState.timer_set = tostring(newMinutes * 60000)
             UpdateTimerExtras()
         end
     elseif status == "burner_status" then
-        C4:UpdateProperty("Burner Status", tostring(value))
+        local num = tonumber(value) or 0
+        if num < 0 then num = num + 0x10000 end  -- Convert to unsigned 16-bit
+        C4:UpdateProperty("Burner Status", string.format("0x%04X", num))
     end
 end
 
@@ -1039,7 +1095,7 @@ function UpdateFanMode()
     else
         fanMode = "High"
     end
-    dbg("Fan mode updated: level " .. levelNum .. " = " .. fanMode)
+    dbg_err("Fan mode updated: level " .. levelNum .. " = " .. fanMode)
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "FAN_MODE_CHANGED", { MODE = fanMode })
 end
 
@@ -1047,7 +1103,7 @@ function UpdateFlameLevel()
     local flameLevel = tonumber(gState.flame_control) or 0
     local percent = math.floor(flameLevel / 6 * 100)
     local isOn = (flameLevel > 0) and (gState.main_mode ~= MODE_OFF and gState.main_mode ~= MODE_STANDBY)
-    dbg("Flame level updated: " .. flameLevel .. " = " .. percent .. "%, on=" .. tostring(isOn))
+    dbg_err("Flame level updated: " .. flameLevel .. " = " .. percent .. "%, on=" .. tostring(isOn))
 end
 
 function UpdateHoldModeFromFlame()
@@ -1062,7 +1118,7 @@ function UpdateHoldModeFromFlame()
         holdMode = "High Flame"
     end
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = holdMode })
-    dbg("Hold mode updated to: " .. holdMode .. " (flame level " .. flameLevel .. ")")
+    dbg_err("Hold mode updated to: " .. holdMode .. " (flame level " .. flameLevel .. ")")
 end
 
 function UpdatePresetMode(modeOverride)
@@ -1076,7 +1132,7 @@ function UpdatePresetMode(modeOverride)
         preset = "Eco"
     end
     if preset ~= "" then
-        dbg("Updating preset mode to: " .. preset)
+        dbg_err("Updating preset mode to: " .. preset)
         -- Send PRESET_CHANGED for standard preset update
         C4:SendToProxy(THERMOSTAT_PROXY_ID, "PRESET_CHANGED", { PRESET = preset })
         -- Also send PRESET_MODE_CHANGED for newer proxy versions
@@ -1089,9 +1145,9 @@ end
 -- =============================================================================
 
 function OnPropertyChanged(strProperty)
-    dbg("OnPropertyChanged: " .. tostring(strProperty))
+    dbg_err("OnPropertyChanged: " .. tostring(strProperty))
     if strProperty == "IP Address" then 
-        dbg("IP Address changed, disconnecting and reconnecting...")
+        dbg_err("IP Address changed, disconnecting and reconnecting...")
         Disconnect()
         local ipAddress = Properties["IP Address"] or ""
         if ipAddress ~= "" then
@@ -1101,7 +1157,7 @@ function OnPropertyChanged(strProperty)
             C4:UpdateProperty("Connection Status", "Not Configured")
         end
     elseif strProperty == "Port" then
-        dbg("Port changed, disconnecting and reconnecting...")
+        dbg_err("Port changed, disconnecting and reconnecting...")
         Disconnect()
         C4:SetTimer(500, function() Connect() end, false)
     elseif strProperty == "Debug Mode" then
@@ -1114,7 +1170,7 @@ function OnPropertyChanged(strProperty)
         elseif level == "Debug" then gDebugLevel = DEBUG_DEBUG
         elseif level == "Trace" then gDebugLevel = DEBUG_TRACE
         end
-        dbg("Debug level set to: " .. tostring(gDebugLevel))
+        dbg_err("Debug level set to: " .. tostring(gDebugLevel))
     elseif strProperty == "Ping Interval (seconds)" then
         if gConnected and gHandshakeComplete then
             StartPingTimer()  -- Restart with new interval
@@ -1189,16 +1245,16 @@ function ReceivedFromProxy(idBinding, strCommand, tParams)
     
     -- Handle Request for Extras
     if strCommand == "GET_EXTRAS_SETUP" then
-        dbg("GET_EXTRAS_SETUP received - returning extras setup XML directly")
+        dbg_err("GET_EXTRAS_SETUP received - returning extras setup XML directly")
         local xml = GetExtrasXML()
-        dbg("Extras XML: " .. xml)
+        dbg_all("Extras XML: " .. xml)
         -- Return the XML directly as the response
         return xml
     end
     
     -- Handle Request for Extras State
     if strCommand == "GET_EXTRAS_STATE" then
-        dbg("GET_EXTRAS_STATE received - returning extras setup XML with current values")
+        dbg_err("GET_EXTRAS_STATE received - returning extras setup XML with current values")
         -- Return the setup XML which contains current values embedded
         return GetExtrasXML()
     end
@@ -1213,7 +1269,7 @@ function HandleThermostatCommand(strCommand, tParams)
         if mode == "Off" then
             SendProflameCommand("main_mode", MODE_OFF)
         elseif mode == "Heat" then
-            SendProflameCommand("main_mode", MODE_MANUAL)
+            SendProflameCommand("main_mode", GetDefaultOnMode())
             -- Set flame level and start default timer
             local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
             local defaultTimer = tonumber(Properties["Default Timer (minutes)"]) or 120
@@ -1261,16 +1317,16 @@ function HandleThermostatCommand(strCommand, tParams)
             -- Try parsing as number for backwards compatibility
             level = tonumber(mode) or 0
         end
-        dbg("SET_MODE_FAN: " .. tostring(mode) .. " -> level " .. level)
+        dbg_err("SET_MODE_FAN: " .. tostring(mode) .. " -> level " .. level)
         SendProflameCommand("fan_control", tostring(level))
         
     elseif strCommand == "SET_EXTRAS" then
-        dbg("Received SET_EXTRAS command")
+        dbg_err("Received SET_EXTRAS command")
         -- Handle flame preset (Low/Medium/High quick select)
         if tParams["pf_flame_preset"] then
             local val = tonumber(tParams["pf_flame_preset"])
             if val then
-                dbg("Flame preset selected: " .. val)
+                dbg_err("Flame preset selected: " .. val)
                 if gState.main_mode ~= MODE_MANUAL then
                     SendProflameCommand("main_mode", MODE_MANUAL)
                     C4:SetTimer(750, function() SendProflameCommand("flame_control", tostring(val)) end, false)
@@ -1306,7 +1362,7 @@ function HandleThermostatCommand(strCommand, tParams)
         
     elseif strCommand == "SET_PRESET" then
         local preset = tParams["PRESET"] or tParams["MODE"] or tParams["NAME"] or ""
-        dbg("SET_PRESET received: " .. preset)
+        dbg_err("SET_PRESET received: " .. preset)
         if preset == "Manual" then
             SendProflameCommand("main_mode", MODE_MANUAL)
             local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
@@ -1328,7 +1384,7 @@ function HandleThermostatCommand(strCommand, tParams)
         -- Hold modes repurposed for quick flame control:
         -- "Low Flame" = level 1, "Medium Flame" = level 3, "High Flame" = level 6
         local holdMode = tParams["MODE"] or ""
-        dbg("SET_MODE_HOLD received: " .. holdMode)
+        dbg_err("SET_MODE_HOLD received: " .. holdMode)
         if holdMode == "Low Flame" then
             -- Low flame (level 1)
             if gState.main_mode ~= MODE_MANUAL then
@@ -1361,7 +1417,7 @@ function HandleThermostatCommand(strCommand, tParams)
     -- New extras commands (matching Ecobee-style format)
     elseif strCommand == "SELECT_MODE" then
         local val = tParams["VALUE"] or tParams["value"] or ""
-        dbg("SELECT_MODE: " .. tostring(val))
+        dbg_err("SELECT_MODE: " .. tostring(val))
         local defaultTimer = tonumber(Properties["Default Timer (minutes)"]) or 120
         if val == "manual" then
             SendProflameCommand("main_mode", MODE_MANUAL)
@@ -1408,7 +1464,7 @@ function HandleThermostatCommand(strCommand, tParams)
         
     elseif strCommand == "SELECT_FLAME_PRESET" then
         local val = tonumber(tParams["VALUE"] or tParams["value"])
-        dbg("SELECT_FLAME_PRESET: " .. tostring(val))
+        dbg_err("SELECT_FLAME_PRESET: " .. tostring(val))
         if val then
             if gState.main_mode ~= MODE_MANUAL then
                 SendProflameCommand("main_mode", MODE_MANUAL)
@@ -1420,7 +1476,7 @@ function HandleThermostatCommand(strCommand, tParams)
         
     elseif strCommand == "SET_FLAME_LEVEL" then
         local val = tonumber(tParams["VALUE"] or tParams["value"])
-        dbg("SET_FLAME_LEVEL: " .. tostring(val))
+        dbg_err("SET_FLAME_LEVEL: " .. tostring(val))
         if val then
             if gState.main_mode ~= MODE_MANUAL then
                 SendProflameCommand("main_mode", MODE_MANUAL)
@@ -1432,20 +1488,22 @@ function HandleThermostatCommand(strCommand, tParams)
         
     elseif strCommand == "SET_FAN_LEVEL" then
         local val = tonumber(tParams["VALUE"] or tParams["value"])
-        dbg("SET_FAN_LEVEL: " .. tostring(val))
+        dbg_err("SET_FAN_LEVEL: " .. tostring(val))
         if val then SendProflameCommand("fan_control", tostring(val)) end
         
     elseif strCommand == "SET_LIGHT_LEVEL" then
         local val = tonumber(tParams["VALUE"] or tParams["value"])
-        dbg("SET_LIGHT_LEVEL: " .. tostring(val))
+        dbg_err("SET_LIGHT_LEVEL: " .. tostring(val))
         if val then SendProflameCommand("lamp_control", tostring(val)) end
         
     elseif strCommand == "SET_TIMER_MINUTES" then
         local val = tonumber(tParams["VALUE"] or tParams["value"])
-        dbg("SET_TIMER_MINUTES: " .. tostring(val) .. " minutes, current mode: " .. tostring(gState.main_mode))
+        dbg_err("SET_TIMER_MINUTES: " .. tostring(val) .. " minutes, current mode: " .. tostring(gState.main_mode))
         if val and val >= 0 then
             -- Suppress device timer updates while we're setting
             gSuppressTimerUpdates = true
+            -- Clear expired flag since user is setting a new timer
+            gTimerExpired = false
             
             -- Convert minutes to milliseconds (device uses milliseconds)
             local msValue = val * 60000
@@ -1457,8 +1515,8 @@ function HandleThermostatCommand(strCommand, tParams)
 
                 -- If fireplace is off, turn it on first
                 if gState.main_mode == MODE_OFF or gState.main_mode == MODE_STANDBY then
-                    dbg("Fireplace is off, turning on with timer")
-                    SendProflameCommand("main_mode", MODE_MANUAL)
+                    dbg_err("Fireplace is off, turning on with timer")
+                    SendProflameCommand("main_mode", GetDefaultOnMode())
                     local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
                     C4:SetTimer(750, function(timer)
                         SendProflameCommand("flame_control", tostring(defaultFlame))
@@ -1470,7 +1528,7 @@ function HandleThermostatCommand(strCommand, tParams)
                             -- Clear suppression after commands are sent
                             C4:SetTimer(2000, function(timer3)
                                 gSuppressTimerUpdates = false
-                                dbg("Timer suppression cleared")
+                                dbg_err("Timer suppression cleared")
                             end, false)
                         end, false)
                         -- Use UpdateTimerExtras for immediate update
@@ -1485,7 +1543,7 @@ function HandleThermostatCommand(strCommand, tParams)
                         -- Clear suppression after commands are sent
                         C4:SetTimer(2000, function(timer2)
                             gSuppressTimerUpdates = false
-                            dbg("Timer suppression cleared")
+                            dbg_err("Timer suppression cleared")
                         end, false)
                     end, false)
                     -- Use UpdateTimerExtras for immediate update
@@ -1493,7 +1551,7 @@ function HandleThermostatCommand(strCommand, tParams)
                 end
             else
                 -- Timer set to 0 - turn off fireplace
-                dbg("Timer set to 0, turning off fireplace")
+                dbg_err("Timer set to 0, turning off fireplace")
                 gState.timer_set = "0"
                 gState.timer_count = "0"
                 gState.timer_status = "0"
@@ -1506,7 +1564,7 @@ function HandleThermostatCommand(strCommand, tParams)
                 -- Clear suppression after a delay
                 C4:SetTimer(2000, function(timer)
                     gSuppressTimerUpdates = false
-                    dbg("Timer suppression cleared")
+                    dbg_err("Timer suppression cleared")
                 end, false)
             end
         end
@@ -1525,7 +1583,8 @@ function ResetDriverState()
     gReceiveBuffer = ""
     gExtrasThrottle = false
     gSuppressTimerUpdates = false
-    
+    gTimerExpired = false
+
     -- Cancel any pending timers
     StopPingTimer()
     StopReconnectTimer()
@@ -1549,12 +1608,12 @@ function ResetDriverState()
         timer_count = "0"
     }
     
-    dbg("Driver state reset")
+    dbg_err("Driver state reset")
 end
 
 function OnDriverInit()
     local success, err = pcall(function()
-        dbg("OnDriverInit - resetting state")
+        dbg_err("OnDriverInit - resetting state")
         math.randomseed(os.time())
         ResetDriverState()
         InitializePropertiesFromState()
@@ -1573,7 +1632,7 @@ function OnDriverLateInit()
     elseif level == "Trace" then gDebugLevel = DEBUG_TRACE
     end
 
-    dbg("OnDriverLateInit - Build: " .. BUILD_TIMESTAMP)
+    dbg_err("OnDriverLateInit - Build: " .. BUILD_TIMESTAMP)
     local success, err = pcall(function()
         C4:UpdateProperty("Driver Version", DRIVER_VERSION .. " (" .. DRIVER_DATE .. ") [" .. BUILD_TIMESTAMP .. "]")
         
@@ -1607,13 +1666,15 @@ function InitializePropertiesFromState()
     C4:UpdateProperty("Front Flame (Split)", gState.split_control == "1" and "On" or "Off")
     C4:UpdateProperty("Timer Active", gState.timer_status == "1" and "Yes" or "No")
     C4:UpdateProperty("Timer Remaining", "Off")
-    C4:UpdateProperty("Burner Status", gState.burner_status)
+    local burnerNum = tonumber(gState.burner_status) or 0
+    if burnerNum < 0 then burnerNum = burnerNum + 0x10000 end
+    C4:UpdateProperty("Burner Status", string.format("0x%04X", burnerNum))
     C4:UpdateProperty("WiFi Signal Strength", "-" .. gState.wifi_signal_str .. " dBm")
     UpdateThermostatSetpoint()
 end
 
 function OnDriverDestroyed()
-    dbg("OnDriverDestroyed - cleaning up")
+    dbg_err("OnDriverDestroyed - cleaning up")
     StopPingTimer()
     StopReconnectTimer()
     Disconnect()
@@ -1621,7 +1682,7 @@ end
 
 function OnDriverUpdated()
     -- Called when driver is updated/reloaded
-    dbg("OnDriverUpdated - driver updated to version " .. DRIVER_VERSION)
+    dbg_err("OnDriverUpdated - driver updated to version " .. DRIVER_VERSION)
     
     -- Clean up old state
     StopPingTimer()
