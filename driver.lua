@@ -20,6 +20,9 @@ MODE_MANUAL = "5"
 MODE_SMART = "6"
 MODE_ECO = "7"
 
+DEFAULT_FLAME_LEVEL = 6
+DEFAULT_TIMER_MINUTES = 180
+
 -- Debug levels
 DEBUG_ERROR = 1
 DEBUG_WARN = 2
@@ -40,6 +43,18 @@ end
 if gReconnectTimerId then
     pcall(function() gReconnectTimerId:Cancel() end)
     gReconnectTimerId = nil
+end
+if gTimerModeDelayTimer then
+    pcall(function() gTimerModeDelayTimer:Cancel() end)
+    gTimerModeDelayTimer = nil
+end
+if gTimerStartDelayTimer then
+    pcall(function() gTimerStartDelayTimer:Cancel() end)
+    gTimerStartDelayTimer = nil
+end
+if gTimerSuppressClearTimer then
+    pcall(function() gTimerSuppressClearTimer:Cancel() end)
+    gTimerSuppressClearTimer = nil
 end
 
 -- Force disconnect if we were connected
@@ -157,6 +172,9 @@ gHandshakeComplete = false
 gReceiveBuffer = ""
 gPingTimerId = nil
 gReconnectTimerId = nil
+gTimerModeDelayTimer = nil
+gTimerStartDelayTimer = nil
+gTimerSuppressClearTimer = nil
 gWebSocketKey = nil
 gDebugLevel = DEBUG_DEBUG
 gDebugEnabled = true
@@ -411,6 +429,14 @@ function GetDefaultOnMode()
     else
         return MODE_MANUAL
     end
+end
+
+function GetDefaultFlameLevel()
+    return ClampNumber(Properties["Default Flame Level"], 1, 6, DEFAULT_FLAME_LEVEL)
+end
+
+function GetDefaultTimerMinutes()
+    return ClampNumber(Properties["Default Timer (minutes)"], 0, 480, DEFAULT_TIMER_MINUTES)
 end
 
 function GenerateRandomBytes(count)
@@ -1237,6 +1263,304 @@ function ReceivedFromNetwork(idBinding, nPort, strData)
 end
 
 -- =============================================================================
+-- COMMAND HELPERS
+-- =============================================================================
+
+function ClampNumber(value, minValue, maxValue, defaultValue)
+    local num = tonumber(value)
+    if num == nil then num = defaultValue end
+    if num == nil then return nil end
+    if minValue ~= nil and num < minValue then num = minValue end
+    if maxValue ~= nil and num > maxValue then num = maxValue end
+    return num
+end
+
+function GetCommandParam(tParams, ...)
+    tParams = tParams or {}
+    local names = {...}
+    for i = 1, #names do
+        local value = tParams[names[i]]
+        if value ~= nil then return value end
+    end
+    return nil
+end
+
+function CancelPendingTimerCommandTimers()
+    if gTimerModeDelayTimer then
+        gTimerModeDelayTimer:Cancel()
+        gTimerModeDelayTimer = nil
+    end
+    if gTimerStartDelayTimer then
+        gTimerStartDelayTimer:Cancel()
+        gTimerStartDelayTimer = nil
+    end
+    if gTimerSuppressClearTimer then
+        gTimerSuppressClearTimer:Cancel()
+        gTimerSuppressClearTimer = nil
+    end
+end
+
+function ScheduleTimerSuppressionClear()
+    if gTimerSuppressClearTimer then
+        gTimerSuppressClearTimer:Cancel()
+        gTimerSuppressClearTimer = nil
+    end
+    gTimerSuppressClearTimer = C4:SetTimer(2000, function(timer)
+        gTimerSuppressClearTimer = nil
+        gSuppressTimerUpdates = false
+        dbg_err("Timer suppression cleared")
+    end, false)
+end
+
+function ClearTimerStateAndSend(turnOff)
+    CancelPendingTimerCommandTimers()
+    gSuppressTimerUpdates = true
+    gState.timer_set = "0"
+    gState.timer_count = "0"
+    gState.timer_status = "0"
+    C4:UpdateProperty("Timer Remaining", "Off")
+    SendProflameCommand("timer_status", "0")
+    SendProflameCommand("timer_set", "0")
+    if turnOff then
+        SendProflameCommand("main_mode", MODE_OFF)
+    end
+    UpdateTimerExtras()
+    ScheduleTimerSuppressionClear()
+    return true
+end
+
+function CommandSetMode(mode)
+    if mode == MODE_OFF or mode == MODE_MANUAL or mode == MODE_SMART or mode == MODE_ECO then
+        SendProflameCommand("main_mode", mode)
+        return true
+    end
+    dbg_err("Invalid mode command value: " .. tostring(mode))
+    return false
+end
+
+function CommandTurnOff()
+    return ClearTimerStateAndSend(true)
+end
+
+function CommandTurnOn()
+    CancelPendingTimerCommandTimers()
+    SendProflameCommand("main_mode", GetDefaultOnMode())
+    local defaultFlame = GetDefaultFlameLevel()
+    local defaultTimer = GetDefaultTimerMinutes()
+    gTimerModeDelayTimer = C4:SetTimer(750, function(timer)
+        gTimerModeDelayTimer = nil
+        SendProflameCommand("flame_control", tostring(defaultFlame))
+        if defaultTimer and defaultTimer > 0 then
+            local msValue = defaultTimer * 60000
+            gSuppressTimerUpdates = true
+            gTimerExpired = false
+            SendProflameCommand("timer_set", tostring(msValue))
+            gState.timer_set = tostring(msValue)
+            gTimerStartDelayTimer = C4:SetTimer(200, function(timer2)
+                gTimerStartDelayTimer = nil
+                SendProflameCommand("timer_status", "1")
+                ScheduleTimerSuppressionClear()
+            end, false)
+            UpdateExtrasState()
+        end
+    end, false)
+    -- If no timer will be armed, clear suppression now; no later callback will do it.
+    if not defaultTimer or defaultTimer <= 0 then
+        gSuppressTimerUpdates = false
+    end
+    return true
+end
+
+function CommandSetFlame(level)
+    level = ClampNumber(level, 0, 6, nil)
+    if level == nil then
+        dbg_err("Set Flame Level missing or invalid Level parameter")
+        return false
+    end
+
+    if gState.main_mode ~= MODE_MANUAL then
+        SendProflameCommand("main_mode", MODE_MANUAL)
+        C4:SetTimer(750, function(timer)
+            SendProflameCommand("flame_control", tostring(level))
+        end, false)
+    else
+        SendProflameCommand("flame_control", tostring(level))
+    end
+    return true
+end
+
+function CommandFlameUp()
+    local level = (tonumber(gState.flame_control) or 0) + 1
+    return CommandSetFlame(level)
+end
+
+function CommandFlameDown()
+    local level = (tonumber(gState.flame_control) or 0) - 1
+    return CommandSetFlame(level)
+end
+
+function CommandSetFan(level)
+    level = ClampNumber(level, 0, 6, nil)
+    if level == nil then
+        dbg_err("Set Fan Level missing or invalid Level parameter")
+        return false
+    end
+    SendProflameCommand("fan_control", tostring(level))
+    return true
+end
+
+function CommandSetLight(level)
+    level = ClampNumber(level, 0, 6, nil)
+    if level == nil then
+        dbg_err("Set Light Level missing or invalid Level parameter")
+        return false
+    end
+    SendProflameCommand("lamp_control", tostring(level))
+    return true
+end
+
+function CommandSetTemperatureF(tempF)
+    tempF = ClampNumber(tempF, 60, 90, nil)
+    if tempF == nil then
+        dbg_err("Set Temperature missing or invalid Temperature parameter")
+        return false
+    end
+    SetPendingSetpoint(tempF)
+    SendProflameCommand("temperature_set", EncodeTemperature(tempF))
+    return true
+end
+
+function CommandSetPilot(value)
+    value = tostring(ClampNumber(value, 0, 1, 0))
+    SendProflameCommand("pilot_control", value)
+    return true
+end
+
+function CommandTogglePilot()
+    return CommandSetPilot(gState.pilot_control == "1" and 0 or 1)
+end
+
+function CommandToggleAux()
+    local value = gState.aux_control == "1" and "0" or "1"
+    SendProflameCommand("aux_control", value)
+    return true
+end
+
+function CommandToggleFrontFlame()
+    local value = gState.split_control == "1" and "0" or "1"
+    SendProflameCommand("split_control", value)
+    return true
+end
+
+function CommandSetTimerMinutes(minutes)
+    minutes = ClampNumber(minutes, 0, 480, nil)
+    if minutes == nil then
+        dbg_err("Set Timer missing or invalid Minutes parameter")
+        return false
+    end
+
+    dbg_err("CommandSetTimerMinutes: " .. tostring(minutes) .. " minutes, current mode: " .. tostring(gState.main_mode))
+    CancelPendingTimerCommandTimers()
+    gSuppressTimerUpdates = true
+    gTimerExpired = false
+
+    local msValue = minutes * 60000
+    if minutes > 0 then
+        gState.timer_set = tostring(msValue)
+        gState.timer_count = tostring(msValue)
+        gState.timer_status = "1"
+
+        if gState.main_mode == MODE_OFF or gState.main_mode == MODE_STANDBY then
+            dbg_err("Fireplace is off, turning on with timer")
+            SendProflameCommand("main_mode", GetDefaultOnMode())
+            local defaultFlame = GetDefaultFlameLevel()
+            gTimerModeDelayTimer = C4:SetTimer(750, function(timer)
+                gTimerModeDelayTimer = nil
+                SendProflameCommand("flame_control", tostring(defaultFlame))
+                SendProflameCommand("timer_set", tostring(msValue))
+                gTimerStartDelayTimer = C4:SetTimer(200, function(timer2)
+                    gTimerStartDelayTimer = nil
+                    SendProflameCommand("timer_status", "1")
+                    ScheduleTimerSuppressionClear()
+                end, false)
+                UpdateTimerExtras()
+            end, false)
+        else
+            SendProflameCommand("timer_set", tostring(msValue))
+            gTimerStartDelayTimer = C4:SetTimer(200, function(timer)
+                gTimerStartDelayTimer = nil
+                SendProflameCommand("timer_status", "1")
+                ScheduleTimerSuppressionClear()
+            end, false)
+            UpdateTimerExtras()
+        end
+    else
+        dbg_err("Timer set to 0, turning off fireplace")
+        return ClearTimerStateAndSend(true)
+    end
+    return true
+end
+
+function CommandCancelTimer()
+    return ClearTimerStateAndSend(false)
+end
+
+function ExecuteCommand(strCommand, tParams)
+    tParams = tParams or {}
+    dbg_err("ExecuteCommand: " .. tostring(strCommand))
+
+    if strCommand == "Turn On" then
+        return CommandTurnOn()
+    elseif strCommand == "Turn Off" then
+        return CommandTurnOff()
+    elseif strCommand == "Set Mode Manual" then
+        return CommandSetMode(MODE_MANUAL)
+    elseif strCommand == "Set Mode Smart" then
+        return CommandSetMode(MODE_SMART)
+    elseif strCommand == "Set Mode Eco" then
+        return CommandSetMode(MODE_ECO)
+    elseif strCommand == "Set Flame Level" then
+        return CommandSetFlame(GetCommandParam(tParams, "Level", "LEVEL", "level"))
+    elseif strCommand == "Flame Up" then
+        return CommandFlameUp()
+    elseif strCommand == "Flame Down" then
+        return CommandFlameDown()
+    elseif strCommand == "Set Fan Level" then
+        return CommandSetFan(GetCommandParam(tParams, "Level", "LEVEL", "level"))
+    elseif strCommand == "Fan On" then
+        return CommandSetFan(6)
+    elseif strCommand == "Fan Off" then
+        return CommandSetFan(0)
+    elseif strCommand == "Set Light Level" then
+        return CommandSetLight(GetCommandParam(tParams, "Level", "LEVEL", "level"))
+    elseif strCommand == "Light On" then
+        return CommandSetLight(6)
+    elseif strCommand == "Light Off" then
+        return CommandSetLight(0)
+    elseif strCommand == "Set Temperature" then
+        return CommandSetTemperatureF(GetCommandParam(tParams, "Temperature", "TEMPERATURE", "temperature"))
+    elseif strCommand == "Toggle Pilot" then
+        return CommandTogglePilot()
+    elseif strCommand == "Pilot On" then
+        return CommandSetPilot(1)
+    elseif strCommand == "Pilot Off" then
+        return CommandSetPilot(0)
+    elseif strCommand == "Toggle Aux" then
+        return CommandToggleAux()
+    elseif strCommand == "Toggle Front Flame" then
+        return CommandToggleFrontFlame()
+    elseif strCommand == "Set Timer" then
+        local minutes = ClampNumber(GetCommandParam(tParams, "Minutes", "MINUTES", "minutes"), 1, 480, nil)
+        return CommandSetTimerMinutes(minutes)
+    elseif strCommand == "Cancel Timer" then
+        return CommandCancelTimer()
+    end
+
+    dbg_err("Unhandled ExecuteCommand: " .. tostring(strCommand))
+    return false
+end
+
+-- =============================================================================
 -- PROXY CALLBACKS
 -- =============================================================================
 
@@ -1267,24 +1591,9 @@ function HandleThermostatCommand(strCommand, tParams)
     if strCommand == "SET_MODE_HVAC" then
         local mode = tParams["MODE"]
         if mode == "Off" then
-            SendProflameCommand("main_mode", MODE_OFF)
+            CommandTurnOff()
         elseif mode == "Heat" then
-            SendProflameCommand("main_mode", GetDefaultOnMode())
-            -- Set flame level and start default timer
-            local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
-            local defaultTimer = tonumber(Properties["Default Timer (minutes)"]) or 120
-            C4:SetTimer(750, function(timer)
-                SendProflameCommand("flame_control", tostring(defaultFlame))
-                if defaultTimer > 0 then
-                    local msValue = defaultTimer * 60000
-                    SendProflameCommand("timer_set", tostring(msValue))
-                    gState.timer_set = tostring(msValue)
-                    C4:SetTimer(200, function(timer2)
-                        SendProflameCommand("timer_status", "1")
-                    end, false)
-                    UpdateExtrasState()
-                end
-            end, false)
+            CommandTurnOn()
         end
         
     elseif strCommand == "SET_SETPOINT_HEAT" or strCommand == "SET_SETPOINT_SINGLE" then
@@ -1297,9 +1606,7 @@ function HandleThermostatCommand(strCommand, tParams)
         end
         
         if tempF and tempF < 50 then tempF = CelsiusToFahrenheit(tempF) end
-        tempF = math.max(60, math.min(90, tempF or 70))
-        SetPendingSetpoint(tempF)
-        SendProflameCommand("temperature_set", EncodeTemperature(tempF))
+        CommandSetTemperatureF(tempF or 70)
         
     elseif strCommand == "SET_MODE_FAN" then
         local mode = tParams["MODE"]
@@ -1318,7 +1625,7 @@ function HandleThermostatCommand(strCommand, tParams)
             level = tonumber(mode) or 0
         end
         dbg_err("SET_MODE_FAN: " .. tostring(mode) .. " -> level " .. level)
-        SendProflameCommand("fan_control", tostring(level))
+        CommandSetFan(level)
         
     elseif strCommand == "SET_EXTRAS" then
         dbg_err("Received SET_EXTRAS command")
@@ -1327,33 +1634,23 @@ function HandleThermostatCommand(strCommand, tParams)
             local val = tonumber(tParams["pf_flame_preset"])
             if val then
                 dbg_err("Flame preset selected: " .. val)
-                if gState.main_mode ~= MODE_MANUAL then
-                    SendProflameCommand("main_mode", MODE_MANUAL)
-                    C4:SetTimer(750, function() SendProflameCommand("flame_control", tostring(val)) end, false)
-                else
-                    SendProflameCommand("flame_control", tostring(val))
-                end
+                CommandSetFlame(val)
             end
         end
         -- Handle flame slider (fine adjustment)
         if tParams["pf_flame"] then
             local val = tonumber(tParams["pf_flame"])
             if val then
-                if gState.main_mode ~= MODE_MANUAL then
-                    SendProflameCommand("main_mode", MODE_MANUAL)
-                    C4:SetTimer(750, function() SendProflameCommand("flame_control", tostring(val)) end, false)
-                else
-                    SendProflameCommand("flame_control", tostring(val))
-                end
+                CommandSetFlame(val)
             end
         end
         if tParams["pf_fan"] then
             local val = tonumber(tParams["pf_fan"])
-            if val then SendProflameCommand("fan_control", tostring(val)) end
+            if val then CommandSetFan(val) end
         end
         if tParams["pf_light"] then
             local val = tonumber(tParams["pf_light"])
-            if val then SendProflameCommand("lamp_control", tostring(val)) end
+            if val then CommandSetLight(val) end
         end
     elseif strCommand == "SET_SCALE" then
         local scale = tParams["SCALE"] or "FAHRENHEIT"
@@ -1364,13 +1661,11 @@ function HandleThermostatCommand(strCommand, tParams)
         local preset = tParams["PRESET"] or tParams["MODE"] or tParams["NAME"] or ""
         dbg_err("SET_PRESET received: " .. preset)
         if preset == "Manual" then
-            SendProflameCommand("main_mode", MODE_MANUAL)
-            local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
-            C4:SetTimer(750, function() SendProflameCommand("flame_control", tostring(defaultFlame)) end, false)
+            CommandSetMode(MODE_MANUAL)
         elseif preset == "Smart" then
-            SendProflameCommand("main_mode", MODE_SMART)
+            CommandSetMode(MODE_SMART)
         elseif preset == "Eco" then
-            SendProflameCommand("main_mode", MODE_ECO)
+            CommandSetMode(MODE_ECO)
         end
         -- Notify proxy of preset change immediately
         UpdatePresetMode(
@@ -1387,30 +1682,15 @@ function HandleThermostatCommand(strCommand, tParams)
         dbg_err("SET_MODE_HOLD received: " .. holdMode)
         if holdMode == "Low Flame" then
             -- Low flame (level 1)
-            if gState.main_mode ~= MODE_MANUAL then
-                SendProflameCommand("main_mode", MODE_MANUAL)
-                C4:SetTimer(750, function() SendProflameCommand("flame_control", "1") end, false)
-            else
-                SendProflameCommand("flame_control", "1")
-            end
+            CommandSetFlame(1)
             C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "Low Flame" })
         elseif holdMode == "Medium Flame" then
             -- Medium flame (level 3)
-            if gState.main_mode ~= MODE_MANUAL then
-                SendProflameCommand("main_mode", MODE_MANUAL)
-                C4:SetTimer(750, function() SendProflameCommand("flame_control", "3") end, false)
-            else
-                SendProflameCommand("flame_control", "3")
-            end
+            CommandSetFlame(3)
             C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "Medium Flame" })
         elseif holdMode == "High Flame" then
             -- High flame (level 6)
-            if gState.main_mode ~= MODE_MANUAL then
-                SendProflameCommand("main_mode", MODE_MANUAL)
-                C4:SetTimer(750, function() SendProflameCommand("flame_control", "6") end, false)
-            else
-                SendProflameCommand("flame_control", "6")
-            end
+            CommandSetFlame(6)
             C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "High Flame" })
         end
         
@@ -1418,156 +1698,42 @@ function HandleThermostatCommand(strCommand, tParams)
     elseif strCommand == "SELECT_MODE" then
         local val = tParams["VALUE"] or tParams["value"] or ""
         dbg_err("SELECT_MODE: " .. tostring(val))
-        local defaultTimer = tonumber(Properties["Default Timer (minutes)"]) or 120
         if val == "manual" then
-            SendProflameCommand("main_mode", MODE_MANUAL)
-            local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
-            C4:SetTimer(750, function(timer)
-                SendProflameCommand("flame_control", tostring(defaultFlame))
-                if defaultTimer > 0 then
-                    local msValue = defaultTimer * 60000
-                    SendProflameCommand("timer_set", tostring(msValue))
-                    gState.timer_set = tostring(msValue)
-                    C4:SetTimer(200, function(timer2)
-                        SendProflameCommand("timer_status", "1")
-                    end, false)
-                    UpdateExtrasState()
-                end
-            end, false)
+            CommandSetMode(MODE_MANUAL)
         elseif val == "smart" then
-            SendProflameCommand("main_mode", MODE_SMART)
-            if defaultTimer > 0 then
-                C4:SetTimer(750, function(timer)
-                    local msValue = defaultTimer * 60000
-                    SendProflameCommand("timer_set", tostring(msValue))
-                    gState.timer_set = tostring(msValue)
-                    C4:SetTimer(200, function(timer2)
-                        SendProflameCommand("timer_status", "1")
-                    end, false)
-                    UpdateExtrasState()
-                end, false)
-            end
+            CommandSetMode(MODE_SMART)
         elseif val == "eco" then
-            SendProflameCommand("main_mode", MODE_ECO)
-            if defaultTimer > 0 then
-                C4:SetTimer(750, function(timer)
-                    local msValue = defaultTimer * 60000
-                    SendProflameCommand("timer_set", tostring(msValue))
-                    gState.timer_set = tostring(msValue)
-                    C4:SetTimer(200, function(timer2)
-                        SendProflameCommand("timer_status", "1")
-                    end, false)
-                    UpdateExtrasState()
-                end, false)
-            end
+            CommandSetMode(MODE_ECO)
         end
         
     elseif strCommand == "SELECT_FLAME_PRESET" then
         local val = tonumber(tParams["VALUE"] or tParams["value"])
         dbg_err("SELECT_FLAME_PRESET: " .. tostring(val))
         if val then
-            if gState.main_mode ~= MODE_MANUAL then
-                SendProflameCommand("main_mode", MODE_MANUAL)
-                C4:SetTimer(750, function() SendProflameCommand("flame_control", tostring(val)) end, false)
-            else
-                SendProflameCommand("flame_control", tostring(val))
-            end
+            CommandSetFlame(val)
         end
         
     elseif strCommand == "SET_FLAME_LEVEL" then
         local val = tonumber(tParams["VALUE"] or tParams["value"])
         dbg_err("SET_FLAME_LEVEL: " .. tostring(val))
         if val then
-            if gState.main_mode ~= MODE_MANUAL then
-                SendProflameCommand("main_mode", MODE_MANUAL)
-                C4:SetTimer(750, function() SendProflameCommand("flame_control", tostring(val)) end, false)
-            else
-                SendProflameCommand("flame_control", tostring(val))
-            end
+            CommandSetFlame(val)
         end
         
     elseif strCommand == "SET_FAN_LEVEL" then
         local val = tonumber(tParams["VALUE"] or tParams["value"])
         dbg_err("SET_FAN_LEVEL: " .. tostring(val))
-        if val then SendProflameCommand("fan_control", tostring(val)) end
+        if val then CommandSetFan(val) end
         
     elseif strCommand == "SET_LIGHT_LEVEL" then
         local val = tonumber(tParams["VALUE"] or tParams["value"])
         dbg_err("SET_LIGHT_LEVEL: " .. tostring(val))
-        if val then SendProflameCommand("lamp_control", tostring(val)) end
+        if val then CommandSetLight(val) end
         
     elseif strCommand == "SET_TIMER_MINUTES" then
         local val = tonumber(tParams["VALUE"] or tParams["value"])
         dbg_err("SET_TIMER_MINUTES: " .. tostring(val) .. " minutes, current mode: " .. tostring(gState.main_mode))
-        if val and val >= 0 then
-            -- Suppress device timer updates while we're setting
-            gSuppressTimerUpdates = true
-            -- Clear expired flag since user is setting a new timer
-            gTimerExpired = false
-            
-            -- Convert minutes to milliseconds (device uses milliseconds)
-            local msValue = val * 60000
-            if val > 0 then
-                -- Set our state immediately so any extras updates show the correct value
-                gState.timer_set = tostring(msValue)
-                gState.timer_count = tostring(msValue)
-                gState.timer_status = "1"
-
-                -- If fireplace is off, turn it on first
-                if gState.main_mode == MODE_OFF or gState.main_mode == MODE_STANDBY then
-                    dbg_err("Fireplace is off, turning on with timer")
-                    SendProflameCommand("main_mode", GetDefaultOnMode())
-                    local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
-                    C4:SetTimer(750, function(timer)
-                        SendProflameCommand("flame_control", tostring(defaultFlame))
-                        -- Set timer value in milliseconds
-                        SendProflameCommand("timer_set", tostring(msValue))
-                        -- Start the timer
-                        C4:SetTimer(200, function(timer2)
-                            SendProflameCommand("timer_status", "1")
-                            -- Clear suppression after commands are sent
-                            C4:SetTimer(2000, function(timer3)
-                                gSuppressTimerUpdates = false
-                                dbg_err("Timer suppression cleared")
-                            end, false)
-                        end, false)
-                        -- Use UpdateTimerExtras for immediate update
-                        UpdateTimerExtras()
-                    end, false)
-                else
-                    -- Fireplace already on, just set timer
-                    SendProflameCommand("timer_set", tostring(msValue))
-                    -- Start the timer
-                    C4:SetTimer(200, function(timer)
-                        SendProflameCommand("timer_status", "1")
-                        -- Clear suppression after commands are sent
-                        C4:SetTimer(2000, function(timer2)
-                            gSuppressTimerUpdates = false
-                            dbg_err("Timer suppression cleared")
-                        end, false)
-                    end, false)
-                    -- Use UpdateTimerExtras for immediate update
-                    UpdateTimerExtras()
-                end
-            else
-                -- Timer set to 0 - turn off fireplace
-                dbg_err("Timer set to 0, turning off fireplace")
-                gState.timer_set = "0"
-                gState.timer_count = "0"
-                gState.timer_status = "0"
-                C4:UpdateProperty("Timer Remaining", "Off")
-                SendProflameCommand("timer_status", "0")
-                SendProflameCommand("timer_set", "0")
-                SendProflameCommand("main_mode", MODE_OFF)
-                -- Use UpdateTimerExtras for immediate update (not throttled)
-                UpdateTimerExtras()
-                -- Clear suppression after a delay
-                C4:SetTimer(2000, function(timer)
-                    gSuppressTimerUpdates = false
-                    dbg_err("Timer suppression cleared")
-                end, false)
-            end
-        end
+        if val and val >= 0 then CommandSetTimerMinutes(val) end
     end
 end
 
@@ -1588,6 +1754,7 @@ function ResetDriverState()
     -- Cancel any pending timers
     StopPingTimer()
     StopReconnectTimer()
+    CancelPendingTimerCommandTimers()
     
     -- Reset device state
     gState = {
@@ -1677,6 +1844,7 @@ function OnDriverDestroyed()
     dbg_err("OnDriverDestroyed - cleaning up")
     StopPingTimer()
     StopReconnectTimer()
+    CancelPendingTimerCommandTimers()
     Disconnect()
 end
 
@@ -1687,6 +1855,7 @@ function OnDriverUpdated()
     -- Clean up old state
     StopPingTimer()
     StopReconnectTimer()
+    CancelPendingTimerCommandTimers()
     Disconnect()
     
     -- Reset state

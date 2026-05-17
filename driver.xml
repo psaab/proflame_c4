@@ -211,23 +211,23 @@
       </command>
       <command>
         <name>Turn Off</name>
-        <description>Turn the fireplace off</description>
+        <description>Cancel any active timer and turn the fireplace off</description>
       </command>
       <command>
         <name>Set Mode Manual</name>
-        <description>Set fireplace to Manual mode</description>
+        <description>Send Manual mode change only; driver does not adjust flame or timer</description>
       </command>
       <command>
         <name>Set Mode Smart</name>
-        <description>Set fireplace to Smart thermostat mode</description>
+        <description>Send Smart thermostat mode change only; driver does not adjust flame or timer</description>
       </command>
       <command>
         <name>Set Mode Eco</name>
-        <description>Set fireplace to Eco thermostat mode</description>
+        <description>Send Eco mode change only; driver does not adjust flame or timer</description>
       </command>
       <command>
         <name>Set Flame Level</name>
-        <description>Set flame level 0-6</description>
+        <description>Set flame level 0-6 and switch to Manual mode if needed</description>
         <params>
           <param>
             <name>Level</name>
@@ -259,7 +259,7 @@
       </command>
       <command>
         <name>Fan On</name>
-        <description>Turn fan to max</description>
+        <description>Turn fan to maximum</description>
       </command>
       <command>
         <name>Fan Off</name>
@@ -279,7 +279,7 @@
       </command>
       <command>
         <name>Light On</name>
-        <description>Turn light to max</description>
+        <description>Turn light to maximum</description>
       </command>
       <command>
         <name>Light Off</name>
@@ -331,7 +331,7 @@
       </command>
       <command>
         <name>Cancel Timer</name>
-        <description>Cancel the auto-off timer</description>
+        <description>Cancel the auto-off timer without changing fireplace mode</description>
       </command>
     </commands>
     <script file="driver.lua" encryption="0" jit="1"></script>
