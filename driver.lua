@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051711"
+DRIVER_VERSION = "2026051713"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -100,7 +100,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260517-073934"
+BUILD_TIMESTAMP = "20260517-082440"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -1040,6 +1040,18 @@ function SendDeviceControl(control, value)
         dbg_err("Refusing device command while turn off is pending: " .. tostring(control) .. "=" .. tostring(value))
         return false
     end
+
+    local format = Properties["Command Format (non-Turn-Off)"] or "Dual (Documented First)"
+    if format == "Legacy Only" then
+        return SendLegacyDeviceControl(control, value)
+    elseif format == "Documented Only" then
+        return SendDocumentedDeviceControl(control, value)
+    elseif format == "Dual (Legacy First)" then
+        local sentLegacy = SendLegacyDeviceControl(control, value)
+        local sentPrimary = SendDocumentedDeviceControl(control, value)
+        return sentLegacy or sentPrimary
+    end
+
     local sentPrimary = SendDocumentedDeviceControl(control, value)
     local sentLegacy = SendLegacyDeviceControl(control, value)
     return sentPrimary or sentLegacy
@@ -1513,6 +1525,8 @@ function OnPropertyChanged(strProperty)
         if (Properties["IP Address"] or "") ~= "" then
             C4:SetTimer(500, function() Connect() end, false)
         end
+    elseif strProperty == "Command Format (non-Turn-Off)" then
+        dbg_err("Command Format (non-Turn-Off) set to: " .. tostring(Properties["Command Format (non-Turn-Off)"]))
     elseif strProperty == "Debug Mode" then
         gDebugEnabled = (Properties["Debug Mode"] == "On")
     elseif strProperty == "Debug Level" then
