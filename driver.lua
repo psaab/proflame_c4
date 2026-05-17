@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051720"
+DRIVER_VERSION = "2026051721"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -36,6 +36,7 @@ COMMAND_FORMAT_TURN_OFF_LEGACY_ONLY = "Turn Off Legacy Only"
 
 DEFAULT_FLAME_LEVEL = 6
 DEFAULT_TIMER_MINUTES = 180
+FLAME_HOLD_MODES = "Low Flame,Medium Flame,High Flame"
 
 -- Debug levels
 DEBUG_ERROR = 1
@@ -111,7 +112,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260517-103813"
+BUILD_TIMESTAMP = "20260517-104815"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -1080,6 +1081,7 @@ function UpdateAllProxies()
     -- Send allowed modes first
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "ALLOWED_FAN_MODES_CHANGED", { MODES = "Off,Low,Medium,High" })
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "ALLOWED_HVAC_MODES_CHANGED", { MODES = "Off,Heat" })
+    UpdateHoldModeCapabilities()
     
     UpdateThermostatProxy()
     UpdateThermostatSetpoint()
@@ -1092,6 +1094,13 @@ function UpdateAllProxies()
     
     -- Also send extras setup when proxies update
     SetupExtras()
+end
+
+function UpdateHoldModeCapabilities()
+    -- Hold modes are a dynamic thermostat capability. Refresh the list before
+    -- sending HOLD_MODE_CHANGED so Navigators can render the selected value.
+    C4:SendToProxy(THERMOSTAT_PROXY_ID, "DYNAMIC_CAPABILITIES_CHANGED", { HOLD_MODES = FLAME_HOLD_MODES })
+    dbg_err("Hold mode capabilities refreshed: " .. FLAME_HOLD_MODES)
 end
 
 function UpdateRoomTemperatureProperty()
@@ -2487,6 +2496,7 @@ function InitializePropertiesFromState()
     C4:UpdateProperty("Burner Status", string.format("0x%04X", burnerNum))
     C4:UpdateProperty("WiFi Signal Strength", "-" .. gState.wifi_signal_str .. " dBm")
     UpdateThermostatSetpoint()
+    UpdateHoldModeCapabilities()
     UpdateHoldModeFromFlame()
 end
 
