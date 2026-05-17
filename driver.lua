@@ -1298,7 +1298,7 @@ function CommandSetFlame(level)
         return false
     end
 
-    if level > 0 and gState.main_mode ~= MODE_MANUAL then
+    if gState.main_mode ~= MODE_MANUAL then
         SendProflameCommand("main_mode", MODE_MANUAL)
         C4:SetTimer(750, function(timer)
             SendProflameCommand("flame_control", tostring(level))
@@ -1594,8 +1594,7 @@ function HandleThermostatCommand(strCommand, tParams)
         local preset = tParams["PRESET"] or tParams["MODE"] or tParams["NAME"] or ""
         dbg_err("SET_PRESET received: " .. preset)
         if preset == "Manual" then
-            local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
-            CommandSetFlame(defaultFlame)
+            CommandSetMode(MODE_MANUAL)
         elseif preset == "Smart" then
             CommandSetMode(MODE_SMART)
         elseif preset == "Eco" then
@@ -1632,48 +1631,12 @@ function HandleThermostatCommand(strCommand, tParams)
     elseif strCommand == "SELECT_MODE" then
         local val = tParams["VALUE"] or tParams["value"] or ""
         dbg_err("SELECT_MODE: " .. tostring(val))
-        local defaultTimer = tonumber(Properties["Default Timer (minutes)"]) or 120
         if val == "manual" then
-            SendProflameCommand("main_mode", MODE_MANUAL)
-            local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
-            C4:SetTimer(750, function(timer)
-                SendProflameCommand("flame_control", tostring(defaultFlame))
-                if defaultTimer > 0 then
-                    local msValue = defaultTimer * 60000
-                    SendProflameCommand("timer_set", tostring(msValue))
-                    gState.timer_set = tostring(msValue)
-                    C4:SetTimer(200, function(timer2)
-                        SendProflameCommand("timer_status", "1")
-                    end, false)
-                    UpdateExtrasState()
-                end
-            end, false)
+            CommandSetMode(MODE_MANUAL)
         elseif val == "smart" then
-            SendProflameCommand("main_mode", MODE_SMART)
-            if defaultTimer > 0 then
-                C4:SetTimer(750, function(timer)
-                    local msValue = defaultTimer * 60000
-                    SendProflameCommand("timer_set", tostring(msValue))
-                    gState.timer_set = tostring(msValue)
-                    C4:SetTimer(200, function(timer2)
-                        SendProflameCommand("timer_status", "1")
-                    end, false)
-                    UpdateExtrasState()
-                end, false)
-            end
+            CommandSetMode(MODE_SMART)
         elseif val == "eco" then
-            SendProflameCommand("main_mode", MODE_ECO)
-            if defaultTimer > 0 then
-                C4:SetTimer(750, function(timer)
-                    local msValue = defaultTimer * 60000
-                    SendProflameCommand("timer_set", tostring(msValue))
-                    gState.timer_set = tostring(msValue)
-                    C4:SetTimer(200, function(timer2)
-                        SendProflameCommand("timer_status", "1")
-                    end, false)
-                    UpdateExtrasState()
-                end, false)
-            end
+            CommandSetMode(MODE_ECO)
         end
         
     elseif strCommand == "SELECT_FLAME_PRESET" then
