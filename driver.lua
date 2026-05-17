@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051706"
+DRIVER_VERSION = "2026051707"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -22,6 +22,7 @@ EVENT_CONNECTION_RESTORED = 5
 
 MODE_OFF = "0"
 MODE_STANDBY = "1"
+MODE_STANDBY_ALT = "2"
 MODE_MANUAL = "5"
 MODE_SMART = "6"
 MODE_ECO = "7"
@@ -182,6 +183,7 @@ gTimerModeDelayTimer = nil
 gTimerStartDelayTimer = nil
 gTimerSuppressClearTimer = nil
 gTurnOffConfirmTimer = nil
+gTurnOffInProgress = false
 gWebSocketKey = nil
 gDebugLevel = DEBUG_DEBUG
 gDebugEnabled = true
@@ -244,6 +246,10 @@ end
 
 function IsFireplaceOnMode(mode)
     return mode == MODE_MANUAL or mode == MODE_SMART or mode == MODE_ECO
+end
+
+function IsFireplaceOffMode(mode)
+    return mode == MODE_OFF or mode == MODE_STANDBY or mode == MODE_STANDBY_ALT
 end
 
 function FireDriverEvent(eventId, eventName)
@@ -569,7 +575,7 @@ end
 
 function GetModeString(mode)
     if mode == MODE_OFF then return "Off"
-    elseif mode == MODE_STANDBY then return "Standby"
+    elseif mode == MODE_STANDBY or mode == MODE_STANDBY_ALT then return "Standby"
     elseif mode == MODE_MANUAL then return "Manual"
     elseif mode == MODE_SMART then return "Smart"
     elseif mode == MODE_ECO then return "Eco"
@@ -630,7 +636,7 @@ function GetExtrasXML()
 
     -- Only force timer to 0 if fireplace is off/standby AND timer is not active
     -- This prevents showing 0 during startup when we're setting a timer
-    if (mode == MODE_OFF or mode == MODE_STANDBY) and timerStatus ~= 1 then
+    if IsFireplaceOffMode(mode) and timerStatus ~= 1 then
         timerMinutes = 0
     end
 
@@ -1146,7 +1152,7 @@ function ApplyDeviceStatus(status, value)
 
     if status == "main_mode" then
         gState.main_mode = value
-        if (value == MODE_OFF or value == MODE_STANDBY) and not gSuppressTimerUpdates then
+        if IsFireplaceOffMode(value) and not gSuppressTimerUpdates then
             gState.timer_set = "0"
             gState.timer_count = "0"
             return { status = status, value = value, timerCleared = true, timerExtras = true }
@@ -1194,7 +1200,7 @@ function ApplyDeviceStatus(status, value)
         -- Ignore timer_count updates when fireplace is off/standby or timer is disabled
         -- The device sends default timer values when entering standby which we should ignore
         local mode = gState.main_mode
-        if mode == MODE_OFF or mode == MODE_STANDBY then
+        if IsFireplaceOffMode(mode) then
             dbg_err("Timer count ignored (mode=" .. tostring(mode) .. "): " .. tostring(value))
             return
         end
@@ -1409,7 +1415,7 @@ end
 function UpdateFlameLevel()
     local flameLevel = tonumber(gState.flame_control) or 0
     local percent = math.floor(flameLevel / 6 * 100)
-    local isOn = (flameLevel > 0) and (gState.main_mode ~= MODE_OFF and gState.main_mode ~= MODE_STANDBY)
+    local isOn = (flameLevel > 0) and IsFireplaceOnMode(gState.main_mode)
     dbg_err("Flame level updated: " .. flameLevel .. " = " .. percent .. "%, on=" .. tostring(isOn))
 end
 
@@ -1624,6 +1630,13 @@ function CancelTurnOffConfirmTimer()
     end
 end
 
+function ClearTurnOffInProgress(reason)
+    if gTurnOffInProgress then
+        dbg_err("Turn off guard cleared: " .. tostring(reason))
+    end
+    gTurnOffInProgress = false
+end
+
 function SetTimerSuppression(enabled, reason)
     CancelTimerSuppressionClear()
     gSuppressTimerUpdates = enabled
@@ -1663,6 +1676,7 @@ function ClearTimerStateAndSend(turnOff)
     local sent = SendDeviceControl("timer_status", "0")
     sent = SendDeviceControl("timer_set", "0") or sent
     if turnOff then
+        gTurnOffInProgress = true
         sent = SendDeviceControl("flame_control", "0") or sent
         sent = SendDeviceControl("main_mode", MODE_OFF) or sent
     end
@@ -1753,6 +1767,9 @@ end
 function CommandSetMode(mode)
     if mode == MODE_OFF or mode == MODE_MANUAL or mode == MODE_SMART or mode == MODE_ECO then
         if not RequireDeviceCommandReady("Set Mode") then return false end
+        if mode ~= MODE_OFF then
+            ClearTurnOffInProgress("explicit mode command")
+        end
         CancelPendingModeReadyWork()
         return SendDeviceControl("main_mode", mode)
     end
@@ -1766,6 +1783,7 @@ end
 
 function CommandTurnOn()
     if not RequireDeviceCommandReady("Turn On") then return false end
+    ClearTurnOffInProgress("turn on")
     CancelPendingTimerCommandTimers()
     if not SendDeviceControl("main_mode", GetDefaultOnMode()) then return false end
     local defaultFlame = GetDefaultFlameLevel()
@@ -1787,6 +1805,10 @@ function CommandTurnOn()
 end
 
 function CommandSetFlame(level)
+    if gTurnOffInProgress then
+        dbg_err("Set Flame Level ignored while turn off is in progress")
+        return false
+    end
     if not RequireDeviceCommandReady("Set Flame Level") then return false end
     level = ClampNumber(level, 0, 6, nil)
     if level == nil then
@@ -1894,7 +1916,7 @@ function CommandSetTimerMinutes(minutes)
         SetTimerSuppression(true, "set timer command")
         gTimerExpired = false
 
-        if gState.main_mode == MODE_OFF or gState.main_mode == MODE_STANDBY then
+        if IsFireplaceOffMode(gState.main_mode) then
             dbg_err("Fireplace is off, turning on with timer")
             if not SendDeviceControl("main_mode", GetDefaultOnMode()) then
                 SetTimerSuppression(false, "timer mode send failed")
@@ -2103,6 +2125,14 @@ function HandleThermostatCommand(strCommand, tParams)
         -- "Low Flame" = level 1, "Medium Flame" = level 3, "High Flame" = level 6
         local holdMode = tParams["MODE"] or ""
         dbg_err("SET_MODE_HOLD received: " .. holdMode)
+        if gTurnOffInProgress then
+            dbg_err("SET_MODE_HOLD ignored while turn off is in progress: " .. tostring(holdMode))
+            return
+        end
+        if not IsFireplaceOnMode(gState.main_mode) then
+            dbg_err("SET_MODE_HOLD ignored while fireplace mode is off/standby: " .. tostring(gState.main_mode))
+            return
+        end
         if holdMode == "Low Flame" then
             -- Low flame (level 1)
             if CommandSetFlame(1) then
@@ -2181,6 +2211,7 @@ function ResetDriverState()
     gLastMainMode = nil
     gLastConnectionOnline = false
     gStatusSeen = {}
+    gTurnOffInProgress = false
 
     -- Cancel any pending timers
     StopPingTimer()
