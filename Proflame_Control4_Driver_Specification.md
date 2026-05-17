@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051728 (2026-05-17)
+- **Driver Version**: 2026051729 (2026-05-17)
 
 ---
 
@@ -436,6 +436,10 @@ Fan speed is mapped to standard thermostat fan modes:
 ### 4.5 Presets Disabled
 
 Thermostat Presets are disabled because Navigator did not expose this menu reliably for tap-based flame/timer controls. Operating modes remain available through the Extras `Mode` list.
+
+The legacy `SET_PRESET` command is retained for existing Composer programming and logs a deprecation message before routing `Manual`, `Smart`, or `Eco` to the matching mode command. New programming should use explicit mode commands or the Extras `Mode` list.
+
+Runtime capability behavior is tracked in issue #39 so the static XML/runtime notification boundary can be documented separately from this UI experiment.
 
 ### 4.6 Hold Modes (Flame Presets)
 
@@ -1035,7 +1039,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051728</version>
+  <version>2026051729</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1472,7 +1476,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051728"
+DRIVER_VERSION = "2026051729"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1574,6 +1578,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026051729 | 2026-05-17 | Added deprecated SET_PRESET compatibility path and documented runtime capability probe behavior |
 | 2026051728 | 2026-05-17 | Restored custom Low/Medium/High Hold actions after documented Permanent display test |
 | 2026051727 | 2026-05-17 | Tested documented Hold display behavior while keeping Hold tap actions for flame height |
 | 2026051725 | 2026-05-17 | Disabled thermostat Presets menu and restored Hold menu as flame height control |

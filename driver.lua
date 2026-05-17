@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051728"
+DRIVER_VERSION = "2026051729"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -112,7 +112,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260517-120554"
+BUILD_TIMESTAMP = "20260517-122513"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -1098,6 +1098,7 @@ end
 function UpdateHoldModeCapabilities()
     -- Refresh custom flame hold modes before sending/selecting a hold value.
     -- SDK-supported hold labels are limited, so Navigator may not render these under the button.
+    -- Treat this runtime capability refresh as a best-effort probe; some Navigators may ignore it.
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "DYNAMIC_CAPABILITIES_CHANGED", { HOLD_MODES = FLAME_HOLD_MODES })
     dbg_err("Hold mode capabilities refreshed: " .. FLAME_HOLD_MODES)
 end
@@ -2269,6 +2270,19 @@ function HandleThermostatCommand(strCommand, tParams)
         local scale = tParams["SCALE"] or "FAHRENHEIT"
         C4:SendToProxy(THERMOSTAT_PROXY_ID, "SCALE_CHANGED", { SCALE = scale })
         UpdateThermostatSetpoint()
+
+    elseif strCommand == "SET_PRESET" then
+        local preset = tParams["PRESET"] or tParams["MODE"] or tParams["NAME"] or ""
+        dbg_err("SET_PRESET is deprecated because thermostat Presets are disabled; routing legacy preset command: " .. tostring(preset))
+        if preset == "Manual" then
+            CommandSetMode(MODE_MANUAL)
+        elseif preset == "Smart" then
+            CommandSetMode(MODE_SMART)
+        elseif preset == "Eco" then
+            CommandSetMode(MODE_ECO)
+        else
+            dbg_err("SET_PRESET ignored; unknown preset: " .. tostring(preset))
+        end
         
     elseif strCommand == "SET_MODE_HOLD" then
         -- Hold modes repurposed for quick flame control:
