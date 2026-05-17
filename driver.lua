@@ -1364,6 +1364,9 @@ function CommandTurnOn()
             UpdateExtrasState()
         end
     end, false)
+    if not defaultTimer or defaultTimer <= 0 then
+        gSuppressTimerUpdates = false
+    end
     return true
 end
 
