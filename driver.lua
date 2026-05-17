@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051704"
+DRIVER_VERSION = "2026051703"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
