@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051622"
+DRIVER_VERSION = "2026051623"
 DRIVER_DATE = "2026-05-16"
 
 NETWORK_BINDING_ID = 6001
@@ -99,7 +99,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260516-221800"
+BUILD_TIMESTAMP = "20260516-222909"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -801,33 +801,18 @@ function SendPing()
     SendWebSocketMessage("PROFLAMEPING")
 end
 
-function SendProflameCommand(control, value)
+function SendDeviceControl(control, value)
     local cmd = BuildSetControlCommand(control, value)
     dbg_err("Sending command: " .. cmd)
-    if gState[control] ~= nil then gState[control] = value end
-    
-    if control == "main_mode" then
-        C4:UpdateProperty("Operating Mode", GetModeString(value))
-        UpdateThermostatProxy(value)
-    elseif control == "flame_control" then
-        C4:UpdateProperty("Flame Level", tostring(value))
-        UpdateFlameLevel()
-    elseif control == "fan_control" then
-        C4:UpdateProperty("Fan Level", tostring(value))
-        UpdateFanMode()
-    elseif control == "lamp_control" then
-        C4:UpdateProperty("Light Level", tostring(value))
-    elseif control == "temperature_set" then
-        C4:UpdateProperty("Temperature Setpoint", DecodeTemperature(value) .. "F")
-        UpdateThermostatSetpoint()
-    end
-    
-    UpdateExtrasState()
     local sentPrimary = SendWebSocketMessage(cmd)
     local legacyCmd = BuildLegacyIndexedCommand(control, value)
     dbg_err("Sending legacy command fallback: " .. legacyCmd)
     local sentLegacy = SendWebSocketMessage(legacyCmd)
     return sentPrimary or sentLegacy
+end
+
+function SendProflameCommand(control, value)
+    return SendDeviceControl(control, value)
 end
 
 function RequestAllStatus()
@@ -854,13 +839,23 @@ function UpdateAllProxies()
     SetupExtras()
 end
 
-function UpdateRoomTemperature()
+function UpdateRoomTemperatureProperty()
+    local tempEncoded = gState.room_temperature or "700"
+    local tempF = DecodeTemperature(tempEncoded)
+    C4:UpdateProperty("Room Temperature", tostring(tempF) .. "F")
+end
+
+function UpdateRoomTemperatureProxy()
     local tempEncoded = gState.room_temperature or "700"
     local tempF = DecodeTemperature(tempEncoded)
     local tempC = FahrenheitToCelsius(tempF)
-    C4:UpdateProperty("Room Temperature", tostring(tempF) .. "F")
     dbg_err("Sending room temperature to proxy: " .. tempF .. "F (" .. tempC .. "C)")
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "TEMPERATURE_CHANGED", {TEMPERATURE = tempC, SCALE = "C"})
+end
+
+function UpdateRoomTemperature()
+    UpdateRoomTemperatureProperty()
+    UpdateRoomTemperatureProxy()
 end
 
 -- =============================================================================
@@ -933,11 +928,7 @@ function ParseStatusMessage(data)
     end
 end
 
-function ProcessStatusUpdate(status, value)
-    if not status or not value then return end
-    
-    dbg_err("ProcessStatusUpdate: " .. tostring(status) .. " = " .. tostring(value))
-    
+function ApplyDeviceStatus(status, value)
     if status == "temperature_set" then
         local incomingF = DecodeTemperature(value)
         if gPendingSetpointF ~= nil then
@@ -950,52 +941,15 @@ function ProcessStatusUpdate(status, value)
             end
         end
     end
-    
-    -- Don't auto-update timer_count and timer_status - their handlers manage this with suppression
-    if gState[status] ~= nil and status ~= "timer_count" and status ~= "timer_status" then
-        gState[status] = value
-    end
 
-    UpdateExtrasState()
-    
     if status == "main_mode" then
-        HandleModeEvents(value)
-        C4:UpdateProperty("Operating Mode", GetModeString(value))
-        UpdateThermostatProxy(value)
-        UpdatePresetMode(value)
-        -- If fireplace turns off and we're not suppressing, reset timer slider to 0
+        gState.main_mode = value
         if (value == MODE_OFF or value == MODE_STANDBY) and not gSuppressTimerUpdates then
             gState.timer_set = "0"
             gState.timer_count = "0"
-            C4:UpdateProperty("Timer Remaining", "Off")
-            UpdateTimerExtras()
+            return { status = status, value = value, timerCleared = true, extras = "timer" }
         end
-    elseif status == "flame_control" then
-        C4:UpdateProperty("Flame Level", tostring(value))
-        UpdateFlameLevel()
-        UpdateHoldModeFromFlame()
-    elseif status == "fan_control" then
-        C4:UpdateProperty("Fan Level", tostring(value))
-        UpdateFanMode()
-    elseif status == "lamp_control" then
-        C4:UpdateProperty("Light Level", tostring(value))
-    elseif status == "temperature_set" then
-        C4:UpdateProperty("Temperature Setpoint", DecodeTemperature(value) .. "F")
-        UpdateThermostatSetpoint()
-    elseif status == "room_temperature" or status == "temperature_read" then
-        gState.room_temperature = value
-        dbg_err("Room temperature updated: " .. value .. " (raw) = " .. DecodeTemperature(value) .. "F")
-        UpdateRoomTemperature()
-    elseif status == "thermo_control" then
-        C4:UpdateProperty("Thermostat Enabled", value == "1" and "Yes" or "No")
-    elseif status == "pilot_control" then
-        C4:UpdateProperty("Pilot Status", value == "1" and "On" or "Off")
-    elseif status == "aux_control" then
-        C4:UpdateProperty("Aux Output", value == "1" and "On" or "Off")
-    elseif status == "split_control" then
-        C4:UpdateProperty("Front Flame (Split)", value == "1" and "On" or "Off")
-    elseif status == "wifi_signal_str" then
-        C4:UpdateProperty("WiFi Signal Strength", "-" .. tostring(value) .. " dBm")
+        return { status = status, value = value }
     elseif status == "timer_status" then
         -- Skip timer_status updates while we're actively setting the timer
         if gSuppressTimerUpdates then
@@ -1003,25 +957,25 @@ function ProcessStatusUpdate(status, value)
             return
         end
         gState.timer_status = value
-        C4:UpdateProperty("Timer Active", value == "1" and "Yes" or "No")
         -- If timer becomes active, clear the expired flag
         if value == "1" then
             gTimerExpired = false
         end
         -- If timer is turned off by device, clear remaining time and reset slider
         if value == "0" then
-            C4:UpdateProperty("Timer Remaining", "Off")
             gState.timer_set = "0"
             gState.timer_count = "0"
             gTimerExpired = true  -- Also set expired flag to ignore any stale timer_count updates
-            UpdateTimerExtras()
+            return { status = status, value = value, timerCleared = true, extras = "timer" }
         end
+        return { status = status, value = value }
     elseif status == "timer_set" then
         -- Don't update gState.timer_set from device responses
         -- We only set timer_set from our own commands to avoid sync issues
         -- Just log the device's reported value for debugging
         local minutes = math.floor(tonumber(value) / 60000)
         dbg_err("Device timer_set: " .. tostring(value) .. " ms (" .. minutes .. " minutes), our timer_set: " .. tostring(gState.timer_set))
+        return
     elseif status == "timer_count" then
         -- Skip timer_count updates while we're actively setting the timer
         if gSuppressTimerUpdates then
@@ -1060,41 +1014,145 @@ function ProcessStatusUpdate(status, value)
             gTimerExpired = true
             gState.timer_count = "0"
             gState.timer_set = "0"
-            C4:UpdateProperty("Timer Remaining", "Off")
-            UpdateTimerExtras()
-            return
+            return { status = status, value = value, timerExpired = true, extras = "timer" }
         end
 
         -- Store the raw count
         gState.timer_count = value
-
-        -- Convert milliseconds to hours:minutes:seconds for display
-        local totalSeconds = math.floor(newCount / 1000)
-        local hours = math.floor(totalSeconds / 3600)
-        local minutes = math.floor((totalSeconds % 3600) / 60)
-        local seconds = totalSeconds % 60
-        local timeStr
-        if hours > 0 then
-            timeStr = string.format("%d:%02d:%02d", hours, minutes, seconds)
-        elseif newCount > 0 then
-            timeStr = string.format("%d:%02d", minutes, seconds)
-        else
-            timeStr = "Off"
-        end
-        C4:UpdateProperty("Timer Remaining", timeStr)
-
-        -- Update the slider when minute changes
+        local change = { status = status, value = value, newCount = newCount }
         dbg_err("Timer count: " .. newCount .. "ms (" .. newMinutes .. "m), old count: " .. oldCount .. "ms (" .. oldMinutes .. "m)")
         if oldMinutes ~= newMinutes then
             dbg_err("Timer minute changed: " .. oldMinutes .. " -> " .. newMinutes .. ", updating slider")
             -- Update timer_set to match for slider display
             gState.timer_set = tostring(newMinutes * 60000)
-            UpdateTimerExtras()
+            change.extras = "timer"
+        end
+        return change
+    elseif status == "room_temperature" or status == "temperature_read" then
+        gState.room_temperature = value
+        dbg_err("Room temperature updated: " .. value .. " (raw) = " .. DecodeTemperature(value) .. "F")
+        return { status = "room_temperature", value = value }
+    end
+
+    if gState[status] ~= nil then
+        gState[status] = value
+        return { status = status, value = value }
+    end
+    return nil
+end
+
+function FormatTimerRemaining(timerMs)
+    local newCount = tonumber(timerMs) or 0
+    local totalSeconds = math.floor(newCount / 1000)
+    local hours = math.floor(totalSeconds / 3600)
+    local minutes = math.floor((totalSeconds % 3600) / 60)
+    local seconds = totalSeconds % 60
+    if hours > 0 then
+        return string.format("%d:%02d:%02d", hours, minutes, seconds)
+    elseif newCount > 0 then
+        return string.format("%d:%02d", minutes, seconds)
+    end
+    return "Off"
+end
+
+function UpdatePropertiesForStatus(change)
+    local status = change.status
+    local value = change.value
+
+    if status == "main_mode" then
+        C4:UpdateProperty("Operating Mode", GetModeString(value))
+        if change.timerCleared then
+            C4:UpdateProperty("Timer Remaining", "Off")
+        end
+    elseif status == "flame_control" then
+        C4:UpdateProperty("Flame Level", tostring(value))
+    elseif status == "fan_control" then
+        C4:UpdateProperty("Fan Level", tostring(value))
+    elseif status == "lamp_control" then
+        C4:UpdateProperty("Light Level", tostring(value))
+    elseif status == "temperature_set" then
+        C4:UpdateProperty("Temperature Setpoint", DecodeTemperature(value) .. "F")
+    elseif status == "room_temperature" then
+        UpdateRoomTemperatureProperty()
+    elseif status == "thermo_control" then
+        C4:UpdateProperty("Thermostat Enabled", value == "1" and "Yes" or "No")
+    elseif status == "pilot_control" then
+        C4:UpdateProperty("Pilot Status", value == "1" and "On" or "Off")
+    elseif status == "aux_control" then
+        C4:UpdateProperty("Aux Output", value == "1" and "On" or "Off")
+    elseif status == "split_control" then
+        C4:UpdateProperty("Front Flame (Split)", value == "1" and "On" or "Off")
+    elseif status == "wifi_signal_str" then
+        C4:UpdateProperty("WiFi Signal Strength", "-" .. tostring(value) .. " dBm")
+    elseif status == "timer_status" then
+        C4:UpdateProperty("Timer Active", value == "1" and "Yes" or "No")
+        if change.timerCleared then
+            C4:UpdateProperty("Timer Remaining", "Off")
+        end
+    elseif status == "timer_count" then
+        if change.timerExpired then
+            C4:UpdateProperty("Timer Remaining", "Off")
+        else
+            C4:UpdateProperty("Timer Remaining", FormatTimerRemaining(change.newCount))
         end
     elseif status == "burner_status" then
         local num = tonumber(value) or 0
         if num < 0 then num = num + 0x10000 end  -- Convert to unsigned 16-bit
         C4:UpdateProperty("Burner Status", string.format("0x%04X", num))
+    end
+end
+
+function UpdateProxyForStatus(change)
+    local status = change.status
+    local value = change.value
+
+    if status == "main_mode" then
+        HandleModeEvents(value)
+        UpdateThermostatProxy(value)
+        UpdatePresetMode(value)
+    elseif status == "flame_control" then
+        UpdateFlameLevel()
+        UpdateHoldModeFromFlame()
+    elseif status == "fan_control" then
+        UpdateFanMode()
+    elseif status == "temperature_set" then
+        UpdateThermostatSetpoint()
+    elseif status == "room_temperature" then
+        UpdateRoomTemperatureProxy()
+    end
+end
+
+function StatusAffectsExtras(status)
+    return status == "main_mode" or
+        status == "flame_control" or
+        status == "fan_control" or
+        status == "lamp_control" or
+        status == "timer_status" or
+        status == "timer_count"
+end
+
+function ScheduleExtrasRefresh(reason, timerOnly)
+    dbg_all("Extras refresh requested: " .. tostring(reason))
+    if timerOnly then
+        UpdateTimerExtras()
+    else
+        UpdateExtrasState()
+    end
+end
+
+function ProcessStatusUpdate(status, value)
+    if not status or not value then return end
+
+    dbg_err("ProcessStatusUpdate: " .. tostring(status) .. " = " .. tostring(value))
+    local change = ApplyDeviceStatus(status, value)
+    if not change then return end
+
+    UpdatePropertiesForStatus(change)
+    UpdateProxyForStatus(change)
+    if change.extras == "timer" then
+        ScheduleExtrasRefresh("status:" .. tostring(change.status), true)
+    elseif StatusAffectsExtras(change.status) then
+        ScheduleExtrasRefresh("status:" .. tostring(change.status), false)
     end
 end
 
@@ -1375,6 +1433,8 @@ function ArmTimerAfterDelay(updateTimerExtras)
 end
 
 function SetRequestedTimerState(minutes)
+    -- Intentional optimistic timer UI state: the Extras timer slider should move
+    -- immediately while device timer_count echoes are suppressed.
     local msValue = minutes * 60000
     gState.timer_set = tostring(msValue)
     gState.timer_count = tostring(msValue)
