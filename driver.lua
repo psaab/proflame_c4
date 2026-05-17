@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051625"
+DRIVER_VERSION = "2026051626"
 DRIVER_DATE = "2026-05-16"
 
 NETWORK_BINDING_ID = 6001
@@ -99,7 +99,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260516-224724"
+BUILD_TIMESTAMP = "20260516-230818"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -436,22 +436,38 @@ end
 
 function JsonUnescape(value)
     value = tostring(value or "")
-    value = value:gsub("\\u(%x%x%x%x)", function(hex)
-        local code = tonumber(hex, 16) or 0
-        if code < 128 then return string.char(code) end
-        return "?"
-    end)
-    value = value:gsub("\\([\\\"/bfnrt])", {
-        ['\\'] = '\\',
-        ['"'] = '"',
-        ['/'] = '/',
-        b = "\b",
-        f = "\f",
-        n = "\n",
-        r = "\r",
-        t = "\t"
-    })
-    return value
+    local result = ""
+    local i = 1
+    while i <= #value do
+        local c = value:sub(i, i)
+        if c == "\\" then
+            local esc = value:sub(i + 1, i + 1)
+            if esc == "u" then
+                local hex = value:sub(i + 2, i + 5)
+                if hex:match("^%x%x%x%x$") then
+                    local code = tonumber(hex, 16) or 0
+                    result = result .. (code < 128 and string.char(code) or "?")
+                    i = i + 6
+                else
+                    result = result .. esc
+                    i = i + 2
+                end
+            elseif esc == "\\" then result = result .. "\\"; i = i + 2
+            elseif esc == '"' then result = result .. '"'; i = i + 2
+            elseif esc == "/" then result = result .. "/"; i = i + 2
+            elseif esc == "b" then result = result .. "\b"; i = i + 2
+            elseif esc == "f" then result = result .. "\f"; i = i + 2
+            elseif esc == "n" then result = result .. "\n"; i = i + 2
+            elseif esc == "r" then result = result .. "\r"; i = i + 2
+            elseif esc == "t" then result = result .. "\t"; i = i + 2
+            else result = result .. esc; i = i + 2
+            end
+        else
+            result = result .. c
+            i = i + 1
+        end
+    end
+    return result
 end
 
 function ParseJsonString(str, index)
@@ -489,9 +505,9 @@ function JsonDecode(str)
             if str:sub(i, i) == '"' then
                 value, i = ParseJsonString(str, i)
             else
-                local raw
-                raw, i = str:match("^([^,%}%]]+)%s*()", i)
+                local raw, nextIndex = str:match("^([^,%}%]]+)%s*()", i)
                 if raw then
+                    i = nextIndex
                     raw = raw:gsub("^%s+", ""):gsub("%s+$", "")
                     if raw:match("^-?%d+$") then value = raw
                     elseif raw == "true" then value = "true"
@@ -500,6 +516,9 @@ function JsonDecode(str)
                     else
                         dbg_all("Ignoring unsupported JSON value for key " .. tostring(key) .. ": " .. tostring(raw))
                     end
+                else
+                    dbg_all("Ignoring malformed JSON value for key " .. tostring(key))
+                    i = i + 1
                 end
             end
             if value ~= nil then result[key] = value end
@@ -760,7 +779,7 @@ end
 function ParseHttpHeaders(response)
     local headers = {}
     for line in tostring(response or ""):gmatch("([^\r\n]+)") do
-        local name, value = line:match("^%s*([^:]+):%s*(.-)%s*$")
+        local name, value = line:match("^%s*([^:%s]+)%s*:%s*(.-)%s*$")
         if name and value then
             headers[name:lower()] = value
         end
@@ -774,6 +793,21 @@ function ExpectedWebSocketAccept(key)
     return Base64Encode(SHA1(key .. guid))
 end
 
+function IsStrictWebSocketHandshakeEnabled()
+    return Properties["Strict WebSocket Handshake"] == "On"
+end
+
+function AllowLenientHandshakeFallback(response, reason)
+    if IsStrictWebSocketHandshakeEnabled() then
+        return false
+    end
+    if response and response:find("101", 1, true) then
+        dbg_err("Handshake strict validation failed (" .. tostring(reason) .. "); accepting legacy 101 response because Strict WebSocket Handshake is Off")
+        return true
+    end
+    return false
+end
+
 function ValidateHandshakeResponse(response)
     if not response then
         dbg_err("Handshake failed: empty response")
@@ -782,27 +816,31 @@ function ValidateHandshakeResponse(response)
 
     local statusLine = response:match("^([^\r\n]+)")
     if not statusLine or not statusLine:match("^HTTP/%d+%.%d+%s+101%s") then
-        dbg_err("Handshake failed: invalid status line: " .. tostring(statusLine))
-        return false
+        local reason = "invalid status line: " .. tostring(statusLine)
+        dbg_err("Handshake failed: " .. reason)
+        return AllowLenientHandshakeFallback(response, reason)
     end
 
     local headers = ParseHttpHeaders(response)
     local upgrade = (headers["upgrade"] or ""):lower()
     local connection = (headers["connection"] or ""):lower()
     if upgrade ~= "websocket" then
-        dbg_err("Handshake failed: missing Upgrade websocket header")
-        return false
+        local reason = "missing Upgrade websocket header"
+        dbg_err("Handshake failed: " .. reason)
+        return AllowLenientHandshakeFallback(response, reason)
     end
     if not connection:find("upgrade", 1, true) then
-        dbg_err("Handshake failed: missing Connection upgrade header")
-        return false
+        local reason = "missing Connection upgrade header"
+        dbg_err("Handshake failed: " .. reason)
+        return AllowLenientHandshakeFallback(response, reason)
     end
 
     local expectedAccept = ExpectedWebSocketAccept(gWebSocketKey)
     local actualAccept = headers["sec-websocket-accept"]
-    if expectedAccept and actualAccept ~= expectedAccept then
-        dbg_err("Handshake failed: invalid Sec-WebSocket-Accept")
-        return false
+    if not expectedAccept or actualAccept ~= expectedAccept then
+        local reason = "invalid Sec-WebSocket-Accept"
+        dbg_err("Handshake failed: " .. reason)
+        return AllowLenientHandshakeFallback(response, reason)
     end
 
     return true

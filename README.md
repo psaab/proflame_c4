@@ -46,6 +46,8 @@ The `Sec-WebSocket-Accept` is computed as:
 Base64(SHA1(Sec-WebSocket-Key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
 ```
 
+The driver can strictly validate the upgrade response. `Strict WebSocket Handshake` defaults to `Off` so firmware with handshake quirks can still connect through the legacy `101` compatibility fallback while logging the strict-validation failure reason.
+
 ### Keep-Alive Protocol
 - **Ping Message**: `PROFLAMEPING` (sent every 5 seconds)
 - **Pong Response**: `PROFLAMEPONG` (device responds)
