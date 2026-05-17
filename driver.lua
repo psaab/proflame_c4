@@ -382,13 +382,12 @@ end
 -- HELPER FUNCTIONS
 -- =============================================================================
 
-function MakeCommand(control, value)
-    return '{"control0":"' .. control .. '","value0":"' .. tostring(value) .. '"}'
+function BuildSetControlCommand(control, value)
+    return '{"command":"set_control","name":"' .. control .. '","value":"' .. tostring(value) .. '"}'
 end
 
--- Alternative command format from spec - {"command":"set_control","name":"X","value":"Y"}
-function MakeCommandAlt(control, value)
-    return '{"command":"set_control","name":"' .. control .. '","value":"' .. tostring(value) .. '"}'
+function BuildLegacyIndexedCommand(control, value)
+    return '{"control0":"' .. control .. '","value0":"' .. tostring(value) .. '"}'
 end
 
 function DecodeTemperature(encoded)
@@ -786,7 +785,7 @@ function SendPing()
 end
 
 function SendProflameCommand(control, value)
-    local cmd = MakeCommand(control, value)
+    local cmd = BuildSetControlCommand(control, value)
     dbg_err("Sending command: " .. cmd)
     if gState[control] ~= nil then gState[control] = value end
     
@@ -807,14 +806,11 @@ function SendProflameCommand(control, value)
     end
     
     UpdateExtrasState()
-    return SendWebSocketMessage(cmd)
-end
-
--- Send command using alternative format (for timer control)
-function SendProflameCommandAlt(control, value)
-    local cmd = MakeCommandAlt(control, value)
-    dbg_err("Sending alt command: " .. cmd)
-    return SendWebSocketMessage(cmd)
+    local sentPrimary = SendWebSocketMessage(cmd)
+    local legacyCmd = BuildLegacyIndexedCommand(control, value)
+    dbg_err("Sending legacy command fallback: " .. legacyCmd)
+    local sentLegacy = SendWebSocketMessage(legacyCmd)
+    return sentPrimary or sentLegacy
 end
 
 function RequestAllStatus()
