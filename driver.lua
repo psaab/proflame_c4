@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051719"
+DRIVER_VERSION = "2026051720"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -111,7 +111,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260517-103442"
+BUILD_TIMESTAMP = "20260517-103813"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -1086,6 +1086,7 @@ function UpdateAllProxies()
     UpdateRoomTemperature()
     UpdateFanMode()
     UpdateFlameLevel()
+    UpdateHoldModeFromFlame()
     UpdatePresetMode()
     UpdateExtrasState()
     
@@ -2486,6 +2487,7 @@ function InitializePropertiesFromState()
     C4:UpdateProperty("Burner Status", string.format("0x%04X", burnerNum))
     C4:UpdateProperty("WiFi Signal Strength", "-" .. gState.wifi_signal_str .. " dBm")
     UpdateThermostatSetpoint()
+    UpdateHoldModeFromFlame()
 end
 
 function OnDriverDestroyed()

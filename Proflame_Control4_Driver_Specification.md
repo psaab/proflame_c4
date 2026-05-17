@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051719 (2026-05-17)
+- **Driver Version**: 2026051720 (2026-05-17)
 
 ---
 
@@ -1042,7 +1042,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051719</version>
+  <version>2026051720</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1482,7 +1482,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051719"
+DRIVER_VERSION = "2026051720"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1585,6 +1585,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026051720 | 2026-05-17 | Initialize flame preset hold-mode display so the app control is labeled before status echoes |
 | 2026051719 | 2026-05-17 | Documented firmware scope for the Legacy Only default |
 | 2026051718 | 2026-05-17 | Changed default non-Turn-Off command format to Legacy Only based on real-device single-format verification |
 | 2026051717 | 2026-05-17 | Centralized outbound command-format planning and documented manual format verification |
