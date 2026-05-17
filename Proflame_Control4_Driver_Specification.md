@@ -406,7 +406,11 @@ end
   <can_change_fan_modes>True</can_change_fan_modes>
   <fan_modes>Off,Low,Medium,High</fan_modes>
   <can_preset>True</can_preset>
+  <can_preset_schedule>False</can_preset_schedule>
   <preset_modes>Manual,Smart,Eco</preset_modes>
+  <scheduling>False</scheduling>
+  <can_schedule>False</can_schedule>
+  <hold_modes>Low Flame,Medium Flame,High Flame</hold_modes>
 </capabilities>
 ```
 
@@ -436,7 +440,19 @@ Fan speed is mapped to standard thermostat fan modes:
 | Smart | 6 | Temperature-controlled |
 | Eco | 7 | Energy-saving thermostat |
 
-### 4.6 Key Proxy Notifications
+### 4.6 Hold Modes (Flame Presets)
+
+Thermostat hold modes are intentionally repurposed as quick flame presets:
+
+| Hold Mode | Flame Level |
+|-----------|-------------|
+| Low Flame | 1 |
+| Medium Flame | 3 |
+| High Flame | 6 |
+
+The driver does not advertise thermostat scheduling capabilities because it does not implement schedule storage or execution.
+
+### 4.7 Key Proxy Notifications
 
 ```lua
 -- Temperature update (MUST be in Celsius for proxy)
@@ -465,7 +481,7 @@ C4:SendToProxy(5001, "ALLOWED_HVAC_MODES_CHANGED", {MODES = "Off,Heat"})
 
 **CRITICAL**: The proxy expects temperatures in Celsius, even if the display scale is Fahrenheit. Always convert before sending.
 
-### 4.7 Key Proxy Commands (ReceivedFromProxy)
+### 4.8 Key Proxy Commands (ReceivedFromProxy)
 
 | Command | Parameters | Description |
 |---------|------------|-------------|
@@ -475,6 +491,7 @@ C4:SendToProxy(5001, "ALLOWED_HVAC_MODES_CHANGED", {MODES = "Off,Heat"})
 | `SET_MODE_FAN` | MODE | Set fan mode (Off/Low/Medium/High) |
 | `SET_SCALE` | SCALE | Change temperature scale |
 | `SET_PRESET` | PRESET, MODE, NAME | Set preset mode |
+| `SET_MODE_HOLD` | MODE | Set flame preset hold mode (Low/Medium/High Flame) |
 | `GET_EXTRAS_SETUP` | - | Request extras XML |
 | `GET_EXTRAS_STATE` | - | Request extras state |
 
