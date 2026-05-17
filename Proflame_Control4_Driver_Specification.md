@@ -512,6 +512,10 @@ PRs that edit static `driver.xml` capability/proxy/connection/property metadata 
 
 Runtime refreshes send the full ThermostatV2 capability snapshot, not only the field that triggered the refresh. For example, a Hold-mode refresh also republishes preset, fan, HVAC, and Extras capability state so Navigator does not retain stale mixed capability data.
 
+Use `scripts/build_restart_matrix_variants.py --start-version <future-version>` to generate isolated A/B `.c4z` packages for issue #39/#41 testing. The generated packages are not release artifacts; they are used to fill the restart matrix before simplifying static XML. Each variant removes or minimizes one candidate capability group while the runtime refresh continues to publish the corresponding capability state.
+
+Each run must use versions above any prior restart-matrix package installed on a controller. Generated packages intentionally differ from the working tree and should not be validated with `scripts/validate.sh`.
+
 ---
 
 ## 5. Extras UI System
