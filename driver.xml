@@ -9,9 +9,9 @@
   <manufacturer>SIT Group / Proflame</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051719</version>
+  <version>2026051729</version>
   <created>12/02/2025 12:00 PM</created>
-  <modified>05/17/2026 10:34 AM</modified>
+  <modified>05/17/2026 12:25 PM</modified>
   <auto_update>true</auto_update>
   <minimum_auto_update_version>1</minimum_auto_update_version>
   <proxies>
@@ -458,10 +458,8 @@
     <can_heat>True</can_heat>
     <can_cool>False</can_cool>
     <can_do_auto>False</can_do_auto>
-    <can_preset>True</can_preset>
+    <can_preset>False</can_preset>
     <can_preset_schedule>False</can_preset_schedule>
-    <preset_fields>Name</preset_fields>
-    <preset_modes>Manual,Smart,Eco</preset_modes>
     <has_outdoor_temperature>False</has_outdoor_temperature>
     <split_setpoints>False</split_setpoints>
     <setpoint_heat_min_c>15.5</setpoint_heat_min_c>

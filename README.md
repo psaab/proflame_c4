@@ -130,7 +130,7 @@ The device sends status updates as JSON with indexed status/value pairs:
   <name>Proflame WiFi Fireplace</name>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
-  <version>2026051719</version>
+  <version>2026051729</version>
   
   <proxies>
     <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
@@ -184,6 +184,9 @@ The driver treats Manual, Smart, and Eco as on states that require an active aut
 
 ### Flame Level Mode Side Effect
 `Set Flame Level` is a manual flame command. If the fireplace is in Smart, Eco, Off, or Standby, the driver switches to Manual mode before sending `flame_control`. Use mode commands when thermostat operation should be preserved.
+
+### Presets Disabled
+Thermostat Presets are disabled because Navigator did not expose them reliably for flame/timer controls. Existing Composer programming that sends `SET_PRESET` with `Manual`, `Smart`, or `Eco` still routes to the matching mode command and logs a deprecation message; new programming should use explicit mode commands or the Extras `Mode` list.
 
 ### Proxy Binding IDs
 - **5001**: Thermostat proxy (thermostatV2)
@@ -385,8 +388,7 @@ C4:SendToProxy(PROXY_ID, "ALLOWED_FAN_MODES_CHANGED", {MODES = "Off,Low,Medium,H
 
 #### Preset Mode Updates
 ```lua
-C4:SendToProxy(PROXY_ID, "PRESET_CHANGED", {PRESET = "Manual"})
-C4:SendToProxy(PROXY_ID, "PRESET_MODE_CHANGED", {MODE = "Manual"})
+C4:SendToProxy(PROXY_ID, "HOLD_MODE_CHANGED", {MODE = "Low Flame"})
 ```
 
 ### Handling Proxy Commands
