@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051702"
+DRIVER_VERSION = "2026051703"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -422,17 +422,22 @@ end
 
 function JsonEscape(value)
     value = tostring(value or "")
-    value = value:gsub("\\", "\\\\")
-    value = value:gsub('"', '\\"')
-    value = value:gsub("\b", "\\b")
-    value = value:gsub("\f", "\\f")
-    value = value:gsub("\n", "\\n")
-    value = value:gsub("\r", "\\r")
-    value = value:gsub("\t", "\\t")
-    value = value:gsub("([\0-\31])", function(c)
-        return string.format("\\u%04X", c:byte())
-    end)
-    return value
+    local result = ""
+    for i = 1, #value do
+        local c = value:sub(i, i)
+        local byte = c:byte()
+        if c == "\\" then result = result .. "\\\\"
+        elseif c == '"' then result = result .. '\\"'
+        elseif byte == 8 then result = result .. "\\b"
+        elseif byte == 12 then result = result .. "\\f"
+        elseif byte == 10 then result = result .. "\\n"
+        elseif byte == 13 then result = result .. "\\r"
+        elseif byte == 9 then result = result .. "\\t"
+        elseif byte and byte < 32 then result = result .. string.format("\\u%04X", byte)
+        else result = result .. c
+        end
+    end
+    return result
 end
 
 function JsonUnescape(value)
