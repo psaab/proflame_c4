@@ -1364,6 +1364,7 @@ function CommandTurnOn()
             UpdateExtrasState()
         end
     end, false)
+    -- If no timer will be armed, clear suppression now; no later callback will do it.
     if not defaultTimer or defaultTimer <= 0 then
         gSuppressTimerUpdates = false
     end
