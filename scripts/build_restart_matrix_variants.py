@@ -91,6 +91,9 @@ def current_version() -> int:
 
 def replace_line(text: str, tag: str, replacement: str | None) -> str:
     pattern = re.compile(rf"^[ \t]*<{tag}>.*?</{tag}>\n?", re.MULTILINE)
+    if not pattern.search(text):
+        print(f"WARNING: tag <{tag}> not found in driver.xml; variant may be a no-op.")
+        return text
     if replacement is None:
         return pattern.sub("", text)
     return pattern.sub(replacement + "\n", text)
@@ -164,6 +167,15 @@ def build_zip(files_dir: Path, package: Path, manifest_files: list[str]) -> None
     subprocess.run(["zip", "-X", "-q", str(package), *manifest_files], cwd=files_dir, check=True)
 
 
+def generated_versions(output_dir: Path) -> set[int]:
+    versions: set[int] = set()
+    for package in output_dir.glob("*.c4z"):
+        match = re.search(r"-(\d+)\.c4z$", package.name)
+        if match:
+            versions.add(int(match.group(1)))
+    return versions
+
+
 def build_variant(output_dir: Path, manifest_files: list[str], variant: Variant, version: int) -> dict[str, str]:
     with tempfile.TemporaryDirectory() as tmp:
         files_dir = Path(tmp)
@@ -217,6 +229,15 @@ def main() -> int:
     manifest_files = read_manifest()
     output_dir = (ROOT / args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    requested_versions = {args.start_version + index for index in range(len(VARIANTS))}
+    collisions = requested_versions & generated_versions(output_dir)
+    if collisions:
+        formatted = ", ".join(str(version) for version in sorted(collisions))
+        raise SystemExit(
+            "ERROR: generated package versions already exist in "
+            f"{output_dir}: {formatted}. Use --start-version above any prior "
+            "restart-matrix run that may have been installed on a controller."
+        )
 
     rows = []
     for index, variant in enumerate(VARIANTS):

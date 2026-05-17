@@ -198,7 +198,9 @@ Use `scripts/build_restart_matrix_variants.py` to generate isolated `.c4z` varia
 scripts/build_restart_matrix_variants.py --start-version 2026051801
 ```
 
-Choose a `--start-version` greater than the current checked-in driver version. The script builds packages under `dist/restart-matrix/` and writes `restart-matrix-results.csv` for recording:
+Choose a `--start-version` greater than both the current checked-in driver version and any restart-matrix package version previously installed on a controller. Reusing a version can cause Composer to reject the update or contaminate results by installing different package contents under the same version. The script refuses to overwrite versions already present in the output directory.
+
+The script builds packages under `dist/restart-matrix/` and writes `restart-matrix-results.csv` for recording:
 
 - Controller version
 - generated driver version
@@ -208,6 +210,8 @@ Choose a `--start-version` greater than the current checked-in driver version. T
 - notes/log references
 
 Do not merge generated restart-matrix packages. They are throwaway runtime-verification artifacts used to decide whether specific static XML capabilities can safely move to runtime-only publishing.
+
+Do not run `scripts/validate.sh` against generated restart-matrix packages. They intentionally differ from the working tree by version, build timestamp, and XML capability content, so the normal package-staleness check will reject them.
 
 ### Default Timer Scope
 `Default Timer (minutes)` is used only when `Turn On` explicitly starts the fireplace. Mode-only commands such as `Set Mode Manual`, `Set Mode Smart`, and `Set Mode Eco` do not apply it, and `Set Timer` uses the requested `Minutes` value instead. Because the driver requires an active timer for on states, setting Default Timer to `0` means Turn On will be forced back off after confirmed status shows no running timer.
