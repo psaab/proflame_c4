@@ -127,7 +127,7 @@ The device sends status updates as JSON with indexed status/value pairs:
 <?xml version="1.0"?>
 <devicedata>
   <copyright>Copyright 2025</copyright>
-  <n>Proflame WiFi Fireplace</n>
+  <name>Proflame WiFi Fireplace</name>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
   <version>2026051701</version>
@@ -521,7 +521,13 @@ function CreateWebSocketFrame(payload, opcode)
         frame = frame .. string.char(0x80 + 126,
             math.floor(len / 256), len % 256)
     end
-    return frame .. mask .. MaskPayload(payload, mask)
+    frame = frame .. mask
+    for i = 1, #payload do
+        local byte = payload:byte(i)
+        local maskByte = mask:byte(((i - 1) % 4) + 1)
+        frame = frame .. string.char(bit.bxor(byte, maskByte))
+    end
+    return frame
 end
 ```
 
