@@ -956,6 +956,7 @@ function Disconnect()
     gConnected = false
     gConnecting = false
     gHandshakeComplete = false
+    gStatusSeen = {}
     gReceiveBuffer = ""
     HandleConnectionEvent(false)
     C4:UpdateProperty("Connection Status", "Disconnected")
