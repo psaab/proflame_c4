@@ -110,13 +110,18 @@ Client-to-server frames MUST be masked. Server-to-client frames are NOT masked.
 
 #### Command Format (Client -> Device)
 ```json
+{"command":"set_control","name":"<parameter>","value":"<value>"}
+```
+
+During command-format migration, the driver sends the documented `set_control` message first and then sends a legacy indexed fallback:
+
+```json
 {"control0":"<parameter>","value0":"<value>"}
 ```
 
-Multiple parameters in one message:
-```json
-{"control0":"<param1>","value0":"<val1>","control1":"<param2>","value1":"<val2>"}
-```
+The fallback should be removed after real-device testing proves which format is accepted across supported Proflame firmware versions.
+
+The driver sends one control per message. Multi-control writes should be sent as separate no-space JSON messages.
 
 #### Status Format (Device -> Client)
 ```json
@@ -176,7 +181,7 @@ To encode: `value = temperature_F * 10`
 
 ### 2.10 Complete Parameter Reference
 
-#### Controllable Parameters (control0)
+#### Controllable Parameters (`name`)
 
 | Parameter | Values | Description |
 |-----------|--------|-------------|
@@ -1182,11 +1187,11 @@ end, false)
 **Solution**: Build JSON strings directly without formatting
 
 ```lua
--- WRONG
-local cmd = '{ "control0": "main_mode", "value0": "5" }'
+-- WRONG: spaces
+local cmd = '{ "command": "set_control", "name": "main_mode", "value": "5" }'
 
 -- CORRECT
-local cmd = '{"control0":"main_mode","value0":"5"}'
+local cmd = '{"command":"set_control","name":"main_mode","value":"5"}'
 ```
 
 ### 10.4 Throttle Race Conditions
@@ -1300,13 +1305,13 @@ end, false)
 
 | Command | Value | Description |
 |---------|-------|-------------|
-| `{"control0":"main_mode","value0":"0"}` | 0,1,5,6,7 | Set operating mode |
-| `{"control0":"flame_control","value0":"3"}` | 1-6 | Set flame level |
-| `{"control0":"fan_control","value0":"2"}` | 0-6 | Set fan speed |
-| `{"control0":"lamp_control","value0":"4"}` | 0-6 | Set lamp level |
-| `{"control0":"temperature_set","value0":"700"}` | 600-900 | Set temp (Fx10) |
-| `{"control0":"timer_set","value0":"3600000"}` | ms | Set timer duration |
-| `{"control0":"timer_status","value0":"1"}` | 0,1 | Start/stop timer |
+| `{"command":"set_control","name":"main_mode","value":"0"}` | 0,1,5,6,7 | Set operating mode |
+| `{"command":"set_control","name":"flame_control","value":"3"}` | 1-6 | Set flame level |
+| `{"command":"set_control","name":"fan_control","value":"2"}` | 0-6 | Set fan speed |
+| `{"command":"set_control","name":"lamp_control","value":"4"}` | 0-6 | Set lamp level |
+| `{"command":"set_control","name":"temperature_set","value":"700"}` | 600-900 | Set temp (Fx10) |
+| `{"command":"set_control","name":"timer_set","value":"3600000"}` | ms | Set timer duration |
+| `{"command":"set_control","name":"timer_status","value":"1"}` | 0,1 | Start/stop timer |
 | `PROFLAMECONNECTION` | - | Initial connection announcement |
 | `PROFLAMEPING` | - | Keep-alive ping |
 
@@ -1467,7 +1472,8 @@ function JsonEncode(tbl) ... end
 function JsonDecode(str) ... end
 
 -- Helper Functions
-function MakeCommand(control, value) ... end
+function BuildSetControlCommand(control, value) ... end
+function BuildLegacyIndexedCommand(control, value) ... end
 function DecodeTemperature(encoded) ... end
 function FahrenheitToCelsius(f) ... end
 

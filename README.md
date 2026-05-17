@@ -498,11 +498,13 @@ end
 
 ### JSON Command Builder
 ```lua
-function MakeCommand(control, value)
+function BuildSetControlCommand(control, value)
     -- NO SPACES - Critical for Proflame protocol
     return '{"command":"set_control","name":"' .. control .. '","value":"' .. tostring(value) .. '"}'
 end
 ```
+
+During command-format migration, the driver also sends a legacy indexed fallback (`{"control0":"...","value0":"..."}`) after the documented `set_control` message. Remove the fallback after real-device testing confirms the accepted format.
 
 ### WebSocket Frame Builder
 ```lua
