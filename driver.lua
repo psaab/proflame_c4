@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051708"
+DRIVER_VERSION = "2026051709"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -1007,17 +1007,56 @@ function SendPong(payload)
     return true
 end
 
-function SendDeviceControl(control, value)
+function SendDocumentedDeviceControl(control, value, context)
     if not gConnected or not gHandshakeComplete then
         dbg_err("Refusing device command while disconnected or handshaking: " .. tostring(control) .. "=" .. tostring(value))
         return false
     end
     local cmd = BuildSetControlCommand(control, value)
-    dbg_err("Sending command: " .. cmd)
-    local sentPrimary = SendWebSocketMessage(cmd)
+    if context then
+        dbg_err("Sending " .. tostring(context) .. " command: " .. cmd)
+    else
+        dbg_err("Sending command: " .. cmd)
+    end
+    return SendWebSocketMessage(cmd)
+end
+
+function SendLegacyDeviceControl(control, value, context)
+    if not gConnected or not gHandshakeComplete then
+        dbg_err("Refusing device command while disconnected or handshaking: " .. tostring(control) .. "=" .. tostring(value))
+        return false
+    end
     local legacyCmd = BuildLegacyIndexedCommand(control, value)
-    dbg_err("Sending legacy command fallback: " .. legacyCmd)
-    local sentLegacy = SendWebSocketMessage(legacyCmd)
+    if context then
+        dbg_err("Sending " .. tostring(context) .. " legacy command: " .. legacyCmd)
+    else
+        dbg_err("Sending legacy command fallback: " .. legacyCmd)
+    end
+    return SendWebSocketMessage(legacyCmd)
+end
+
+function SendDeviceControl(control, value)
+    local sentPrimary = SendDocumentedDeviceControl(control, value)
+    local sentLegacy = SendLegacyDeviceControl(control, value)
+    return sentPrimary or sentLegacy
+end
+
+function SendTurnOffDeviceControl(control, value)
+    local format = Properties["Turn Off Command Format"] or "Dual (Documented First)"
+    dbg_err("Turn Off command format " .. tostring(format) .. ": " .. tostring(control) .. "=" .. tostring(value))
+
+    if format == "Legacy Only" then
+        return SendLegacyDeviceControl(control, value, "turn off")
+    elseif format == "Documented Only" then
+        return SendDocumentedDeviceControl(control, value, "turn off")
+    elseif format == "Dual (Legacy First)" then
+        local sentLegacy = SendLegacyDeviceControl(control, value, "turn off")
+        local sentPrimary = SendDocumentedDeviceControl(control, value, "turn off")
+        return sentLegacy or sentPrimary
+    end
+
+    local sentPrimary = SendDocumentedDeviceControl(control, value, "turn off")
+    local sentLegacy = SendLegacyDeviceControl(control, value, "turn off")
     return sentPrimary or sentLegacy
 end
 
@@ -1489,6 +1528,8 @@ function OnPropertyChanged(strProperty)
         if (Properties["IP Address"] or "") ~= "" then
             C4:SetTimer(500, function() Connect() end, false)
         end
+    elseif strProperty == "Turn Off Command Format" then
+        dbg_err("Turn Off Command Format set to: " .. tostring(Properties["Turn Off Command Format"]))
     elseif strProperty == "Debug Mode" then
         gDebugEnabled = (Properties["Debug Mode"] == "On")
     elseif strProperty == "Debug Level" then
@@ -1658,9 +1699,9 @@ end
 
 function SendTurnOffControls(reason)
     dbg_err("Sending Proflame-app turn off controls: " .. tostring(reason))
-    local sent = SendDeviceControl("timer_status", "0")
-    sent = SendDeviceControl("flame_control", "0") or sent
-    sent = SendDeviceControl("main_mode", MODE_STANDBY_ALT) or sent
+    local sent = SendTurnOffDeviceControl("timer_status", "0")
+    sent = SendTurnOffDeviceControl("flame_control", "0") or sent
+    sent = SendTurnOffDeviceControl("main_mode", MODE_STANDBY_ALT) or sent
     return sent
 end
 
