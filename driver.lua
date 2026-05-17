@@ -44,6 +44,18 @@ if gReconnectTimerId then
     pcall(function() gReconnectTimerId:Cancel() end)
     gReconnectTimerId = nil
 end
+if gTimerModeDelayTimer then
+    pcall(function() gTimerModeDelayTimer:Cancel() end)
+    gTimerModeDelayTimer = nil
+end
+if gTimerStartDelayTimer then
+    pcall(function() gTimerStartDelayTimer:Cancel() end)
+    gTimerStartDelayTimer = nil
+end
+if gTimerSuppressClearTimer then
+    pcall(function() gTimerSuppressClearTimer:Cancel() end)
+    gTimerSuppressClearTimer = nil
+end
 
 -- Force disconnect if we were connected
 if gConnected then
@@ -160,6 +172,9 @@ gHandshakeComplete = false
 gReceiveBuffer = ""
 gPingTimerId = nil
 gReconnectTimerId = nil
+gTimerModeDelayTimer = nil
+gTimerStartDelayTimer = nil
+gTimerSuppressClearTimer = nil
 gWebSocketKey = nil
 gDebugLevel = DEBUG_DEBUG
 gDebugEnabled = true
@@ -1270,6 +1285,50 @@ function GetCommandParam(tParams, ...)
     return nil
 end
 
+function CancelPendingTimerCommandTimers()
+    if gTimerModeDelayTimer then
+        gTimerModeDelayTimer:Cancel()
+        gTimerModeDelayTimer = nil
+    end
+    if gTimerStartDelayTimer then
+        gTimerStartDelayTimer:Cancel()
+        gTimerStartDelayTimer = nil
+    end
+    if gTimerSuppressClearTimer then
+        gTimerSuppressClearTimer:Cancel()
+        gTimerSuppressClearTimer = nil
+    end
+end
+
+function ScheduleTimerSuppressionClear()
+    if gTimerSuppressClearTimer then
+        gTimerSuppressClearTimer:Cancel()
+        gTimerSuppressClearTimer = nil
+    end
+    gTimerSuppressClearTimer = C4:SetTimer(2000, function(timer)
+        gTimerSuppressClearTimer = nil
+        gSuppressTimerUpdates = false
+        dbg_err("Timer suppression cleared")
+    end, false)
+end
+
+function ClearTimerStateAndSend(turnOff)
+    CancelPendingTimerCommandTimers()
+    gSuppressTimerUpdates = true
+    gState.timer_set = "0"
+    gState.timer_count = "0"
+    gState.timer_status = "0"
+    C4:UpdateProperty("Timer Remaining", "Off")
+    SendProflameCommand("timer_status", "0")
+    SendProflameCommand("timer_set", "0")
+    if turnOff then
+        SendProflameCommand("main_mode", MODE_OFF)
+    end
+    UpdateTimerExtras()
+    ScheduleTimerSuppressionClear()
+    return true
+end
+
 function CommandSetMode(mode)
     if mode == MODE_OFF or mode == MODE_MANUAL or mode == MODE_SMART or mode == MODE_ECO then
         SendProflameCommand("main_mode", mode)
@@ -1280,29 +1339,27 @@ function CommandSetMode(mode)
 end
 
 function CommandTurnOff()
-    gState.timer_set = "0"
-    gState.timer_count = "0"
-    gState.timer_status = "0"
-    C4:UpdateProperty("Timer Remaining", "Off")
-    SendProflameCommand("timer_status", "0")
-    SendProflameCommand("timer_set", "0")
-    SendProflameCommand("main_mode", MODE_OFF)
-    UpdateTimerExtras()
-    return true
+    return ClearTimerStateAndSend(true)
 end
 
 function CommandTurnOn()
+    CancelPendingTimerCommandTimers()
     SendProflameCommand("main_mode", GetDefaultOnMode())
     local defaultFlame = GetDefaultFlameLevel()
     local defaultTimer = GetDefaultTimerMinutes()
-    C4:SetTimer(750, function(timer)
+    gTimerModeDelayTimer = C4:SetTimer(750, function(timer)
+        gTimerModeDelayTimer = nil
         SendProflameCommand("flame_control", tostring(defaultFlame))
         if defaultTimer and defaultTimer > 0 then
             local msValue = defaultTimer * 60000
+            gSuppressTimerUpdates = true
+            gTimerExpired = false
             SendProflameCommand("timer_set", tostring(msValue))
             gState.timer_set = tostring(msValue)
-            C4:SetTimer(200, function(timer2)
+            gTimerStartDelayTimer = C4:SetTimer(200, function(timer2)
+                gTimerStartDelayTimer = nil
                 SendProflameCommand("timer_status", "1")
+                ScheduleTimerSuppressionClear()
             end, false)
             UpdateExtrasState()
         end
@@ -1399,6 +1456,7 @@ function CommandSetTimerMinutes(minutes)
     end
 
     dbg_err("CommandSetTimerMinutes: " .. tostring(minutes) .. " minutes, current mode: " .. tostring(gState.main_mode))
+    CancelPendingTimerCommandTimers()
     gSuppressTimerUpdates = true
     gTimerExpired = false
 
@@ -1412,56 +1470,35 @@ function CommandSetTimerMinutes(minutes)
             dbg_err("Fireplace is off, turning on with timer")
             SendProflameCommand("main_mode", GetDefaultOnMode())
             local defaultFlame = GetDefaultFlameLevel()
-            C4:SetTimer(750, function(timer)
+            gTimerModeDelayTimer = C4:SetTimer(750, function(timer)
+                gTimerModeDelayTimer = nil
                 SendProflameCommand("flame_control", tostring(defaultFlame))
                 SendProflameCommand("timer_set", tostring(msValue))
-                C4:SetTimer(200, function(timer2)
+                gTimerStartDelayTimer = C4:SetTimer(200, function(timer2)
+                    gTimerStartDelayTimer = nil
                     SendProflameCommand("timer_status", "1")
-                    C4:SetTimer(2000, function(timer3)
-                        gSuppressTimerUpdates = false
-                        dbg_err("Timer suppression cleared")
-                    end, false)
+                    ScheduleTimerSuppressionClear()
                 end, false)
                 UpdateTimerExtras()
             end, false)
         else
             SendProflameCommand("timer_set", tostring(msValue))
-            C4:SetTimer(200, function(timer)
+            gTimerStartDelayTimer = C4:SetTimer(200, function(timer)
+                gTimerStartDelayTimer = nil
                 SendProflameCommand("timer_status", "1")
-                C4:SetTimer(2000, function(timer2)
-                    gSuppressTimerUpdates = false
-                    dbg_err("Timer suppression cleared")
-                end, false)
+                ScheduleTimerSuppressionClear()
             end, false)
             UpdateTimerExtras()
         end
     else
         dbg_err("Timer set to 0, turning off fireplace")
-        gState.timer_set = "0"
-        gState.timer_count = "0"
-        gState.timer_status = "0"
-        C4:UpdateProperty("Timer Remaining", "Off")
-        SendProflameCommand("timer_status", "0")
-        SendProflameCommand("timer_set", "0")
-        SendProflameCommand("main_mode", MODE_OFF)
-        UpdateTimerExtras()
-        C4:SetTimer(2000, function(timer)
-            gSuppressTimerUpdates = false
-            dbg_err("Timer suppression cleared")
-        end, false)
+        return ClearTimerStateAndSend(true)
     end
     return true
 end
 
 function CommandCancelTimer()
-    gState.timer_set = "0"
-    gState.timer_count = "0"
-    gState.timer_status = "0"
-    C4:UpdateProperty("Timer Remaining", "Off")
-    SendProflameCommand("timer_status", "0")
-    SendProflameCommand("timer_set", "0")
-    UpdateTimerExtras()
-    return true
+    return ClearTimerStateAndSend(false)
 end
 
 function ExecuteCommand(strCommand, tParams)
@@ -1713,6 +1750,7 @@ function ResetDriverState()
     -- Cancel any pending timers
     StopPingTimer()
     StopReconnectTimer()
+    CancelPendingTimerCommandTimers()
     
     -- Reset device state
     gState = {
@@ -1802,6 +1840,7 @@ function OnDriverDestroyed()
     dbg_err("OnDriverDestroyed - cleaning up")
     StopPingTimer()
     StopReconnectTimer()
+    CancelPendingTimerCommandTimers()
     Disconnect()
 end
 
@@ -1812,6 +1851,7 @@ function OnDriverUpdated()
     -- Clean up old state
     StopPingTimer()
     StopReconnectTimer()
+    CancelPendingTimerCommandTimers()
     Disconnect()
     
     -- Reset state
