@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051724 (2026-05-17)
+- **Driver Version**: 2026051723 (2026-05-17)
 
 ---
 
@@ -1037,7 +1037,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051724</version>
+  <version>2026051723</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1477,7 +1477,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051724"
+DRIVER_VERSION = "2026051723"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1580,7 +1580,6 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 2026051724 | 2026-05-17 | Refresh Presets capabilities at runtime so Navigator exposes flame/timer preset menu |
 | 2026051723 | 2026-05-17 | Added Presets entries for 10-minute timer decrease/increase with 0-240 minute clamp |
 | 2026051722 | 2026-05-17 | Moved flame height presets from thermostat Hold to thermostat Presets |
 | 2026051721 | 2026-05-17 | Refresh custom flame hold-mode capability list before sending current hold-mode value |

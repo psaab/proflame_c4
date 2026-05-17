@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051724"
+DRIVER_VERSION = "2026051723"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -38,7 +38,6 @@ DEFAULT_FLAME_LEVEL = 6
 DEFAULT_TIMER_MINUTES = 180
 TIMER_PRESET_DECREASE = "Timer -10m"
 TIMER_PRESET_INCREASE = "Timer +10m"
-PRESET_MODES = "Low Flame,Medium Flame,High Flame,Timer -10m,Timer +10m"
 
 -- Debug levels
 DEBUG_ERROR = 1
@@ -114,7 +113,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260517-112539"
+BUILD_TIMESTAMP = "20260517-111055"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -1083,7 +1082,6 @@ function UpdateAllProxies()
     -- Send allowed modes first
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "ALLOWED_FAN_MODES_CHANGED", { MODES = "Off,Low,Medium,High" })
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "ALLOWED_HVAC_MODES_CHANGED", { MODES = "Off,Heat" })
-    UpdatePresetCapabilities()
     
     UpdateThermostatProxy()
     UpdateThermostatSetpoint()
@@ -1095,16 +1093,6 @@ function UpdateAllProxies()
     
     -- Also send extras setup when proxies update
     SetupExtras()
-end
-
-function UpdatePresetCapabilities()
-    C4:SendToProxy(THERMOSTAT_PROXY_ID, "DYNAMIC_CAPABILITIES_CHANGED", {
-        CAN_PRESET = "True",
-        CAN_PRESET_SCHEDULE = "False",
-        PRESET_MODES = PRESET_MODES,
-        PRESET_FIELDS = "Name"
-    })
-    dbg_err("Preset capabilities refreshed: " .. PRESET_MODES)
 end
 
 function UpdateRoomTemperatureProperty()
@@ -2483,7 +2471,6 @@ function InitializePropertiesFromState()
     C4:UpdateProperty("Burner Status", string.format("0x%04X", burnerNum))
     C4:UpdateProperty("WiFi Signal Strength", "-" .. gState.wifi_signal_str .. " dBm")
     UpdateThermostatSetpoint()
-    UpdatePresetCapabilities()
     UpdateFlamePresetMode()
 end
 
