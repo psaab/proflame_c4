@@ -736,7 +736,7 @@ end
 
 ### 6.8 Auto-Timer on Turn-On
 
-When explicitly turning on the fireplace, automatically set timer and flame. Mode-only changes such as selecting Manual, Smart, or Eco do not change flame or timer values.
+When explicitly turning on the fireplace, automatically set timer and flame. Mode-only changes such as selecting Manual, Smart, or Eco send only the mode command; the driver does not adjust flame or timer values.
 
 ```lua
 -- In SET_MODE_HVAC handler when mode == "Heat":

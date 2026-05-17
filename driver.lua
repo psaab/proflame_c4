@@ -1280,7 +1280,15 @@ function CommandSetMode(mode)
 end
 
 function CommandTurnOff()
-    return CommandSetMode(MODE_OFF)
+    gState.timer_set = "0"
+    gState.timer_count = "0"
+    gState.timer_status = "0"
+    C4:UpdateProperty("Timer Remaining", "Off")
+    SendProflameCommand("timer_status", "0")
+    SendProflameCommand("timer_set", "0")
+    SendProflameCommand("main_mode", MODE_OFF)
+    UpdateTimerExtras()
+    return true
 end
 
 function CommandTurnOn()
@@ -1446,7 +1454,14 @@ function CommandSetTimerMinutes(minutes)
 end
 
 function CommandCancelTimer()
-    return CommandSetTimerMinutes(0)
+    gState.timer_set = "0"
+    gState.timer_count = "0"
+    gState.timer_status = "0"
+    C4:UpdateProperty("Timer Remaining", "Off")
+    SendProflameCommand("timer_status", "0")
+    SendProflameCommand("timer_set", "0")
+    UpdateTimerExtras()
+    return true
 end
 
 function ExecuteCommand(strCommand, tParams)
