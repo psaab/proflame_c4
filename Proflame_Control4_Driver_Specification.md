@@ -1382,6 +1382,8 @@ end, false)
 
 ## 12. Testing Checklist
 
+For PRs that change command behavior, run the shorter Composer Command Smoke Test in `README.md` and paste the results into the PR. Use the broader checklist below for release validation and larger driver changes.
+
 ### 12.1 Connection Tests
 
 - [ ] Driver connects on IP address entry

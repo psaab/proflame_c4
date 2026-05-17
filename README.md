@@ -472,6 +472,21 @@ scripts/package.sh [path/to/proflame_wifi_connect.c4z]
 
 Both scripts read the package file list from `scripts/manifest.txt`. The packager normalizes ZIP entry timestamps so repeated rebuilds produce byte-identical archives when the source files are unchanged. The validator checks `driver.xml` with `xmllint`, verifies required source/package files, confirms the `.c4z` contains only the expected driver files, and fails if packaged source files are stale relative to the working tree. The same validation and deterministic rebuild check run in GitHub Actions on pushes to `main` and on pull requests.
 
+### Composer Command Smoke Test
+
+Run this checklist in Composer Pro before merging PRs that change command behavior. Paste the completed checklist, controller version, driver version, and any skipped items into the PR.
+
+- [ ] Turn On applies Default On Mode, Default Flame Level, and Default Timer.
+- [ ] Turn Off turns the fireplace off and clears the Extras timer display.
+- [ ] Set Mode Manual, Smart, and Eco change only the driver-requested mode; flame and timer are not adjusted by the driver.
+- [ ] Set Flame Level switches to Manual if needed and applies the requested flame level.
+- [ ] Set Fan Level applies the requested fan level.
+- [ ] Set Light Level applies the requested light level.
+- [ ] Set Timer while off turns the fireplace on and starts countdown.
+- [ ] Cancel Timer clears timer state without directly changing fireplace mode.
+- [ ] Extras mode, flame, fan, light, and timer controls round-trip after the command change.
+- [ ] If a case cannot be tested, note the reason explicitly in the PR.
+
 ### 1. Proflame Protocol
 - **No spaces in JSON** - Commands with spaces are silently ignored
 - **Temperature encoding** - Always multiply/divide by 10
