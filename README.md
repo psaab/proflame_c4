@@ -130,7 +130,7 @@ The device sends status updates as JSON with indexed status/value pairs:
   <name>Proflame WiFi Fireplace</name>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
-  <version>2026051721</version>
+  <version>2026051722</version>
   
   <proxies>
     <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
@@ -385,8 +385,7 @@ C4:SendToProxy(PROXY_ID, "ALLOWED_FAN_MODES_CHANGED", {MODES = "Off,Low,Medium,H
 
 #### Preset Mode Updates
 ```lua
-C4:SendToProxy(PROXY_ID, "PRESET_CHANGED", {PRESET = "Manual"})
-C4:SendToProxy(PROXY_ID, "PRESET_MODE_CHANGED", {MODE = "Manual"})
+C4:SendToProxy(PROXY_ID, "HOLD_MODE_CHANGED", {MODE = "Low Flame"})
 ```
 
 ### Handling Proxy Commands

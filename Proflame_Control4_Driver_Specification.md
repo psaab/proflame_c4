@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051721 (2026-05-17)
+- **Driver Version**: 2026051722 (2026-05-17)
 
 ---
 
@@ -407,9 +407,8 @@ end
   <has_fan_mode>True</has_fan_mode>
   <can_change_fan_modes>True</can_change_fan_modes>
   <fan_modes>Off,Low,Medium,High</fan_modes>
-  <can_preset>True</can_preset>
+  <can_preset>False</can_preset>
   <can_preset_schedule>False</can_preset_schedule>
-  <preset_modes>Manual,Smart,Eco</preset_modes>
   <scheduling>False</scheduling>
   <can_schedule>False</can_schedule>
   <hold_modes>Low Flame,Medium Flame,High Flame</hold_modes>
@@ -434,13 +433,9 @@ Fan speed is mapped to standard thermostat fan modes:
 | 3-4 | Medium |
 | 5-6 | High |
 
-### 4.5 Preset Modes (Operating Modes)
+### 4.5 Presets Disabled
 
-| Preset | Proflame Mode | Description |
-|--------|---------------|-------------|
-| Manual | 5 | Direct flame control |
-| Smart | 6 | Temperature-controlled |
-| Eco | 7 | Energy-saving thermostat |
+Thermostat Presets are disabled because Navigator did not expose this menu reliably for tap-based flame/timer controls. Operating modes remain available through the Extras `Mode` list.
 
 ### 4.6 Hold Modes (Flame Presets)
 
@@ -477,8 +472,7 @@ C4:SendToProxy(5001, "SINGLE_SETPOINT_CHANGED", {SETPOINT = tempC, SCALE = "C"})
 C4:SendToProxy(5001, "FAN_MODE_CHANGED", {MODE = "Low"})
 
 -- Preset/operating mode change
-C4:SendToProxy(5001, "PRESET_CHANGED", {PRESET = "Manual"})
-C4:SendToProxy(5001, "PRESET_MODE_CHANGED", {MODE = "Manual"})
+C4:SendToProxy(5001, "HOLD_MODE_CHANGED", {MODE = "Low Flame"})
 
 -- Allowed modes (send on connect)
 C4:SendToProxy(5001, "ALLOWED_FAN_MODES_CHANGED", {MODES = "Off,Low,Medium,High"})
@@ -496,7 +490,6 @@ C4:SendToProxy(5001, "ALLOWED_HVAC_MODES_CHANGED", {MODES = "Off,Heat"})
 | `SET_SETPOINT_SINGLE` | SETPOINT | Set single setpoint |
 | `SET_MODE_FAN` | MODE | Set fan mode (Off/Low/Medium/High) |
 | `SET_SCALE` | SCALE | Change temperature scale |
-| `SET_PRESET` | PRESET, MODE, NAME | Set preset mode |
 | `SET_MODE_HOLD` | MODE | Set flame preset hold mode (Low/Medium/High Flame) |
 | `GET_EXTRAS_SETUP` | - | Request extras XML |
 | `GET_EXTRAS_STATE` | - | Request extras state |
@@ -1042,7 +1035,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051721</version>
+  <version>2026051722</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1372,7 +1365,6 @@ Manual command-format verification should exercise `main_mode`, `flame_control`,
 | `SET_SETPOINT_SINGLE` | SETPOINT | Set single setpoint |
 | `SET_MODE_FAN` | MODE | Set fan mode (Off/Low/Medium/High) |
 | `SET_SCALE` | SCALE | Change temperature scale |
-| `SET_PRESET` | PRESET, MODE, NAME | Set preset mode |
 | `GET_EXTRAS_SETUP` | - | Request extras XML |
 | `GET_EXTRAS_STATE` | - | Request extras state |
 | `SELECT_MODE` | VALUE | Select mode from extras (manual/smart/eco) |
@@ -1391,8 +1383,6 @@ Manual command-format verification should exercise `main_mode`, `flame_control`,
 | `HEAT_SETPOINT_CHANGED` | SETPOINT, SCALE | Update setpoint (Celsius) |
 | `SINGLE_SETPOINT_CHANGED` | SETPOINT, SCALE | Update single setpoint |
 | `FAN_MODE_CHANGED` | MODE | Update fan mode |
-| `PRESET_CHANGED` | PRESET | Update preset mode |
-| `PRESET_MODE_CHANGED` | MODE | Update preset mode (alternate) |
 | `ALLOWED_FAN_MODES_CHANGED` | MODES | Set available fan modes |
 | `ALLOWED_HVAC_MODES_CHANGED` | MODES | Set available HVAC modes |
 | `EXTRAS_SETUP_CHANGED` | XML | Update extras UI |
@@ -1482,7 +1472,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051721"
+DRIVER_VERSION = "2026051722"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1565,7 +1555,6 @@ function UpdateThermostatSetpoint() ... end
 function UpdateRoomTemperature() ... end
 function UpdateFanMode() ... end
 function UpdateFlameLevel() ... end
-function UpdatePresetMode() ... end
 
 -- Callbacks
 function OnDriverInit() ... end
@@ -1585,6 +1574,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026051722 | 2026-05-17 | Disabled thermostat Presets menu and restored Hold menu as flame height control |
 | 2026051721 | 2026-05-17 | Refresh custom flame hold-mode capability list before sending current hold-mode value |
 | 2026051720 | 2026-05-17 | Initialize flame preset hold-mode display so the app control is labeled before status echoes |
 | 2026051719 | 2026-05-17 | Documented firmware scope for the Legacy Only default |
