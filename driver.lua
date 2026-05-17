@@ -181,6 +181,7 @@ gReconnectTimerId = nil
 gTimerModeDelayTimer = nil
 gTimerStartDelayTimer = nil
 gTimerSuppressClearTimer = nil
+gTurnOffConfirmTimer = nil
 gWebSocketKey = nil
 gDebugLevel = DEBUG_DEBUG
 gDebugEnabled = true
@@ -955,6 +956,7 @@ end
 function Disconnect()
     StopPingTimer()
     CancelPendingTimerCommandTimers()
+    CancelTurnOffConfirmTimer()
     if gSuppressTimerUpdates then
         SetTimerSuppression(false, "disconnect")
     end
@@ -1615,6 +1617,13 @@ function CancelTimerSuppressionClear()
     end
 end
 
+function CancelTurnOffConfirmTimer()
+    if gTurnOffConfirmTimer then
+        gTurnOffConfirmTimer:Cancel()
+        gTurnOffConfirmTimer = nil
+    end
+end
+
 function SetTimerSuppression(enabled, reason)
     CancelTimerSuppressionClear()
     gSuppressTimerUpdates = enabled
@@ -1649,10 +1658,12 @@ end
 function ClearTimerStateAndSend(turnOff)
     if not RequireDeviceCommandReady(turnOff and "Turn Off" or "Cancel Timer") then return false end
     CancelPendingTimerCommandTimers()
+    CancelTurnOffConfirmTimer()
     SetTimerSuppression(true, "clearing timer")
     local sent = SendDeviceControl("timer_status", "0")
     sent = SendDeviceControl("timer_set", "0") or sent
     if turnOff then
+        sent = SendDeviceControl("flame_control", "0") or sent
         sent = SendDeviceControl("main_mode", MODE_OFF) or sent
     end
     if not sent then
@@ -1662,6 +1673,17 @@ function ClearTimerStateAndSend(turnOff)
     gState.timer_set = "0"
     gState.timer_count = "0"
     gState.timer_status = "0"
+    if turnOff then
+        gState.flame_control = "0"
+        UpdatePropertiesForStatus({ status = "flame_control", value = "0" })
+        gTurnOffConfirmTimer = C4:SetTimer(750, function(timer)
+            gTurnOffConfirmTimer = nil
+            if RequireDeviceCommandReady("Turn Off confirm") then
+                SendDeviceControl("flame_control", "0")
+                SendDeviceControl("main_mode", MODE_OFF)
+            end
+        end, false)
+    end
     C4:UpdateProperty("Timer Remaining", "Off")
     UpdateTimerExtras()
     ScheduleTimerSuppressionClear()
@@ -2164,6 +2186,7 @@ function ResetDriverState()
     StopPingTimer()
     StopReconnectTimer()
     CancelPendingTimerCommandTimers()
+    CancelTurnOffConfirmTimer()
     
     -- Reset device state
     gState = {
@@ -2254,6 +2277,7 @@ function OnDriverDestroyed()
     StopPingTimer()
     StopReconnectTimer()
     CancelPendingTimerCommandTimers()
+    CancelTurnOffConfirmTimer()
     Disconnect()
 end
 
@@ -2265,6 +2289,7 @@ function OnDriverUpdated()
     StopPingTimer()
     StopReconnectTimer()
     CancelPendingTimerCommandTimers()
+    CancelTurnOffConfirmTimer()
     Disconnect()
     
     -- Reset state
