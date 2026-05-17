@@ -736,13 +736,13 @@ end
 
 ### 6.8 Auto-Timer on Turn-On
 
-When turning on the fireplace, automatically set timer and flame:
+When explicitly turning on the fireplace, automatically set timer and flame. Mode-only changes such as selecting Manual, Smart, or Eco do not change flame or timer values.
 
 ```lua
 -- In SET_MODE_HVAC handler when mode == "Heat":
 SendProflameCommand("main_mode", GetDefaultOnMode())
-local defaultFlame = tonumber(Properties["Default Flame Level"]) or 3
-local defaultTimer = tonumber(Properties["Default Timer (minutes)"]) or 120
+local defaultFlame = tonumber(Properties["Default Flame Level"]) or 6
+local defaultTimer = tonumber(Properties["Default Timer (minutes)"]) or 180
 C4:SetTimer(750, function()
     SendProflameCommand("flame_control", tostring(defaultFlame))
     if defaultTimer > 0 then
@@ -1398,7 +1398,7 @@ end, false)
 - [ ] Default On Mode is applied when turning on
 - [ ] Default Flame Level is applied when turning on
 - [ ] Default Timer is started when turning on
-- [ ] Mode changes from extras apply default timer
+- [ ] Mode changes from extras do not change flame or timer
 
 ### 12.7 Driver Update Tests
 

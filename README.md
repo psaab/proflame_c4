@@ -283,10 +283,10 @@ When a user interacts with an extras control, the driver receives commands via `
 function ReceivedFromProxy(idBinding, strCommand, tParams)
     if strCommand == "SELECT_MODE" then
         local value = tParams["VALUE"] or tParams["value"]
-        -- Handle mode selection
+        -- Handle mode selection only; do not change flame or timer
     elseif strCommand == "SET_FLAME_LEVEL" then
         local value = tonumber(tParams["VALUE"] or tParams["value"])
-        -- Handle slider change
+        -- Handle slider change; this switches to Manual mode if needed
     end
 end
 ```

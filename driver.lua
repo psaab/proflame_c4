@@ -20,6 +20,9 @@ MODE_MANUAL = "5"
 MODE_SMART = "6"
 MODE_ECO = "7"
 
+DEFAULT_FLAME_LEVEL = 6
+DEFAULT_TIMER_MINUTES = 180
+
 -- Debug levels
 DEBUG_ERROR = 1
 DEBUG_WARN = 2
@@ -411,6 +414,14 @@ function GetDefaultOnMode()
     else
         return MODE_MANUAL
     end
+end
+
+function GetDefaultFlameLevel()
+    return ClampNumber(Properties["Default Flame Level"], 1, 6, DEFAULT_FLAME_LEVEL)
+end
+
+function GetDefaultTimerMinutes()
+    return ClampNumber(Properties["Default Timer (minutes)"], 0, 480, DEFAULT_TIMER_MINUTES)
 end
 
 function GenerateRandomBytes(count)
@@ -1260,7 +1271,7 @@ function GetCommandParam(tParams, ...)
 end
 
 function CommandSetMode(mode)
-    if mode == MODE_OFF or mode == MODE_STANDBY or mode == MODE_MANUAL or mode == MODE_SMART or mode == MODE_ECO then
+    if mode == MODE_OFF or mode == MODE_MANUAL or mode == MODE_SMART or mode == MODE_ECO then
         SendProflameCommand("main_mode", mode)
         return true
     end
@@ -1274,8 +1285,8 @@ end
 
 function CommandTurnOn()
     SendProflameCommand("main_mode", GetDefaultOnMode())
-    local defaultFlame = ClampNumber(Properties["Default Flame Level"], 1, 6, 3)
-    local defaultTimer = ClampNumber(Properties["Default Timer (minutes)"], 0, 480, 120)
+    local defaultFlame = GetDefaultFlameLevel()
+    local defaultTimer = GetDefaultTimerMinutes()
     C4:SetTimer(750, function(timer)
         SendProflameCommand("flame_control", tostring(defaultFlame))
         if defaultTimer and defaultTimer > 0 then
@@ -1392,7 +1403,7 @@ function CommandSetTimerMinutes(minutes)
         if gState.main_mode == MODE_OFF or gState.main_mode == MODE_STANDBY then
             dbg_err("Fireplace is off, turning on with timer")
             SendProflameCommand("main_mode", GetDefaultOnMode())
-            local defaultFlame = ClampNumber(Properties["Default Flame Level"], 1, 6, 3)
+            local defaultFlame = GetDefaultFlameLevel()
             C4:SetTimer(750, function(timer)
                 SendProflameCommand("flame_control", tostring(defaultFlame))
                 SendProflameCommand("timer_set", tostring(msValue))

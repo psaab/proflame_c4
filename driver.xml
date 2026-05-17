@@ -215,19 +215,19 @@
       </command>
       <command>
         <name>Set Mode Manual</name>
-        <description>Set fireplace to Manual mode</description>
+        <description>Set fireplace to Manual mode without changing flame or timer</description>
       </command>
       <command>
         <name>Set Mode Smart</name>
-        <description>Set fireplace to Smart thermostat mode</description>
+        <description>Set fireplace to Smart thermostat mode without changing flame or timer</description>
       </command>
       <command>
         <name>Set Mode Eco</name>
-        <description>Set fireplace to Eco thermostat mode</description>
+        <description>Set fireplace to Eco thermostat mode without changing flame or timer</description>
       </command>
       <command>
         <name>Set Flame Level</name>
-        <description>Set flame level 0-6</description>
+        <description>Set flame level 0-6 and switch to Manual mode if needed</description>
         <params>
           <param>
             <name>Level</name>
@@ -331,7 +331,7 @@
       </command>
       <command>
         <name>Cancel Timer</name>
-        <description>Cancel the auto-off timer</description>
+        <description>Cancel the auto-off timer and turn fireplace off</description>
       </command>
     </commands>
     <script file="driver.lua" encryption="0" jit="1"></script>
