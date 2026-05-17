@@ -9,9 +9,9 @@
   <manufacturer>SIT Group / Proflame</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051723</version>
+  <version>2026051721</version>
   <created>12/02/2025 12:00 PM</created>
-  <modified>05/17/2026 11:10 AM</modified>
+  <modified>05/17/2026 10:48 AM</modified>
   <auto_update>true</auto_update>
   <minimum_auto_update_version>1</minimum_auto_update_version>
   <proxies>
@@ -461,7 +461,7 @@
     <can_preset>True</can_preset>
     <can_preset_schedule>False</can_preset_schedule>
     <preset_fields>Name</preset_fields>
-    <preset_modes>Low Flame,Medium Flame,High Flame,Timer -10m,Timer +10m</preset_modes>
+    <preset_modes>Manual,Smart,Eco</preset_modes>
     <has_outdoor_temperature>False</has_outdoor_temperature>
     <split_setpoints>False</split_setpoints>
     <setpoint_heat_min_c>15.5</setpoint_heat_min_c>
@@ -473,6 +473,7 @@
     <scheduling>False</scheduling>
     <can_schedule>False</can_schedule>
     <hvac_modes>Off,Heat</hvac_modes>
+    <hold_modes>Low Flame,Medium Flame,High Flame</hold_modes>
     <hvac_states>Off,Heat</hvac_states>
     <can_set_backlight>False</can_set_backlight>
     <has_time_settings>False</has_time_settings>

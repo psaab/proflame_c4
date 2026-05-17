@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051723"
+DRIVER_VERSION = "2026051721"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -36,8 +36,7 @@ COMMAND_FORMAT_TURN_OFF_LEGACY_ONLY = "Turn Off Legacy Only"
 
 DEFAULT_FLAME_LEVEL = 6
 DEFAULT_TIMER_MINUTES = 180
-TIMER_PRESET_DECREASE = "Timer -10m"
-TIMER_PRESET_INCREASE = "Timer +10m"
+FLAME_HOLD_MODES = "Low Flame,Medium Flame,High Flame"
 
 -- Debug levels
 DEBUG_ERROR = 1
@@ -113,7 +112,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260517-111055"
+BUILD_TIMESTAMP = "20260517-104815"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -1082,17 +1081,26 @@ function UpdateAllProxies()
     -- Send allowed modes first
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "ALLOWED_FAN_MODES_CHANGED", { MODES = "Off,Low,Medium,High" })
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "ALLOWED_HVAC_MODES_CHANGED", { MODES = "Off,Heat" })
+    UpdateHoldModeCapabilities()
     
     UpdateThermostatProxy()
     UpdateThermostatSetpoint()
     UpdateRoomTemperature()
     UpdateFanMode()
     UpdateFlameLevel()
-    UpdateFlamePresetMode()
+    UpdateHoldModeFromFlame()
+    UpdatePresetMode()
     UpdateExtrasState()
     
     -- Also send extras setup when proxies update
     SetupExtras()
+end
+
+function UpdateHoldModeCapabilities()
+    -- Hold modes are a dynamic thermostat capability. Refresh the list before
+    -- sending HOLD_MODE_CHANGED so Navigators can render the selected value.
+    C4:SendToProxy(THERMOSTAT_PROXY_ID, "DYNAMIC_CAPABILITIES_CHANGED", { HOLD_MODES = FLAME_HOLD_MODES })
+    dbg_err("Hold mode capabilities refreshed: " .. FLAME_HOLD_MODES)
 end
 
 function UpdateRoomTemperatureProperty()
@@ -1380,9 +1388,10 @@ function UpdateProxyForStatus(change)
 
     if status == "main_mode" then
         UpdateThermostatProxy(value)
+        UpdatePresetMode(value)
     elseif status == "flame_control" then
         UpdateFlameLevel()
-        UpdateFlamePresetMode()
+        UpdateHoldModeFromFlame()
     elseif status == "fan_control" then
         UpdateFanMode()
     elseif status == "temperature_set" then
@@ -1486,44 +1495,38 @@ function UpdateFlameLevel()
     dbg_err("Flame level updated: " .. flameLevel .. " = " .. percent .. "%, on=" .. tostring(isOn))
 end
 
-function GetFlamePresetFromLevel(level)
-    local flameLevel = tonumber(level) or 0
-    if flameLevel <= 2 then
-        return "Low Flame"
-    elseif flameLevel <= 4 then
-        return "Medium Flame"
-    end
-    return "High Flame"
-end
-
-function SendPresetChanged(preset)
-    if not preset or preset == "" then return end
-    C4:SendToProxy(THERMOSTAT_PROXY_ID, "PRESET_CHANGED", { PRESET = preset })
-    C4:SendToProxy(THERMOSTAT_PROXY_ID, "PRESET_MODE_CHANGED", { MODE = preset })
-end
-
-function UpdateFlamePresetMode()
+function UpdateHoldModeFromFlame()
+    -- Update hold mode to reflect current flame level
     local flameLevel = tonumber(gState.flame_control) or 0
-    local preset = GetFlamePresetFromLevel(flameLevel)
-    SendPresetChanged(preset)
-    dbg_err("Flame preset updated to: " .. preset .. " (flame level " .. flameLevel .. ")")
-end
-
-function GetActiveTimerPresetMinutes()
-    if gState.timer_status ~= "1" then
-        return 0
+    local holdMode = "Low Flame"
+    if flameLevel <= 2 then
+        holdMode = "Low Flame"
+    elseif flameLevel <= 4 then
+        holdMode = "Medium Flame"
+    else
+        holdMode = "High Flame"
     end
-    local timerMs = tonumber(gState.timer_count) or 0
-    local minutes = math.ceil(timerMs / 60000)
-    return ClampNumber(minutes, 0, 240, 0)
+    C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = holdMode })
+    dbg_err("Hold mode updated to: " .. holdMode .. " (flame level " .. flameLevel .. ")")
 end
 
-function CommandAdjustTimerPreset(deltaMinutes)
-    local current = GetActiveTimerPresetMinutes()
-    local rounded = math.ceil(current / 10) * 10
-    local target = ClampNumber(rounded + deltaMinutes, 0, 240, 0)
-    dbg_err("Timer preset adjust: current=" .. tostring(current) .. "m, rounded=" .. tostring(rounded) .. "m, delta=" .. tostring(deltaMinutes) .. "m, target=" .. tostring(target) .. "m")
-    return CommandSetTimerMinutes(target)
+function UpdatePresetMode(modeOverride)
+    local mode = modeOverride or gState.main_mode
+    local preset = ""
+    if mode == MODE_MANUAL then
+        preset = "Manual"
+    elseif mode == MODE_SMART then
+        preset = "Smart"
+    elseif mode == MODE_ECO then
+        preset = "Eco"
+    end
+    if preset ~= "" then
+        dbg_err("Updating preset mode to: " .. preset)
+        -- Send PRESET_CHANGED for standard preset update
+        C4:SendToProxy(THERMOSTAT_PROXY_ID, "PRESET_CHANGED", { PRESET = preset })
+        -- Also send PRESET_MODE_CHANGED for newer proxy versions
+        C4:SendToProxy(THERMOSTAT_PROXY_ID, "PRESET_MODE_CHANGED", { MODE = preset })
+    end
 end
 
 -- =============================================================================
@@ -2291,30 +2294,52 @@ function HandleThermostatCommand(strCommand, tParams)
     elseif strCommand == "SET_PRESET" then
         local preset = tParams["PRESET"] or tParams["MODE"] or tParams["NAME"] or ""
         local changed = false
-        local displayPreset = nil
         dbg_err("SET_PRESET received: " .. preset)
-        if preset == "Low Flame" then
-            changed = CommandSetFlame(1)
-            displayPreset = preset
-        elseif preset == "Medium Flame" then
-            changed = CommandSetFlame(3)
-            displayPreset = preset
-        elseif preset == "High Flame" then
-            changed = CommandSetFlame(6)
-            displayPreset = preset
-        elseif preset == TIMER_PRESET_DECREASE then
-            changed = CommandAdjustTimerPreset(-10)
-        elseif preset == TIMER_PRESET_INCREASE then
-            changed = CommandAdjustTimerPreset(10)
-        elseif preset == "Manual" then
+        if preset == "Manual" then
             changed = CommandSetMode(MODE_MANUAL)
         elseif preset == "Smart" then
             changed = CommandSetMode(MODE_SMART)
         elseif preset == "Eco" then
             changed = CommandSetMode(MODE_ECO)
         end
-        if changed and displayPreset then
-            SendPresetChanged(displayPreset)
+        -- Notify proxy of preset change immediately
+        if changed then
+            UpdatePresetMode(
+                preset == "Manual" and MODE_MANUAL or
+                preset == "Smart" and MODE_SMART or
+                preset == "Eco" and MODE_ECO or
+                gState.main_mode
+            )
+        end
+        
+    elseif strCommand == "SET_MODE_HOLD" then
+        -- Hold modes repurposed for quick flame control:
+        -- "Low Flame" = level 1, "Medium Flame" = level 3, "High Flame" = level 6
+        local holdMode = tParams["MODE"] or ""
+        dbg_err("SET_MODE_HOLD received: " .. holdMode)
+        if gTurnOffInProgress then
+            dbg_err("SET_MODE_HOLD ignored while turn off is in progress: " .. tostring(holdMode))
+            return
+        end
+        if not IsFireplaceOnMode(gState.main_mode) then
+            dbg_err("SET_MODE_HOLD ignored while fireplace mode is off/standby: " .. tostring(gState.main_mode))
+            return
+        end
+        if holdMode == "Low Flame" then
+            -- Low flame (level 1)
+            if CommandSetFlame(1) then
+                C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "Low Flame" })
+            end
+        elseif holdMode == "Medium Flame" then
+            -- Medium flame (level 3)
+            if CommandSetFlame(3) then
+                C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "Medium Flame" })
+            end
+        elseif holdMode == "High Flame" then
+            -- High flame (level 6)
+            if CommandSetFlame(6) then
+                C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "High Flame" })
+            end
         end
         
     -- New extras commands (matching Ecobee-style format)
@@ -2471,7 +2496,8 @@ function InitializePropertiesFromState()
     C4:UpdateProperty("Burner Status", string.format("0x%04X", burnerNum))
     C4:UpdateProperty("WiFi Signal Strength", "-" .. gState.wifi_signal_str .. " dBm")
     UpdateThermostatSetpoint()
-    UpdateFlamePresetMode()
+    UpdateHoldModeCapabilities()
+    UpdateHoldModeFromFlame()
 end
 
 function OnDriverDestroyed()
