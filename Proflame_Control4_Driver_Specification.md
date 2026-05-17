@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051730 (2026-05-17)
+- **Driver Version**: 2026051731 (2026-05-17)
 
 ---
 
@@ -509,6 +509,8 @@ Treat `driver.xml` as the stable install-time contract. Static proxy, connection
 | Presets | Runtime-disabled unless proven otherwise | Stable baseline is `can_preset=false`; do not reintroduce preset XML for experiments without Director restart notes. |
 
 PRs that edit static `driver.xml` capability/proxy/connection/property metadata must include Director restart/reload notes and explain why runtime proxy updates were not sufficient. The current XML restart-risk matrix is tracked in issue #39 and should be filled from real Controller/Navigator testing.
+
+Runtime refreshes send the full ThermostatV2 capability snapshot, not only the field that triggered the refresh. For example, a Hold-mode refresh also republishes preset, fan, HVAC, and Extras capability state so Navigator does not retain stale mixed capability data.
 
 ---
 
@@ -1051,7 +1053,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051730</version>
+  <version>2026051731</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1488,7 +1490,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051730"
+DRIVER_VERSION = "2026051731"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1590,6 +1592,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026051731 | 2026-05-17 | Broadened static XML guardrails and documented runtime capability snapshot behavior |
 | 2026051730 | 2026-05-17 | Centralized runtime ThermostatV2 capability refreshes and added static XML restart-risk guardrails |
 | 2026051729 | 2026-05-17 | Added deprecated SET_PRESET compatibility path and documented runtime capability probe behavior |
 | 2026051728 | 2026-05-17 | Restored custom Low/Medium/High Hold actions after documented Permanent display test |

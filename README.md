@@ -130,7 +130,7 @@ The device sends status updates as JSON with indexed status/value pairs:
   <name>Proflame WiFi Fireplace</name>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
-  <version>2026051730</version>
+  <version>2026051731</version>
   
   <proxies>
     <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
@@ -188,6 +188,8 @@ Treat `driver.xml` as the stable install-time contract. Static proxy, connection
 | Presets | Runtime-disabled unless proven otherwise | `can_preset=false` is the stable XML baseline; avoid reintroducing preset XML for experiments. |
 
 PRs that edit static `driver.xml` capability/proxy/connection/property metadata must note whether Director restarted/reloaded and why a runtime capability refresh was not sufficient.
+
+The runtime refresh intentionally sends a full capability snapshot, not only the field that triggered the refresh. This keeps Navigator state internally consistent and avoids piecemeal XML edits while issue #39 collects the real Controller/Navigator restart matrix.
 
 ### Default Timer Scope
 `Default Timer (minutes)` is used only when `Turn On` explicitly starts the fireplace. Mode-only commands such as `Set Mode Manual`, `Set Mode Smart`, and `Set Mode Eco` do not apply it, and `Set Timer` uses the requested `Minutes` value instead. Because the driver requires an active timer for on states, setting Default Timer to `0` means Turn On will be forced back off after confirmed status shows no running timer.

@@ -20,6 +20,13 @@ SENSITIVE_PATTERNS = [
         r"<\/?capabilities\b",
         r"<can_",
         r"<has_",
+        r"<setpoint_",
+        r"<current_temperature_",
+        r"<temperature_scale>",
+        r"<split_setpoints>",
+        r"<scheduling>",
+        r"<auto_update>",
+        r"<minimum_auto_update_version>",
         r"<hold_modes>",
         r"<fan_modes>",
         r"<hvac_",
@@ -37,7 +44,12 @@ SENSITIVE_PATTERNS = [
 ]
 
 BODY_ACK_PATTERN = re.compile(
-    r"(director\s+(?:restart|reload)|static\s+xml|driver\.xml\s+(?:capability|proxy|connection|metadata))",
+    r"("
+    r"(?:director|controller)\s+(?:restart|reload|reloaded|restarted)"
+    r"|static\s+(?:xml|driver\.xml)"
+    r"|driver\.xml\s+(?:capability|capabilities|proxy|proxies|connection|connections|metadata|property|properties)"
+    r"|runtime\s+(?:proxy|capability|capabilities|notification|notifications)"
+    r")",
     re.IGNORECASE,
 )
 
