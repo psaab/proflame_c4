@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051701 (2026-05-17)
+- **Driver Version**: 2026051711 (2026-05-17)
 
 ---
 
@@ -1024,7 +1024,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051701</version>
+  <version>2026051711</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1456,7 +1456,7 @@ end, false)
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051701"
+DRIVER_VERSION = "2026051711"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1559,6 +1559,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026051711 | 2026-05-17 | Hotfix JsonEscape runtime pattern and restored legacy turn-off command behavior |
 | 2026051701 | 2026-05-17 | Updated documentation to match implemented properties, commands, events, and protocol helpers |
 | 2026051628 | 2026-05-16 | Aligned thermostat capabilities and documentation with implemented behavior |
 | 2025013124 | 2026-01-31 | Updated mode values (Smart=6, Eco=7), build timestamp for cache busting |

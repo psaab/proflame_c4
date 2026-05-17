@@ -9,7 +9,7 @@
   <manufacturer>SIT Group / Proflame</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051710</version>
+  <version>2026051711</version>
   <created>12/02/2025 12:00 PM</created>
   <modified>05/17/2026 12:15 AM</modified>
   <auto_update>true</auto_update>
@@ -188,18 +188,6 @@
         <minimum>0</minimum>
         <maximum>480</maximum>
         <default>180</default>
-        <readonly>false</readonly>
-      </property>
-      <property>
-        <name>Turn Off Command Format</name>
-        <type>LIST</type>
-        <items>
-          <item>Legacy Only</item>
-          <item>Dual (Documented First)</item>
-          <item>Documented Only</item>
-          <item>Dual (Legacy First)</item>
-        </items>
-        <default>Legacy Only</default>
         <readonly>false</readonly>
       </property>
       <property>

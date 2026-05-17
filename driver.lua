@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051710"
+DRIVER_VERSION = "2026051711"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -22,7 +22,7 @@ EVENT_CONNECTION_RESTORED = 5
 
 MODE_OFF = "0"
 MODE_STANDBY = "1"
-MODE_STANDBY_ALT = "2"
+MODE_STANDBY_ALT = "2"  -- Proflame reports this after app-driven off/standby even though command off is 0.
 MODE_MANUAL = "5"
 MODE_SMART = "6"
 MODE_ECO = "7"
@@ -100,7 +100,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260517-001542"
+BUILD_TIMESTAMP = "20260517-073934"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -1036,27 +1036,12 @@ function SendLegacyDeviceControl(control, value, context)
 end
 
 function SendDeviceControl(control, value)
+    if gTurnOffInProgress then
+        dbg_err("Refusing device command while turn off is pending: " .. tostring(control) .. "=" .. tostring(value))
+        return false
+    end
     local sentPrimary = SendDocumentedDeviceControl(control, value)
     local sentLegacy = SendLegacyDeviceControl(control, value)
-    return sentPrimary or sentLegacy
-end
-
-function SendTurnOffDeviceControl(control, value)
-    local format = Properties["Turn Off Command Format"] or "Dual (Documented First)"
-    dbg_err("Turn Off command format " .. tostring(format) .. ": " .. tostring(control) .. "=" .. tostring(value))
-
-    if format == "Legacy Only" then
-        return SendLegacyDeviceControl(control, value, "turn off")
-    elseif format == "Documented Only" then
-        return SendDocumentedDeviceControl(control, value, "turn off")
-    elseif format == "Dual (Legacy First)" then
-        local sentLegacy = SendLegacyDeviceControl(control, value, "turn off")
-        local sentPrimary = SendDocumentedDeviceControl(control, value, "turn off")
-        return sentLegacy or sentPrimary
-    end
-
-    local sentPrimary = SendDocumentedDeviceControl(control, value, "turn off")
-    local sentLegacy = SendLegacyDeviceControl(control, value, "turn off")
     return sentPrimary or sentLegacy
 end
 
@@ -1528,8 +1513,6 @@ function OnPropertyChanged(strProperty)
         if (Properties["IP Address"] or "") ~= "" then
             C4:SetTimer(500, function() Connect() end, false)
         end
-    elseif strProperty == "Turn Off Command Format" then
-        dbg_err("Turn Off Command Format set to: " .. tostring(Properties["Turn Off Command Format"]))
     elseif strProperty == "Debug Mode" then
         gDebugEnabled = (Properties["Debug Mode"] == "On")
     elseif strProperty == "Debug Level" then
@@ -1709,6 +1692,7 @@ function ScheduleTurnOffRetry(reason)
     if not gTurnOffInProgress then return end
     if gTurnOffRetryCount >= 4 then
         dbg_err("Turn off retry limit reached: " .. tostring(reason))
+        ClearTurnOffInProgress("retry limit reached")
         return
     end
     gTurnOffRetryCount = gTurnOffRetryCount + 1
