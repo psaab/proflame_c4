@@ -155,11 +155,12 @@ Send `PROFLAMEPING` text message every 5 seconds (configurable). The device resp
 |------------|------|-------------|
 | 0 | Off | Fireplace off |
 | 1 | Standby | Pilot may be lit, burner off |
+| 2 | App-reported standby/off | Observed runtime status after Proflame app Turn Off; driver treats as off/standby but does not send it as the Turn Off command |
 | 5 | Manual | Direct flame control |
 | 6 | Smart | Temperature-controlled operation |
 | 7 | Eco | Energy-saving thermostat mode |
 
-**Note**: Modes 2, 3, 4 are reserved/unused in current firmware.
+**Note**: Modes 3 and 4 are reserved/unused in current firmware.
 
 ### 2.8 Temperature Encoding
 
