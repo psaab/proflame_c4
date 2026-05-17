@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051715"
+DRIVER_VERSION = "2026051716"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -63,6 +63,10 @@ if gTimerSuppressClearTimer then
     pcall(function() gTimerSuppressClearTimer:Cancel() end)
     gTimerSuppressClearTimer = nil
 end
+if gTimerSafetyCheckTimer then
+    pcall(function() gTimerSafetyCheckTimer:Cancel() end)
+    gTimerSafetyCheckTimer = nil
+end
 
 -- Force disconnect if we were connected
 if gConnected then
@@ -100,7 +104,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260517-084447"
+BUILD_TIMESTAMP = "20260517-092400"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -186,6 +190,8 @@ gTurnOffConfirmTimer = nil
 gTurnOffRetryTimer = nil
 gTurnOffRetryCount = 0
 gTurnOffInProgress = false
+gTimerSafetyCheckTimer = nil
+gTimerSafetyOffPending = false
 gWebSocketKey = nil
 gDebugLevel = DEBUG_DEBUG
 gDebugEnabled = true
@@ -1199,6 +1205,8 @@ function ApplyDeviceStatus(status, value)
             return
         end
         if IsFireplaceOffMode(value) and not gSuppressTimerUpdates then
+            gTimerSafetyOffPending = false
+            CancelTimerSafetyCheck()
             gState.timer_set = "0"
             gState.timer_count = "0"
             return { status = status, value = value, timerCleared = true, timerExtras = true }
@@ -1214,6 +1222,8 @@ function ApplyDeviceStatus(status, value)
         -- If timer becomes active, clear the expired flag
         if value == "1" then
             gTimerExpired = false
+            gTimerSafetyOffPending = false
+            CancelTimerSafetyCheck()
         end
         -- If timer is turned off by device, clear remaining time and reset slider
         if value == "0" then
@@ -1413,6 +1423,10 @@ function ProcessStatusUpdate(status, value)
         ScheduleExtrasRefresh("status:" .. tostring(change.status), true)
     elseif StatusAffectsExtras(change.status) then
         ScheduleExtrasRefresh("status:" .. tostring(change.status), false)
+    end
+
+    if change.status == "main_mode" or change.status == "timer_status" or change.timerExpired then
+        EnforceTimerRequiredForOnState("status:" .. tostring(change.status), false)
     end
 end
 
@@ -1685,13 +1699,67 @@ function CancelTurnOffRetryTimer()
     end
 end
 
+function CancelTimerSafetyCheck()
+    if gTimerSafetyCheckTimer then
+        gTimerSafetyCheckTimer:Cancel()
+        gTimerSafetyCheckTimer = nil
+    end
+end
+
 function ClearTurnOffInProgress(reason)
     if gTurnOffInProgress then
         dbg_err("Turn off guard cleared: " .. tostring(reason))
     end
+    gTimerSafetyOffPending = false
     gTurnOffInProgress = false
     gTurnOffRetryCount = 0
     CancelTurnOffRetryTimer()
+end
+
+function ScheduleTimerSafetyCheck(reason)
+    if gTimerSafetyCheckTimer then return end
+    dbg_err("Timer safety check deferred: " .. tostring(reason))
+    gTimerSafetyCheckTimer = C4:SetTimer(1500, function(timer)
+        gTimerSafetyCheckTimer = nil
+        EnforceTimerRequiredForOnState("timer_status unknown after status sync", true)
+    end, false)
+end
+
+function EnforceTimerRequiredForOnState(reason, allowUnknownTimerStatus)
+    local mode = gState.main_mode
+    if not IsFireplaceOnMode(mode) then
+        gTimerSafetyOffPending = false
+        CancelTimerSafetyCheck()
+        return
+    end
+
+    local timerStatusKnown = gStatusSeen["timer_status"] == true
+    local timerRunning = timerStatusKnown and gState.timer_status == "1" and not gTimerExpired
+    if timerRunning then
+        gTimerSafetyOffPending = false
+        CancelTimerSafetyCheck()
+        return
+    end
+
+    if gSuppressTimerUpdates then
+        dbg_err("Timer safety check skipped while timer updates are suppressed: " .. tostring(reason))
+        return
+    end
+    if gTurnOffInProgress then
+        return
+    end
+    if not timerStatusKnown and not allowUnknownTimerStatus then
+        ScheduleTimerSafetyCheck(reason)
+        return
+    end
+    if gTimerSafetyOffPending then
+        dbg_err("Timer safety force-off already pending: mode=" .. tostring(mode) .. ", timer_status=" .. tostring(gState.timer_status))
+        return
+    end
+
+    gTimerSafetyOffPending = true
+    dbg_err("Timer safety policy forcing fireplace off: mode=" .. tostring(mode) .. ", timer_status=" .. tostring(gState.timer_status) .. ", reason=" .. tostring(reason))
+    ClearTimerStateAndSend(true)
 end
 
 function SendTurnOffControls(reason)
@@ -1725,6 +1793,9 @@ function SetTimerSuppression(enabled, reason)
     CancelTimerSuppressionClear()
     gSuppressTimerUpdates = enabled
     dbg_err("Timer suppression " .. (enabled and "enabled" or "disabled") .. ": " .. tostring(reason))
+    if not enabled then
+        EnforceTimerRequiredForOnState("timer suppression cleared: " .. tostring(reason), false)
+    end
 end
 
 function IsDeviceCommandReady()
@@ -1822,6 +1893,8 @@ function SetTimerValueAndArm(minutes, updateTimerExtras)
     local msValue = minutes * 60000
     SetTimerSuppression(true, "setting timer")
     gTimerExpired = false
+    gTimerSafetyOffPending = false
+    CancelTimerSafetyCheck()
     if not SendDeviceControl("timer_set", tostring(msValue)) then
         SetTimerSuppression(false, "timer_set send failed")
         return false
@@ -1871,11 +1944,27 @@ function CommandTurnOn()
     if not RequireDeviceCommandReady("Turn On") then return false end
     ClearTurnOffInProgress("turn on")
     CancelPendingTimerCommandTimers()
-    if not SendDeviceControl("main_mode", GetDefaultOnMode()) then return false end
     local defaultFlame = GetDefaultFlameLevel()
     local defaultTimer = GetDefaultTimerMinutes()
+    gTimerSafetyOffPending = false
+    CancelTimerSafetyCheck()
+    if defaultTimer and defaultTimer > 0 then
+        SetTimerSuppression(true, "turn on while arming default timer")
+        gTimerExpired = false
+    end
+    if not SendDeviceControl("main_mode", GetDefaultOnMode()) then
+        if defaultTimer and defaultTimer > 0 then
+            SetTimerSuppression(false, "turn on mode send failed")
+        end
+        return false
+    end
     ScheduleModeReadyWork(function()
-        if not RequireDeviceCommandReady("Turn On default flame") then return end
+        if not RequireDeviceCommandReady("Turn On default flame") then
+            if defaultTimer and defaultTimer > 0 then
+                SetTimerSuppression(false, "turn on mode-ready work disconnected")
+            end
+            return
+        end
         if SendDeviceControl("flame_control", tostring(defaultFlame)) then
             SetRequestedExtrasControlState("flame_control", defaultFlame)
         end
@@ -2299,6 +2388,7 @@ function ResetDriverState()
     gLastConnectionOnline = false
     gStatusSeen = {}
     gTurnOffInProgress = false
+    gTimerSafetyOffPending = false
 
     -- Cancel any pending timers
     StopPingTimer()
@@ -2306,6 +2396,7 @@ function ResetDriverState()
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()
     CancelTurnOffRetryTimer()
+    CancelTimerSafetyCheck()
     
     -- Reset device state
     gState = {
@@ -2398,6 +2489,7 @@ function OnDriverDestroyed()
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()
     CancelTurnOffRetryTimer()
+    CancelTimerSafetyCheck()
     Disconnect()
 end
 
@@ -2411,6 +2503,7 @@ function OnDriverUpdated()
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()
     CancelTurnOffRetryTimer()
+    CancelTimerSafetyCheck()
     Disconnect()
     
     -- Reset state
