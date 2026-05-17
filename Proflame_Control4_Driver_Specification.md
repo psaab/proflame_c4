@@ -53,6 +53,7 @@ This driver enables Control4 home automation systems to control Proflame WiFi-en
 | Port | INTEGER | 88 | WebSocket port |
 | Ping Interval | INTEGER | 5 | Keep-alive interval (seconds) |
 | Reconnect Delay | INTEGER | 10 | Delay before reconnect (seconds) |
+| Strict WebSocket Handshake | LIST | Off | Require full WebSocket upgrade validation; Off allows legacy 101 fallback |
 | Default On Mode | LIST | Smart (Thermostat) | Mode when turning on: Manual, Smart (Thermostat), Eco |
 | Default Flame Level | INTEGER | 6 | Initial flame level (1-6) |
 | Default Timer | INTEGER | 180 | Auto-off timer in minutes (0=disabled) |
@@ -95,6 +96,8 @@ Sec-WebSocket-Accept: <calculated-accept-key>
 ```
 base64(sha1(Sec-WebSocket-Key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
 ```
+
+The driver validates the status line, Upgrade/Connection headers, and Sec-WebSocket-Accept. Until real-device testing confirms all supported firmware returns a fully compliant handshake, the `Strict WebSocket Handshake` property defaults to `Off` and permits the legacy `101` compatibility fallback with a diagnostic log.
 
 ### 2.3 WebSocket Frame Format
 

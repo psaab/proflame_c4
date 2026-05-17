@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051624"
+DRIVER_VERSION = "2026051627"
 DRIVER_DATE = "2026-05-16"
 
 NETWORK_BINDING_ID = 6001
@@ -99,7 +99,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260516-223631"
+BUILD_TIMESTAMP = "20260516-231348"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -408,25 +408,123 @@ function JsonEncode(tbl)
     for k, v in pairs(tbl) do
         if not first then result = result .. "," end
         first = false
-        result = result .. '"' .. tostring(k) .. '":'
-        if type(v) == "string" then result = result .. '"' .. v .. '"'
+        result = result .. '"' .. JsonEscape(tostring(k)) .. '":'
+        if type(v) == "string" then result = result .. '"' .. JsonEscape(v) .. '"'
         elseif type(v) == "number" then result = result .. tostring(v)
         elseif type(v) == "boolean" then result = result .. (v and "true" or "false")
-        else result = result .. '"' .. tostring(v) .. '"'
+        else result = result .. '"' .. JsonEscape(tostring(v)) .. '"'
         end
     end
     result = result .. "}"
     return result
 end
 
+function JsonEscape(value)
+    value = tostring(value or "")
+    value = value:gsub("\\", "\\\\")
+    value = value:gsub('"', '\\"')
+    value = value:gsub("\b", "\\b")
+    value = value:gsub("\f", "\\f")
+    value = value:gsub("\n", "\\n")
+    value = value:gsub("\r", "\\r")
+    value = value:gsub("\t", "\\t")
+    value = value:gsub("([\0-\31])", function(c)
+        return string.format("\\u%04X", c:byte())
+    end)
+    return value
+end
+
+function JsonUnescape(value)
+    value = tostring(value or "")
+    local result = ""
+    local i = 1
+    while i <= #value do
+        local c = value:sub(i, i)
+        if c == "\\" then
+            local esc = value:sub(i + 1, i + 1)
+            if esc == "u" then
+                local hex = value:sub(i + 2, i + 5)
+                if hex:match("^%x%x%x%x$") then
+                    local code = tonumber(hex, 16) or 0
+                    result = result .. (code < 128 and string.char(code) or "?")
+                    i = i + 6
+                else
+                    result = result .. esc
+                    i = i + 2
+                end
+            elseif esc == "\\" then result = result .. "\\"; i = i + 2
+            elseif esc == '"' then result = result .. '"'; i = i + 2
+            elseif esc == "/" then result = result .. "/"; i = i + 2
+            elseif esc == "b" then result = result .. "\b"; i = i + 2
+            elseif esc == "f" then result = result .. "\f"; i = i + 2
+            elseif esc == "n" then result = result .. "\n"; i = i + 2
+            elseif esc == "r" then result = result .. "\r"; i = i + 2
+            elseif esc == "t" then result = result .. "\t"; i = i + 2
+            else result = result .. esc; i = i + 2
+            end
+        else
+            result = result .. c
+            i = i + 1
+        end
+    end
+    return result
+end
+
+function ParseJsonString(str, index)
+    if str:sub(index, index) ~= '"' then return nil, index end
+    local value = ""
+    local i = index + 1
+    while i <= #str do
+        local c = str:sub(i, i)
+        if c == '"' then
+            return JsonUnescape(value), i + 1
+        elseif c == "\\" then
+            value = value .. str:sub(i, i + 1)
+            i = i + 2
+        else
+            value = value .. c
+            i = i + 1
+        end
+    end
+    return nil, index
+end
+
 function JsonDecode(str)
     if not str then return {} end
+    -- Minimal flat-object parser for known Proflame payloads. It supports
+    -- string keys with string, integer, boolean, and null values. Nested
+    -- arrays/objects are intentionally unsupported and ignored safely.
     local result = {}
-    for key, value in str:gmatch('"([^"]+)":"([^"]*)"') do
-        result[key] = value
-    end
-    for key, value in str:gmatch('"([^"]+)":(-?%d+)') do
-        if not result[key] then result[key] = value end
+    local i = 1
+    while i <= #str do
+        local key
+        key, i = ParseJsonString(str, i)
+        if key then
+            i = str:match("^%s*:%s*()", i) or i
+            local value
+            if str:sub(i, i) == '"' then
+                value, i = ParseJsonString(str, i)
+            else
+                local raw, nextIndex = str:match("^([^,%}%]]+)%s*()", i)
+                if raw then
+                    i = nextIndex
+                    raw = raw:gsub("^%s+", ""):gsub("%s+$", "")
+                    if raw:match("^-?%d+$") then value = raw
+                    elseif raw == "true" then value = "true"
+                    elseif raw == "false" then value = "false"
+                    elseif raw == "null" then value = nil
+                    else
+                        dbg_all("Ignoring unsupported JSON value for key " .. tostring(key) .. ": " .. tostring(raw))
+                    end
+                else
+                    dbg_all("Ignoring malformed JSON value for key " .. tostring(key))
+                    i = i + 1
+                end
+            end
+            if value ~= nil then result[key] = value end
+        else
+            i = i + 1
+        end
     end
     return result
 end
@@ -436,11 +534,11 @@ end
 -- =============================================================================
 
 function BuildSetControlCommand(control, value)
-    return '{"command":"set_control","name":"' .. control .. '","value":"' .. tostring(value) .. '"}'
+    return '{"command":"set_control","name":"' .. JsonEscape(control) .. '","value":"' .. JsonEscape(value) .. '"}'
 end
 
 function BuildLegacyIndexedCommand(control, value)
-    return '{"control0":"' .. control .. '","value0":"' .. tostring(value) .. '"}'
+    return '{"control0":"' .. JsonEscape(control) .. '","value0":"' .. JsonEscape(value) .. '"}'
 end
 
 function DecodeTemperature(encoded)
@@ -678,9 +776,73 @@ function BuildWebSocketHandshake(host, port)
            "\r\n"
 end
 
+function ParseHttpHeaders(response)
+    local headers = {}
+    for line in tostring(response or ""):gmatch("([^\r\n]+)") do
+        local name, value = line:match("^%s*([^:%s]+)%s*:%s*(.-)%s*$")
+        if name and value then
+            headers[name:lower()] = value
+        end
+    end
+    return headers
+end
+
+function ExpectedWebSocketAccept(key)
+    if not key or key == "" then return nil end
+    local guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    return Base64Encode(SHA1(key .. guid))
+end
+
+function IsStrictWebSocketHandshakeEnabled()
+    return Properties["Strict WebSocket Handshake"] == "On"
+end
+
+function AllowLenientHandshakeFallback(response, reason)
+    if IsStrictWebSocketHandshakeEnabled() then
+        return false
+    end
+    if response and response:find("101", 1, true) then
+        dbg_err("Handshake strict validation failed (" .. tostring(reason) .. "); accepting legacy 101 response because Strict WebSocket Handshake is Off")
+        return true
+    end
+    return false
+end
+
 function ValidateHandshakeResponse(response)
-    if not response then return false end
-    if not response:find("101") then return false end
+    if not response then
+        dbg_err("Handshake failed: empty response")
+        return false
+    end
+
+    local statusLine = response:match("^([^\r\n]+)")
+    if not statusLine or not statusLine:match("^HTTP/%d+%.%d+%s+101%s") then
+        local reason = "invalid status line: " .. tostring(statusLine)
+        dbg_err("Handshake failed: " .. reason)
+        return AllowLenientHandshakeFallback(response, reason)
+    end
+
+    local headers = ParseHttpHeaders(response)
+    local upgrade = (headers["upgrade"] or ""):lower()
+    local connection = (headers["connection"] or ""):lower()
+    if upgrade ~= "websocket" then
+        local reason = "missing Upgrade websocket header"
+        dbg_err("Handshake failed: " .. reason)
+        return AllowLenientHandshakeFallback(response, reason)
+    end
+    if not connection:find("upgrade", 1, true) then
+        local reason = "missing Connection upgrade header"
+        dbg_err("Handshake failed: " .. reason)
+        return AllowLenientHandshakeFallback(response, reason)
+    end
+
+    local expectedAccept = ExpectedWebSocketAccept(gWebSocketKey)
+    local actualAccept = headers["sec-websocket-accept"]
+    if not expectedAccept or actualAccept ~= expectedAccept then
+        local reason = "invalid Sec-WebSocket-Accept"
+        dbg_err("Handshake failed: " .. reason)
+        return AllowLenientHandshakeFallback(response, reason)
+    end
+
     return true
 end
 
@@ -715,7 +877,17 @@ function ParseWebSocketFrame(data)
     if not data or #data < 2 then return nil, nil, data or "" end
     local byte1 = data:byte(1)
     local byte2 = data:byte(2)
+    local fin = bit.band(byte1, 0x80) ~= 0
+    local rsv = bit.band(byte1, 0x70)
     local opcode = bit.band(byte1, 0x0F)
+    if rsv ~= 0 then
+        dbg_err("Unsupported WebSocket frame: RSV bits set")
+        return false, nil, ""
+    end
+    if not fin then
+        dbg_err("Unsupported fragmented WebSocket frame")
+        return false, nil, ""
+    end
     local masked = bit.band(byte2, 0x80) ~= 0
     local payloadLen = bit.band(byte2, 0x7F)
     local headerLen = 2
@@ -799,6 +971,14 @@ end
 
 function SendPing()
     SendWebSocketMessage("PROFLAMEPING")
+end
+
+function SendPong(payload)
+    if not gConnected or not gHandshakeComplete then return false end
+    local frame = CreateWebSocketFrame(payload or "", 0x0A)
+    local port = tonumber(Properties["Port"]) or 88
+    C4:SendToNetwork(NETWORK_BINDING_ID, port, frame)
+    return true
 end
 
 function SendDeviceControl(control, value)
@@ -918,6 +1098,8 @@ function ParseStatusMessage(data)
                     else
                         ProcessStatusUpdate(mappedKey, value)
                     end
+                else
+                    dbg_all("Ignoring unsupported JSON status key: " .. tostring(key))
                 end
             end
         end
@@ -1264,6 +1446,12 @@ function OnPropertyChanged(strProperty)
         dbg_err("Port changed, disconnecting and reconnecting...")
         Disconnect()
         C4:SetTimer(500, function() Connect() end, false)
+    elseif strProperty == "Strict WebSocket Handshake" then
+        dbg_err("Strict WebSocket Handshake changed, reconnecting to verify handshake mode...")
+        Disconnect()
+        if (Properties["IP Address"] or "") ~= "" then
+            C4:SetTimer(500, function() Connect() end, false)
+        end
     elseif strProperty == "Debug Mode" then
         gDebugEnabled = (Properties["Debug Mode"] == "On")
     elseif strProperty == "Debug Level" then
@@ -1335,9 +1523,25 @@ function ReceivedFromNetwork(idBinding, nPort, strData)
     while #gReceiveBuffer > 0 do
         local opcode, payload, remaining = ParseWebSocketFrame(gReceiveBuffer)
         if opcode == nil then break end
+        if opcode == false then
+            Disconnect()
+            ScheduleReconnect()
+            break
+        end
         gReceiveBuffer = remaining
-        if opcode == 0x01 then ParseStatusMessage(payload)
-        elseif opcode == 0x08 then Disconnect() ScheduleReconnect()
+        if opcode == 0x01 then
+            ParseStatusMessage(payload)
+        elseif opcode == 0x08 then
+            dbg_err("WebSocket close frame received")
+            Disconnect()
+            ScheduleReconnect()
+        elseif opcode == 0x09 then
+            dbg_err("WebSocket ping frame received")
+            SendPong(payload)
+        elseif opcode == 0x0A then
+            dbg_all("WebSocket pong frame received")
+        else
+            dbg_all("Ignoring unsupported WebSocket opcode: " .. tostring(opcode))
         end
     end
 end
