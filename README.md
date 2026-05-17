@@ -130,7 +130,7 @@ The device sends status updates as JSON with indexed status/value pairs:
   <name>Proflame WiFi Fireplace</name>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
-  <version>2026051717</version>
+  <version>2026051719</version>
   
   <proxies>
     <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
@@ -560,7 +560,7 @@ function BuildDeviceControlCommandPlan(control, value, format)
 end
 ```
 
-All outbound control writes use `BuildDeviceControlCommandPlan`. The `Command Format (non-Turn-Off)` property controls non-Turn-Off command sends. The default sends the documented `set_control` message followed by the legacy indexed fallback (`{"control0":"...","value0":"..."}`). Use `Legacy Only`, `Documented Only`, and both dual orderings for real-device compatibility testing; compare `Dual (Documented First)` against `Dual (Legacy First)` because message order may determine which format the firmware accepts. Turn Off uses the same command-plan wrapper with the verified legacy-only format.
+All outbound control writes use `BuildDeviceControlCommandPlan`. The `Command Format (non-Turn-Off)` property controls non-Turn-Off command sends. The default is `Legacy Only`, which sends the legacy indexed format (`{"control0":"...","value0":"..."}`) verified on firmware `FW: 625.04.673`. Use `Documented Only` and both dual orderings for real-device compatibility testing; compare `Dual (Documented First)` against `Dual (Legacy First)` because message order may determine which format the firmware accepts. Other firmware variants may need a different setting. Turn Off uses the same command-plan wrapper with the verified legacy-only format.
 
 Manual command-format verification should record the selected format and status echo for `main_mode`, `flame_control`, `fan_control`, `lamp_control`, `temperature_set`, `timer_set`, and `timer_status`.
 
