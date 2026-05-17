@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051703"
+DRIVER_VERSION = "2026051704"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -627,9 +627,9 @@ function GetExtrasXML()
         timerMinutes = math.floor(timerMs / 60000)
     end
 
-    -- Only force timer to 0 if fireplace is off AND timer is not active
+    -- Only force timer to 0 if fireplace is off/standby AND timer is not active
     -- This prevents showing 0 during startup when we're setting a timer
-    if mode == MODE_OFF and timerStatus ~= 1 then
+    if (mode == MODE_OFF or mode == MODE_STANDBY) and timerStatus ~= 1 then
         timerMinutes = 0
     end
 
@@ -651,8 +651,10 @@ function GetExtrasXML()
     
     -- Determine current mode
     local mode = gState.main_mode or MODE_OFF
-    local modeValue = "manual"
-    if mode == MODE_SMART then
+    local modeValue = "off"
+    if mode == MODE_MANUAL then
+        modeValue = "manual"
+    elseif mode == MODE_SMART then
         modeValue = "smart"
     elseif mode == MODE_ECO then
         modeValue = "eco"
@@ -660,12 +662,14 @@ function GetExtrasXML()
     
     -- Build mode items with current mode first (this is how Ecobee does it)
     local modeItems = ""
-    if modeValue == "manual" then
-        modeItems = '<item text="Manual" value="manual"/><item text="Smart Thermostat" value="smart"/><item text="Eco" value="eco"/>'
+    if modeValue == "off" then
+        modeItems = '<item text="Off" value="off"/><item text="Manual" value="manual"/><item text="Smart Thermostat" value="smart"/><item text="Eco" value="eco"/>'
+    elseif modeValue == "manual" then
+        modeItems = '<item text="Manual" value="manual"/><item text="Off" value="off"/><item text="Smart Thermostat" value="smart"/><item text="Eco" value="eco"/>'
     elseif modeValue == "smart" then
-        modeItems = '<item text="Smart Thermostat" value="smart"/><item text="Manual" value="manual"/><item text="Eco" value="eco"/>'
+        modeItems = '<item text="Smart Thermostat" value="smart"/><item text="Off" value="off"/><item text="Manual" value="manual"/><item text="Eco" value="eco"/>'
     else
-        modeItems = '<item text="Eco" value="eco"/><item text="Manual" value="manual"/><item text="Smart Thermostat" value="smart"/>'
+        modeItems = '<item text="Eco" value="eco"/><item text="Off" value="off"/><item text="Manual" value="manual"/><item text="Smart Thermostat" value="smart"/>'
     end
     
     -- XML structure matching working Ecobee thermostat format - include value attributes for sliders
@@ -1328,8 +1332,7 @@ function StatusAffectsExtras(status)
         status == "flame_control" or
         status == "fan_control" or
         status == "lamp_control" or
-        status == "timer_status" or
-        status == "timer_count"
+        status == "timer_status"
 end
 
 function ScheduleExtrasRefresh(reason, timerOnly)
@@ -2099,7 +2102,9 @@ function HandleThermostatCommand(strCommand, tParams)
     elseif strCommand == "SELECT_MODE" then
         local val = tParams["VALUE"] or tParams["value"] or ""
         dbg_err("SELECT_MODE: " .. tostring(val))
-        if val == "manual" then
+        if val == "off" then
+            CommandTurnOff()
+        elseif val == "manual" then
             CommandSetMode(MODE_MANUAL)
         elseif val == "smart" then
             CommandSetMode(MODE_SMART)
