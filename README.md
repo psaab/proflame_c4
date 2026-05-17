@@ -461,16 +461,16 @@ end
 Run the local validator before opening a PR:
 
 ```sh
-scripts/validate.sh
+scripts/validate.sh [path/to/proflame_wifi_connect.c4z]
 ```
 
 Rebuild the checked-in Control4 archive from source files with:
 
 ```sh
-scripts/package.sh
+scripts/package.sh [path/to/proflame_wifi_connect.c4z]
 ```
 
-The validator checks `driver.xml` with `xmllint`, verifies required source/package files, confirms `proflame_wifi_connect.c4z` contains only the expected driver files, and fails if packaged source files are stale relative to the working tree.
+Both scripts read the package file list from `scripts/manifest.txt`. The packager normalizes ZIP entry timestamps so repeated rebuilds produce byte-identical archives when the source files are unchanged. The validator checks `driver.xml` with `xmllint`, verifies required source/package files, confirms the `.c4z` contains only the expected driver files, and fails if packaged source files are stale relative to the working tree. The same validation and deterministic rebuild check run in GitHub Actions on pushes to `main` and on pull requests.
 
 ### 1. Proflame Protocol
 - **No spaces in JSON** - Commands with spaces are silently ignored

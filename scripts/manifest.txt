@@ -1,0 +1,5 @@
+driver.xml
+driver.lua
+www/documentation.html
+www/icons/device_sm.png
+www/icons/device_lg.png

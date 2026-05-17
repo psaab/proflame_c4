@@ -1,0 +1,30 @@
+name: Validate Driver Package
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install validation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxml2-utils zip unzip
+
+      - name: Validate checked-in package
+        run: scripts/validate.sh
+
+      - name: Verify package rebuild is deterministic
+        run: |
+          cp proflame_wifi_connect.c4z /tmp/proflame_wifi_connect.before.c4z
+          scripts/package.sh
+          scripts/validate.sh
+          cmp /tmp/proflame_wifi_connect.before.c4z proflame_wifi_connect.c4z

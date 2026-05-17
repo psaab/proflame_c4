@@ -2,7 +2,13 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-PACKAGE="$ROOT_DIR/proflame_wifi_connect.c4z"
+PACKAGE=${1:-"$ROOT_DIR/proflame_wifi_connect.c4z"}
+MANIFEST="$ROOT_DIR/scripts/manifest.txt"
+
+case "$PACKAGE" in
+    /*) ;;
+    *) PACKAGE="$(pwd)/$PACKAGE" ;;
+esac
 
 fail() {
     echo "ERROR: $*" >&2
@@ -21,17 +27,15 @@ require_tool xmllint
 require_tool unzip
 require_tool zip
 
-for file in \
-    driver.xml \
-    driver.lua \
-    www/documentation.html \
-    www/icons/device_sm.png \
-    www/icons/device_lg.png
-do
+require_file scripts/manifest.txt
+
+FILES=$(sed '/^[[:space:]]*$/d' "$MANIFEST")
+
+for file in $FILES; do
     require_file "$file"
 done
 
-require_file proflame_wifi_connect.c4z
+[ -f "$PACKAGE" ] || fail "Missing package: $PACKAGE"
 
 xmllint --noout "$ROOT_DIR/driver.xml"
 
@@ -50,13 +54,7 @@ EXPECTED=$(mktemp)
 ACTUAL=$(mktemp)
 trap 'rm -f "$EXPECTED" "$ACTUAL"' EXIT
 
-cat > "$EXPECTED" <<'EOF'
-driver.lua
-driver.xml
-www/documentation.html
-www/icons/device_lg.png
-www/icons/device_sm.png
-EOF
+printf '%s\n' $FILES | sort > "$EXPECTED"
 
 unzip -Z1 "$PACKAGE" | sort > "$ACTUAL"
 if ! cmp -s "$EXPECTED" "$ACTUAL"; then
@@ -67,7 +65,7 @@ if ! cmp -s "$EXPECTED" "$ACTUAL"; then
     fail "Unexpected .c4z contents"
 fi
 
-for file in driver.xml driver.lua www/documentation.html www/icons/device_sm.png www/icons/device_lg.png; do
+for file in $FILES; do
     unzip -p "$PACKAGE" "$file" | cmp -s - "$ROOT_DIR/$file" || fail "Packaged $file is stale"
 done
 

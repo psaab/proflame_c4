@@ -3,14 +3,20 @@ set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 PACKAGE=${1:-"$ROOT_DIR/proflame_wifi_connect.c4z"}
+MANIFEST="$ROOT_DIR/scripts/manifest.txt"
+NORMALIZED_MTIME=202001010000.00
 
-FILES="
-driver.xml
-driver.lua
-www/documentation.html
-www/icons/device_sm.png
-www/icons/device_lg.png
-"
+case "$PACKAGE" in
+    /*) ;;
+    *) PACKAGE="$(pwd)/$PACKAGE" ;;
+esac
+
+[ -f "$MANIFEST" ] || {
+    echo "Missing required file: scripts/manifest.txt" >&2
+    exit 1
+}
+
+FILES=$(sed '/^[[:space:]]*$/d' "$MANIFEST")
 
 for file in $FILES; do
     if [ ! -f "$ROOT_DIR/$file" ]; then
@@ -31,7 +37,8 @@ done
 rm -f "$PACKAGE"
 (
     cd "$TMP_DIR"
-    zip -X -q "$PACKAGE" driver.xml driver.lua www/documentation.html www/icons/device_sm.png www/icons/device_lg.png
+    find . -exec touch -t "$NORMALIZED_MTIME" {} +
+    zip -X -q "$PACKAGE" $FILES
 )
 
 echo "Built $PACKAGE"
