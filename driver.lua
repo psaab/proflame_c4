@@ -193,8 +193,6 @@ gLastConnectionOnline = false
 
 gPendingSetpointF = nil
 gPendingTimer = nil
-gPendingFlame = nil
-gPendingDefaultTimer = nil
 
 gState = {
     main_mode = "0",
@@ -657,43 +655,6 @@ function StopReconnectTimer()
         gReconnectTimerId:Cancel()
         gReconnectTimerId = nil
     end
-end
-
-function OnHeatModeTimer()
-    -- Called after mode switch to Heat - set flame and timer
-    local flame = gPendingFlame or 3
-    local timer = gPendingDefaultTimer or 120
-    SendProflameCommand("flame_control", tostring(flame))
-    if timer > 0 then
-        -- Convert minutes to milliseconds
-        local msValue = timer * 60000
-        SendProflameCommand("timer_set", tostring(msValue))
-        gState.timer_set = tostring(msValue)
-        -- Start the timer
-        C4:SetTimer(200, function()
-            SendProflameCommand("timer_status", "1")
-        end, false)
-        UpdateExtrasState()
-    end
-    gPendingFlame = nil
-    gPendingDefaultTimer = nil
-end
-
-function OnSmartEcoModeTimer()
-    -- Called after mode switch to Smart/Eco - just set timer (no flame override)
-    local timer = gPendingDefaultTimer or 120
-    if timer > 0 then
-        -- Convert minutes to milliseconds
-        local msValue = timer * 60000
-        SendProflameCommand("timer_set", tostring(msValue))
-        gState.timer_set = tostring(msValue)
-        -- Start the timer
-        C4:SetTimer(200, function()
-            SendProflameCommand("timer_status", "1")
-        end, false)
-        UpdateExtrasState()
-    end
-    gPendingDefaultTimer = nil
 end
 
 -- =============================================================================
@@ -1385,6 +1346,43 @@ function ClearTimerStateAndSend(turnOff)
     return true
 end
 
+function ArmTimerAfterDelay(updateTimerExtras)
+    gTimerStartDelayTimer = C4:SetTimer(200, function(timer)
+        gTimerStartDelayTimer = nil
+        SendProflameCommand("timer_status", "1")
+        ScheduleTimerSuppressionClear()
+    end, false)
+
+    if updateTimerExtras then
+        UpdateTimerExtras()
+    else
+        UpdateExtrasState()
+    end
+end
+
+function SetRequestedTimerState(minutes)
+    local msValue = minutes * 60000
+    gState.timer_set = tostring(msValue)
+    gState.timer_count = tostring(msValue)
+    gState.timer_status = "1"
+    return msValue
+end
+
+function SetTimerValueAndArm(minutes, updateTimerExtras)
+    local msValue = SetRequestedTimerState(minutes)
+    gSuppressTimerUpdates = true
+    gTimerExpired = false
+    SendProflameCommand("timer_set", tostring(msValue))
+    ArmTimerAfterDelay(updateTimerExtras)
+end
+
+function ScheduleModeReadyWork(callback)
+    gTimerModeDelayTimer = C4:SetTimer(750, function(timer)
+        gTimerModeDelayTimer = nil
+        callback()
+    end, false)
+end
+
 function CommandSetMode(mode)
     if mode == MODE_OFF or mode == MODE_MANUAL or mode == MODE_SMART or mode == MODE_ECO then
         SendProflameCommand("main_mode", mode)
@@ -1403,23 +1401,12 @@ function CommandTurnOn()
     SendProflameCommand("main_mode", GetDefaultOnMode())
     local defaultFlame = GetDefaultFlameLevel()
     local defaultTimer = GetDefaultTimerMinutes()
-    gTimerModeDelayTimer = C4:SetTimer(750, function(timer)
-        gTimerModeDelayTimer = nil
+    ScheduleModeReadyWork(function()
         SendProflameCommand("flame_control", tostring(defaultFlame))
         if defaultTimer and defaultTimer > 0 then
-            local msValue = defaultTimer * 60000
-            gSuppressTimerUpdates = true
-            gTimerExpired = false
-            SendProflameCommand("timer_set", tostring(msValue))
-            gState.timer_set = tostring(msValue)
-            gTimerStartDelayTimer = C4:SetTimer(200, function(timer2)
-                gTimerStartDelayTimer = nil
-                SendProflameCommand("timer_status", "1")
-                ScheduleTimerSuppressionClear()
-            end, false)
-            UpdateExtrasState()
+            SetTimerValueAndArm(defaultTimer, false)
         end
-    end, false)
+    end)
     -- If no timer will be armed, clear suppression now; no later callback will do it.
     if not defaultTimer or defaultTimer <= 0 then
         gSuppressTimerUpdates = false
@@ -1520,35 +1507,19 @@ function CommandSetTimerMinutes(minutes)
     gSuppressTimerUpdates = true
     gTimerExpired = false
 
-    local msValue = minutes * 60000
     if minutes > 0 then
-        gState.timer_set = tostring(msValue)
-        gState.timer_count = tostring(msValue)
-        gState.timer_status = "1"
+        SetRequestedTimerState(minutes)
 
         if gState.main_mode == MODE_OFF or gState.main_mode == MODE_STANDBY then
             dbg_err("Fireplace is off, turning on with timer")
             SendProflameCommand("main_mode", GetDefaultOnMode())
             local defaultFlame = GetDefaultFlameLevel()
-            gTimerModeDelayTimer = C4:SetTimer(750, function(timer)
-                gTimerModeDelayTimer = nil
+            ScheduleModeReadyWork(function()
                 SendProflameCommand("flame_control", tostring(defaultFlame))
-                SendProflameCommand("timer_set", tostring(msValue))
-                gTimerStartDelayTimer = C4:SetTimer(200, function(timer2)
-                    gTimerStartDelayTimer = nil
-                    SendProflameCommand("timer_status", "1")
-                    ScheduleTimerSuppressionClear()
-                end, false)
-                UpdateTimerExtras()
-            end, false)
+                SetTimerValueAndArm(minutes, true)
+            end)
         else
-            SendProflameCommand("timer_set", tostring(msValue))
-            gTimerStartDelayTimer = C4:SetTimer(200, function(timer)
-                gTimerStartDelayTimer = nil
-                SendProflameCommand("timer_status", "1")
-                ScheduleTimerSuppressionClear()
-            end, false)
-            UpdateTimerExtras()
+            SetTimerValueAndArm(minutes, true)
         end
     else
         dbg_err("Timer set to 0, turning off fireplace")
