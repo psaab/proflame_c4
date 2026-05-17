@@ -9,7 +9,7 @@
   <manufacturer>SIT Group / Proflame</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051702</version>
+  <version>2026051711</version>
   <created>12/02/2025 12:00 PM</created>
   <modified>05/17/2026 12:15 AM</modified>
   <auto_update>true</auto_update>

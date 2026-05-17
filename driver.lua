@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051702"
+DRIVER_VERSION = "2026051711"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -22,6 +22,7 @@ EVENT_CONNECTION_RESTORED = 5
 
 MODE_OFF = "0"
 MODE_STANDBY = "1"
+MODE_STANDBY_ALT = "2"  -- Proflame reports this after app-driven off/standby even though command off is 0.
 MODE_MANUAL = "5"
 MODE_SMART = "6"
 MODE_ECO = "7"
@@ -99,7 +100,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260517-001542"
+BUILD_TIMESTAMP = "20260517-073934"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -181,6 +182,10 @@ gReconnectTimerId = nil
 gTimerModeDelayTimer = nil
 gTimerStartDelayTimer = nil
 gTimerSuppressClearTimer = nil
+gTurnOffConfirmTimer = nil
+gTurnOffRetryTimer = nil
+gTurnOffRetryCount = 0
+gTurnOffInProgress = false
 gWebSocketKey = nil
 gDebugLevel = DEBUG_DEBUG
 gDebugEnabled = true
@@ -243,6 +248,10 @@ end
 
 function IsFireplaceOnMode(mode)
     return mode == MODE_MANUAL or mode == MODE_SMART or mode == MODE_ECO
+end
+
+function IsFireplaceOffMode(mode)
+    return mode == MODE_OFF or mode == MODE_STANDBY or mode == MODE_STANDBY_ALT
 end
 
 function FireDriverEvent(eventId, eventName)
@@ -422,17 +431,22 @@ end
 
 function JsonEscape(value)
     value = tostring(value or "")
-    value = value:gsub("\\", "\\\\")
-    value = value:gsub('"', '\\"')
-    value = value:gsub("\b", "\\b")
-    value = value:gsub("\f", "\\f")
-    value = value:gsub("\n", "\\n")
-    value = value:gsub("\r", "\\r")
-    value = value:gsub("\t", "\\t")
-    value = value:gsub("([\0-\31])", function(c)
-        return string.format("\\u%04X", c:byte())
-    end)
-    return value
+    local result = ""
+    for i = 1, #value do
+        local c = value:sub(i, i)
+        local byte = c:byte()
+        if c == "\\" then result = result .. "\\\\"
+        elseif c == '"' then result = result .. '\\"'
+        elseif byte == 8 then result = result .. "\\b"
+        elseif byte == 12 then result = result .. "\\f"
+        elseif byte == 10 then result = result .. "\\n"
+        elseif byte == 13 then result = result .. "\\r"
+        elseif byte == 9 then result = result .. "\\t"
+        elseif byte and byte < 32 then result = result .. string.format("\\u%04X", byte)
+        else result = result .. c
+        end
+    end
+    return result
 end
 
 function JsonUnescape(value)
@@ -563,7 +577,7 @@ end
 
 function GetModeString(mode)
     if mode == MODE_OFF then return "Off"
-    elseif mode == MODE_STANDBY then return "Standby"
+    elseif mode == MODE_STANDBY or mode == MODE_STANDBY_ALT then return "Standby"
     elseif mode == MODE_MANUAL then return "Manual"
     elseif mode == MODE_SMART then return "Smart"
     elseif mode == MODE_ECO then return "Eco"
@@ -622,9 +636,9 @@ function GetExtrasXML()
         timerMinutes = math.floor(timerMs / 60000)
     end
 
-    -- Only force timer to 0 if fireplace is off AND timer is not active
+    -- Only force timer to 0 if fireplace is off/standby AND timer is not active
     -- This prevents showing 0 during startup when we're setting a timer
-    if mode == MODE_OFF and timerStatus ~= 1 then
+    if IsFireplaceOffMode(mode) and timerStatus ~= 1 then
         timerMinutes = 0
     end
 
@@ -646,8 +660,10 @@ function GetExtrasXML()
     
     -- Determine current mode
     local mode = gState.main_mode or MODE_OFF
-    local modeValue = "manual"
-    if mode == MODE_SMART then
+    local modeValue = "off"
+    if mode == MODE_MANUAL then
+        modeValue = "manual"
+    elseif mode == MODE_SMART then
         modeValue = "smart"
     elseif mode == MODE_ECO then
         modeValue = "eco"
@@ -655,12 +671,14 @@ function GetExtrasXML()
     
     -- Build mode items with current mode first (this is how Ecobee does it)
     local modeItems = ""
-    if modeValue == "manual" then
-        modeItems = '<item text="Manual" value="manual"/><item text="Smart Thermostat" value="smart"/><item text="Eco" value="eco"/>'
+    if modeValue == "off" then
+        modeItems = '<item text="Off" value="off"/><item text="Manual" value="manual"/><item text="Smart Thermostat" value="smart"/><item text="Eco" value="eco"/>'
+    elseif modeValue == "manual" then
+        modeItems = '<item text="Manual" value="manual"/><item text="Off" value="off"/><item text="Smart Thermostat" value="smart"/><item text="Eco" value="eco"/>'
     elseif modeValue == "smart" then
-        modeItems = '<item text="Smart Thermostat" value="smart"/><item text="Manual" value="manual"/><item text="Eco" value="eco"/>'
+        modeItems = '<item text="Smart Thermostat" value="smart"/><item text="Off" value="off"/><item text="Manual" value="manual"/><item text="Eco" value="eco"/>'
     else
-        modeItems = '<item text="Eco" value="eco"/><item text="Manual" value="manual"/><item text="Smart Thermostat" value="smart"/>'
+        modeItems = '<item text="Eco" value="eco"/><item text="Off" value="off"/><item text="Manual" value="manual"/><item text="Smart Thermostat" value="smart"/>'
     end
     
     -- XML structure matching working Ecobee thermostat format - include value attributes for sliders
@@ -946,9 +964,11 @@ end
 function Disconnect()
     StopPingTimer()
     CancelPendingTimerCommandTimers()
+    CancelTurnOffConfirmTimer()
     if gSuppressTimerUpdates then
         SetTimerSuppression(false, "disconnect")
     end
+    ClearTurnOffInProgress("disconnect")
     local port = tonumber(Properties["Port"]) or 88
     if gConnected then
         pcall(function() C4:NetDisconnect(NETWORK_BINDING_ID, port) end)
@@ -987,17 +1007,41 @@ function SendPong(payload)
     return true
 end
 
-function SendDeviceControl(control, value)
+function SendDocumentedDeviceControl(control, value, context)
     if not gConnected or not gHandshakeComplete then
         dbg_err("Refusing device command while disconnected or handshaking: " .. tostring(control) .. "=" .. tostring(value))
         return false
     end
     local cmd = BuildSetControlCommand(control, value)
-    dbg_err("Sending command: " .. cmd)
-    local sentPrimary = SendWebSocketMessage(cmd)
+    if context then
+        dbg_err("Sending " .. tostring(context) .. " command: " .. cmd)
+    else
+        dbg_err("Sending command: " .. cmd)
+    end
+    return SendWebSocketMessage(cmd)
+end
+
+function SendLegacyDeviceControl(control, value, context)
+    if not gConnected or not gHandshakeComplete then
+        dbg_err("Refusing device command while disconnected or handshaking: " .. tostring(control) .. "=" .. tostring(value))
+        return false
+    end
     local legacyCmd = BuildLegacyIndexedCommand(control, value)
-    dbg_err("Sending legacy command fallback: " .. legacyCmd)
-    local sentLegacy = SendWebSocketMessage(legacyCmd)
+    if context then
+        dbg_err("Sending " .. tostring(context) .. " legacy command: " .. legacyCmd)
+    else
+        dbg_err("Sending legacy command fallback: " .. legacyCmd)
+    end
+    return SendWebSocketMessage(legacyCmd)
+end
+
+function SendDeviceControl(control, value)
+    if gTurnOffInProgress then
+        dbg_err("Refusing device command while turn off is pending: " .. tostring(control) .. "=" .. tostring(value))
+        return false
+    end
+    local sentPrimary = SendDocumentedDeviceControl(control, value)
+    local sentLegacy = SendLegacyDeviceControl(control, value)
     return sentPrimary or sentLegacy
 end
 
@@ -1135,7 +1179,14 @@ function ApplyDeviceStatus(status, value)
 
     if status == "main_mode" then
         gState.main_mode = value
-        if (value == MODE_OFF or value == MODE_STANDBY) and not gSuppressTimerUpdates then
+        if gTurnOffInProgress and IsFireplaceOffMode(value) then
+            ClearTurnOffInProgress("confirmed off mode " .. tostring(value))
+        elseif gTurnOffInProgress and IsFireplaceOnMode(value) then
+            dbg_err("Turn off still pending; ignoring on-mode echo: " .. tostring(value))
+            ScheduleTurnOffRetry("on-mode echo " .. tostring(value))
+            return
+        end
+        if IsFireplaceOffMode(value) and not gSuppressTimerUpdates then
             gState.timer_set = "0"
             gState.timer_count = "0"
             return { status = status, value = value, timerCleared = true, timerExtras = true }
@@ -1183,7 +1234,7 @@ function ApplyDeviceStatus(status, value)
         -- Ignore timer_count updates when fireplace is off/standby or timer is disabled
         -- The device sends default timer values when entering standby which we should ignore
         local mode = gState.main_mode
-        if mode == MODE_OFF or mode == MODE_STANDBY then
+        if IsFireplaceOffMode(mode) then
             dbg_err("Timer count ignored (mode=" .. tostring(mode) .. "): " .. tostring(value))
             return
         end
@@ -1323,8 +1374,7 @@ function StatusAffectsExtras(status)
         status == "flame_control" or
         status == "fan_control" or
         status == "lamp_control" or
-        status == "timer_status" or
-        status == "timer_count"
+        status == "timer_status"
 end
 
 function ScheduleExtrasRefresh(reason, timerOnly)
@@ -1399,7 +1449,7 @@ end
 function UpdateFlameLevel()
     local flameLevel = tonumber(gState.flame_control) or 0
     local percent = math.floor(flameLevel / 6 * 100)
-    local isOn = (flameLevel > 0) and (gState.main_mode ~= MODE_OFF and gState.main_mode ~= MODE_STANDBY)
+    local isOn = (flameLevel > 0) and IsFireplaceOnMode(gState.main_mode)
     dbg_err("Flame level updated: " .. flameLevel .. " = " .. percent .. "%, on=" .. tostring(isOn))
 end
 
@@ -1607,6 +1657,56 @@ function CancelTimerSuppressionClear()
     end
 end
 
+function CancelTurnOffConfirmTimer()
+    if gTurnOffConfirmTimer then
+        gTurnOffConfirmTimer:Cancel()
+        gTurnOffConfirmTimer = nil
+    end
+end
+
+function CancelTurnOffRetryTimer()
+    if gTurnOffRetryTimer then
+        gTurnOffRetryTimer:Cancel()
+        gTurnOffRetryTimer = nil
+    end
+end
+
+function ClearTurnOffInProgress(reason)
+    if gTurnOffInProgress then
+        dbg_err("Turn off guard cleared: " .. tostring(reason))
+    end
+    gTurnOffInProgress = false
+    gTurnOffRetryCount = 0
+    CancelTurnOffRetryTimer()
+end
+
+function SendTurnOffControls(reason)
+    dbg_err("Sending legacy turn off controls: " .. tostring(reason))
+    local sent = SendLegacyDeviceControl("timer_status", "0", "turn off")
+    sent = SendLegacyDeviceControl("main_mode", MODE_OFF, "turn off") or sent
+    return sent
+end
+
+function ScheduleTurnOffRetry(reason)
+    CancelTurnOffRetryTimer()
+    if not gTurnOffInProgress then return end
+    if gTurnOffRetryCount >= 4 then
+        dbg_err("Turn off retry limit reached: " .. tostring(reason))
+        ClearTurnOffInProgress("retry limit reached")
+        return
+    end
+    gTurnOffRetryCount = gTurnOffRetryCount + 1
+    local delay = 750 * gTurnOffRetryCount
+    dbg_err("Scheduling turn off retry " .. tostring(gTurnOffRetryCount) .. " in " .. tostring(delay) .. "ms: " .. tostring(reason))
+    gTurnOffRetryTimer = C4:SetTimer(delay, function(timer)
+        gTurnOffRetryTimer = nil
+        if RequireDeviceCommandReady("Turn Off retry") and gTurnOffInProgress then
+            SendTurnOffControls("retry " .. tostring(gTurnOffRetryCount))
+            ScheduleTurnOffRetry("awaiting off confirmation")
+        end
+    end, false)
+end
+
 function SetTimerSuppression(enabled, reason)
     CancelTimerSuppressionClear()
     gSuppressTimerUpdates = enabled
@@ -1641,11 +1741,17 @@ end
 function ClearTimerStateAndSend(turnOff)
     if not RequireDeviceCommandReady(turnOff and "Turn Off" or "Cancel Timer") then return false end
     CancelPendingTimerCommandTimers()
+    CancelTurnOffConfirmTimer()
     SetTimerSuppression(true, "clearing timer")
-    local sent = SendDeviceControl("timer_status", "0")
-    sent = SendDeviceControl("timer_set", "0") or sent
+    local sent
     if turnOff then
-        sent = SendDeviceControl("main_mode", MODE_OFF) or sent
+        gTurnOffInProgress = true
+        gTurnOffRetryCount = 0
+        sent = SendTurnOffControls("initial")
+        ScheduleTurnOffRetry("initial turn off")
+    else
+        sent = SendDeviceControl("timer_status", "0")
+        sent = SendDeviceControl("timer_set", "0") or sent
     end
     if not sent then
         SetTimerSuppression(false, "clear timer send failed")
@@ -1654,6 +1760,16 @@ function ClearTimerStateAndSend(turnOff)
     gState.timer_set = "0"
     gState.timer_count = "0"
     gState.timer_status = "0"
+    if turnOff then
+        gState.flame_control = "0"
+        UpdatePropertiesForStatus({ status = "flame_control", value = "0" })
+        gTurnOffConfirmTimer = C4:SetTimer(750, function(timer)
+            gTurnOffConfirmTimer = nil
+            if RequireDeviceCommandReady("Turn Off confirm") then
+                SendTurnOffControls("confirm")
+            end
+        end, false)
+    end
     C4:UpdateProperty("Timer Remaining", "Off")
     UpdateTimerExtras()
     ScheduleTimerSuppressionClear()
@@ -1723,6 +1839,9 @@ end
 function CommandSetMode(mode)
     if mode == MODE_OFF or mode == MODE_MANUAL or mode == MODE_SMART or mode == MODE_ECO then
         if not RequireDeviceCommandReady("Set Mode") then return false end
+        if mode ~= MODE_OFF then
+            ClearTurnOffInProgress("explicit mode command")
+        end
         CancelPendingModeReadyWork()
         return SendDeviceControl("main_mode", mode)
     end
@@ -1736,6 +1855,7 @@ end
 
 function CommandTurnOn()
     if not RequireDeviceCommandReady("Turn On") then return false end
+    ClearTurnOffInProgress("turn on")
     CancelPendingTimerCommandTimers()
     if not SendDeviceControl("main_mode", GetDefaultOnMode()) then return false end
     local defaultFlame = GetDefaultFlameLevel()
@@ -1757,6 +1877,10 @@ function CommandTurnOn()
 end
 
 function CommandSetFlame(level)
+    if gTurnOffInProgress then
+        dbg_err("Set Flame Level ignored while turn off is in progress")
+        return false
+    end
     if not RequireDeviceCommandReady("Set Flame Level") then return false end
     level = ClampNumber(level, 0, 6, nil)
     if level == nil then
@@ -1864,7 +1988,7 @@ function CommandSetTimerMinutes(minutes)
         SetTimerSuppression(true, "set timer command")
         gTimerExpired = false
 
-        if gState.main_mode == MODE_OFF or gState.main_mode == MODE_STANDBY then
+        if IsFireplaceOffMode(gState.main_mode) then
             dbg_err("Fireplace is off, turning on with timer")
             if not SendDeviceControl("main_mode", GetDefaultOnMode()) then
                 SetTimerSuppression(false, "timer mode send failed")
@@ -2073,6 +2197,14 @@ function HandleThermostatCommand(strCommand, tParams)
         -- "Low Flame" = level 1, "Medium Flame" = level 3, "High Flame" = level 6
         local holdMode = tParams["MODE"] or ""
         dbg_err("SET_MODE_HOLD received: " .. holdMode)
+        if gTurnOffInProgress then
+            dbg_err("SET_MODE_HOLD ignored while turn off is in progress: " .. tostring(holdMode))
+            return
+        end
+        if not IsFireplaceOnMode(gState.main_mode) then
+            dbg_err("SET_MODE_HOLD ignored while fireplace mode is off/standby: " .. tostring(gState.main_mode))
+            return
+        end
         if holdMode == "Low Flame" then
             -- Low flame (level 1)
             if CommandSetFlame(1) then
@@ -2094,7 +2226,9 @@ function HandleThermostatCommand(strCommand, tParams)
     elseif strCommand == "SELECT_MODE" then
         local val = tParams["VALUE"] or tParams["value"] or ""
         dbg_err("SELECT_MODE: " .. tostring(val))
-        if val == "manual" then
+        if val == "off" then
+            CommandTurnOff()
+        elseif val == "manual" then
             CommandSetMode(MODE_MANUAL)
         elseif val == "smart" then
             CommandSetMode(MODE_SMART)
@@ -2149,11 +2283,14 @@ function ResetDriverState()
     gLastMainMode = nil
     gLastConnectionOnline = false
     gStatusSeen = {}
+    gTurnOffInProgress = false
 
     -- Cancel any pending timers
     StopPingTimer()
     StopReconnectTimer()
     CancelPendingTimerCommandTimers()
+    CancelTurnOffConfirmTimer()
+    CancelTurnOffRetryTimer()
     
     -- Reset device state
     gState = {
@@ -2244,6 +2381,8 @@ function OnDriverDestroyed()
     StopPingTimer()
     StopReconnectTimer()
     CancelPendingTimerCommandTimers()
+    CancelTurnOffConfirmTimer()
+    CancelTurnOffRetryTimer()
     Disconnect()
 end
 
@@ -2255,6 +2394,8 @@ function OnDriverUpdated()
     StopPingTimer()
     StopReconnectTimer()
     CancelPendingTimerCommandTimers()
+    CancelTurnOffConfirmTimer()
+    CancelTurnOffRetryTimer()
     Disconnect()
     
     -- Reset state
