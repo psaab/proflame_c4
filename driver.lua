@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051721"
+DRIVER_VERSION = "2026051720"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -111,7 +111,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260517-104252"
+BUILD_TIMESTAMP = "20260517-103813"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -713,15 +713,6 @@ function GetExtrasXML()
     else
         modeItems = '<item text="Eco" value="eco"/><item text="Off" value="off"/><item text="Manual" value="manual"/><item text="Smart Thermostat" value="smart"/>'
     end
-
-    local flamePresetItems = ""
-    if flame <= 2 then
-        flamePresetItems = '<item text="Low Flame" value="1"/><item text="Medium Flame" value="3"/><item text="High Flame" value="6"/>'
-    elseif flame <= 4 then
-        flamePresetItems = '<item text="Medium Flame" value="3"/><item text="Low Flame" value="1"/><item text="High Flame" value="6"/>'
-    else
-        flamePresetItems = '<item text="High Flame" value="6"/><item text="Medium Flame" value="3"/><item text="Low Flame" value="1"/>'
-    end
     
     -- XML structure matching working Ecobee thermostat format - include value attributes for sliders
     local xml = 
@@ -735,11 +726,6 @@ function GetExtrasXML()
           '</object>' ..
         '</section>' ..
         '<section label="Fireplace Controls">' ..
-          '<object type="list" id="pf_flame_preset" label="Flame Height" command="SELECT_FLAME_PRESET">' ..
-            '<list maxselections="1" minselections="1">' ..
-              flamePresetItems ..
-            '</list>' ..
-          '</object>' ..
           '<object type="slider" id="pf_flame" label="Flame Level" command="SET_FLAME_LEVEL" min="1" max="6" value="' .. flame .. '"/>' ..
           '<object type="slider" id="pf_fan" label="Fan Speed" command="SET_FAN_LEVEL" min="0" max="6" value="' .. fan .. '"/>' ..
           '<object type="slider" id="pf_light" label="Downlight" command="SET_LIGHT_LEVEL" min="0" max="6" value="' .. light .. '"/>' ..
@@ -1100,6 +1086,7 @@ function UpdateAllProxies()
     UpdateRoomTemperature()
     UpdateFanMode()
     UpdateFlameLevel()
+    UpdateHoldModeFromFlame()
     UpdatePresetMode()
     UpdateExtrasState()
     
@@ -1395,6 +1382,7 @@ function UpdateProxyForStatus(change)
         UpdatePresetMode(value)
     elseif status == "flame_control" then
         UpdateFlameLevel()
+        UpdateHoldModeFromFlame()
     elseif status == "fan_control" then
         UpdateFanMode()
     elseif status == "temperature_set" then
@@ -1496,6 +1484,21 @@ function UpdateFlameLevel()
     local percent = math.floor(flameLevel / 6 * 100)
     local isOn = (flameLevel > 0) and IsFireplaceOnMode(gState.main_mode)
     dbg_err("Flame level updated: " .. flameLevel .. " = " .. percent .. "%, on=" .. tostring(isOn))
+end
+
+function UpdateHoldModeFromFlame()
+    -- Update hold mode to reflect current flame level
+    local flameLevel = tonumber(gState.flame_control) or 0
+    local holdMode = "Low Flame"
+    if flameLevel <= 2 then
+        holdMode = "Low Flame"
+    elseif flameLevel <= 4 then
+        holdMode = "Medium Flame"
+    else
+        holdMode = "High Flame"
+    end
+    C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = holdMode })
+    dbg_err("Hold mode updated to: " .. holdMode .. " (flame level " .. flameLevel .. ")")
 end
 
 function UpdatePresetMode(modeOverride)
@@ -2300,6 +2303,36 @@ function HandleThermostatCommand(strCommand, tParams)
             )
         end
         
+    elseif strCommand == "SET_MODE_HOLD" then
+        -- Hold modes repurposed for quick flame control:
+        -- "Low Flame" = level 1, "Medium Flame" = level 3, "High Flame" = level 6
+        local holdMode = tParams["MODE"] or ""
+        dbg_err("SET_MODE_HOLD received: " .. holdMode)
+        if gTurnOffInProgress then
+            dbg_err("SET_MODE_HOLD ignored while turn off is in progress: " .. tostring(holdMode))
+            return
+        end
+        if not IsFireplaceOnMode(gState.main_mode) then
+            dbg_err("SET_MODE_HOLD ignored while fireplace mode is off/standby: " .. tostring(gState.main_mode))
+            return
+        end
+        if holdMode == "Low Flame" then
+            -- Low flame (level 1)
+            if CommandSetFlame(1) then
+                C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "Low Flame" })
+            end
+        elseif holdMode == "Medium Flame" then
+            -- Medium flame (level 3)
+            if CommandSetFlame(3) then
+                C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "Medium Flame" })
+            end
+        elseif holdMode == "High Flame" then
+            -- High flame (level 6)
+            if CommandSetFlame(6) then
+                C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "High Flame" })
+            end
+        end
+        
     -- New extras commands (matching Ecobee-style format)
     elseif strCommand == "SELECT_MODE" then
         local val = tParams["VALUE"] or tParams["value"] or ""
@@ -2454,6 +2487,7 @@ function InitializePropertiesFromState()
     C4:UpdateProperty("Burner Status", string.format("0x%04X", burnerNum))
     C4:UpdateProperty("WiFi Signal Strength", "-" .. gState.wifi_signal_str .. " dBm")
     UpdateThermostatSetpoint()
+    UpdateHoldModeFromFlame()
 end
 
 function OnDriverDestroyed()
