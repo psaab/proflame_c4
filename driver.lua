@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051707"
+DRIVER_VERSION = "2026051708"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -183,6 +183,8 @@ gTimerModeDelayTimer = nil
 gTimerStartDelayTimer = nil
 gTimerSuppressClearTimer = nil
 gTurnOffConfirmTimer = nil
+gTurnOffRetryTimer = nil
+gTurnOffRetryCount = 0
 gTurnOffInProgress = false
 gWebSocketKey = nil
 gDebugLevel = DEBUG_DEBUG
@@ -966,6 +968,7 @@ function Disconnect()
     if gSuppressTimerUpdates then
         SetTimerSuppression(false, "disconnect")
     end
+    ClearTurnOffInProgress("disconnect")
     local port = tonumber(Properties["Port"]) or 88
     if gConnected then
         pcall(function() C4:NetDisconnect(NETWORK_BINDING_ID, port) end)
@@ -1152,6 +1155,13 @@ function ApplyDeviceStatus(status, value)
 
     if status == "main_mode" then
         gState.main_mode = value
+        if gTurnOffInProgress and IsFireplaceOffMode(value) then
+            ClearTurnOffInProgress("confirmed off mode " .. tostring(value))
+        elseif gTurnOffInProgress and IsFireplaceOnMode(value) then
+            dbg_err("Turn off still pending; ignoring on-mode echo: " .. tostring(value))
+            ScheduleTurnOffRetry("on-mode echo " .. tostring(value))
+            return
+        end
         if IsFireplaceOffMode(value) and not gSuppressTimerUpdates then
             gState.timer_set = "0"
             gState.timer_count = "0"
@@ -1630,11 +1640,47 @@ function CancelTurnOffConfirmTimer()
     end
 end
 
+function CancelTurnOffRetryTimer()
+    if gTurnOffRetryTimer then
+        gTurnOffRetryTimer:Cancel()
+        gTurnOffRetryTimer = nil
+    end
+end
+
 function ClearTurnOffInProgress(reason)
     if gTurnOffInProgress then
         dbg_err("Turn off guard cleared: " .. tostring(reason))
     end
     gTurnOffInProgress = false
+    gTurnOffRetryCount = 0
+    CancelTurnOffRetryTimer()
+end
+
+function SendTurnOffControls(reason)
+    dbg_err("Sending Proflame-app turn off controls: " .. tostring(reason))
+    local sent = SendDeviceControl("timer_status", "0")
+    sent = SendDeviceControl("flame_control", "0") or sent
+    sent = SendDeviceControl("main_mode", MODE_STANDBY_ALT) or sent
+    return sent
+end
+
+function ScheduleTurnOffRetry(reason)
+    CancelTurnOffRetryTimer()
+    if not gTurnOffInProgress then return end
+    if gTurnOffRetryCount >= 4 then
+        dbg_err("Turn off retry limit reached: " .. tostring(reason))
+        return
+    end
+    gTurnOffRetryCount = gTurnOffRetryCount + 1
+    local delay = 750 * gTurnOffRetryCount
+    dbg_err("Scheduling turn off retry " .. tostring(gTurnOffRetryCount) .. " in " .. tostring(delay) .. "ms: " .. tostring(reason))
+    gTurnOffRetryTimer = C4:SetTimer(delay, function(timer)
+        gTurnOffRetryTimer = nil
+        if RequireDeviceCommandReady("Turn Off retry") and gTurnOffInProgress then
+            SendTurnOffControls("retry " .. tostring(gTurnOffRetryCount))
+            ScheduleTurnOffRetry("awaiting off confirmation")
+        end
+    end, false)
 end
 
 function SetTimerSuppression(enabled, reason)
@@ -1673,12 +1719,15 @@ function ClearTimerStateAndSend(turnOff)
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()
     SetTimerSuppression(true, "clearing timer")
-    local sent = SendDeviceControl("timer_status", "0")
-    sent = SendDeviceControl("timer_set", "0") or sent
+    local sent
     if turnOff then
         gTurnOffInProgress = true
-        sent = SendDeviceControl("flame_control", "0") or sent
-        sent = SendDeviceControl("main_mode", MODE_OFF) or sent
+        gTurnOffRetryCount = 0
+        sent = SendTurnOffControls("initial")
+        ScheduleTurnOffRetry("initial turn off")
+    else
+        sent = SendDeviceControl("timer_status", "0")
+        sent = SendDeviceControl("timer_set", "0") or sent
     end
     if not sent then
         SetTimerSuppression(false, "clear timer send failed")
@@ -1693,8 +1742,7 @@ function ClearTimerStateAndSend(turnOff)
         gTurnOffConfirmTimer = C4:SetTimer(750, function(timer)
             gTurnOffConfirmTimer = nil
             if RequireDeviceCommandReady("Turn Off confirm") then
-                SendDeviceControl("flame_control", "0")
-                SendDeviceControl("main_mode", MODE_OFF)
+                SendTurnOffControls("confirm")
             end
         end, false)
     end
@@ -2218,6 +2266,7 @@ function ResetDriverState()
     StopReconnectTimer()
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()
+    CancelTurnOffRetryTimer()
     
     -- Reset device state
     gState = {
@@ -2309,6 +2358,7 @@ function OnDriverDestroyed()
     StopReconnectTimer()
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()
+    CancelTurnOffRetryTimer()
     Disconnect()
 end
 
@@ -2321,6 +2371,7 @@ function OnDriverUpdated()
     StopReconnectTimer()
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()
+    CancelTurnOffRetryTimer()
     Disconnect()
     
     -- Reset state
