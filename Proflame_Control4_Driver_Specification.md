@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051725 (2026-05-17)
+- **Driver Version**: 2026051726 (2026-05-17)
 
 ---
 
@@ -411,7 +411,7 @@ end
   <can_preset_schedule>False</can_preset_schedule>
   <scheduling>False</scheduling>
   <can_schedule>False</can_schedule>
-  <hold_modes>Low Flame,Medium Flame,High Flame</hold_modes>
+  <hold_modes>Permanent</hold_modes>
 </capabilities>
 ```
 
@@ -439,7 +439,7 @@ Thermostat Presets are disabled because Navigator did not expose this menu relia
 
 ### 4.6 Hold Modes (Flame Presets)
 
-Thermostat hold modes are intentionally repurposed as quick flame presets:
+The Hold button remains visible with the documented `Permanent` hold display value. `SET_MODE_HOLD` accepts flame preset names as tap actions:
 
 | Hold Mode | Flame Level |
 |-----------|-------------|
@@ -472,7 +472,7 @@ C4:SendToProxy(5001, "SINGLE_SETPOINT_CHANGED", {SETPOINT = tempC, SCALE = "C"})
 C4:SendToProxy(5001, "FAN_MODE_CHANGED", {MODE = "Low"})
 
 -- Preset/operating mode change
-C4:SendToProxy(5001, "HOLD_MODE_CHANGED", {MODE = "Low Flame"})
+C4:SendToProxy(5001, "HOLD_MODE_CHANGED", {MODE = "Permanent"})
 
 -- Allowed modes (send on connect)
 C4:SendToProxy(5001, "ALLOWED_FAN_MODES_CHANGED", {MODES = "Off,Low,Medium,High"})
@@ -1035,7 +1035,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051725</version>
+  <version>2026051726</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1472,7 +1472,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051725"
+DRIVER_VERSION = "2026051726"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1574,6 +1574,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026051726 | 2026-05-17 | Use documented Permanent hold display while keeping Hold tap actions for flame height |
 | 2026051725 | 2026-05-17 | Disabled thermostat Presets menu and restored Hold menu as flame height control |
 | 2026051721 | 2026-05-17 | Refresh custom flame hold-mode capability list before sending current hold-mode value |
 | 2026051720 | 2026-05-17 | Initialize flame preset hold-mode display so the app control is labeled before status echoes |

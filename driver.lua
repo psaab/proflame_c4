@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051725"
+DRIVER_VERSION = "2026051726"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -36,7 +36,7 @@ COMMAND_FORMAT_TURN_OFF_LEGACY_ONLY = "Turn Off Legacy Only"
 
 DEFAULT_FLAME_LEVEL = 6
 DEFAULT_TIMER_MINUTES = 180
-FLAME_HOLD_MODES = "Low Flame,Medium Flame,High Flame"
+FLAME_HOLD_MODES = "Permanent"
 
 -- Debug levels
 DEBUG_ERROR = 1
@@ -112,7 +112,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260517-113329"
+BUILD_TIMESTAMP = "20260517-115147"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -1096,8 +1096,8 @@ function UpdateAllProxies()
 end
 
 function UpdateHoldModeCapabilities()
-    -- Hold modes are a dynamic thermostat capability. Refresh the list before
-    -- sending HOLD_MODE_CHANGED so Navigators can render the selected value.
+    -- Navigator only reliably displays documented hold values. Keep the
+    -- built-in Hold surface visible and use SET_MODE_HOLD as a tap action.
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "DYNAMIC_CAPABILITIES_CHANGED", { HOLD_MODES = FLAME_HOLD_MODES })
     dbg_err("Hold mode capabilities refreshed: " .. FLAME_HOLD_MODES)
 end
@@ -1495,17 +1495,8 @@ end
 
 function UpdateHoldModeFromFlame()
     -- Update hold mode to reflect current flame level
-    local flameLevel = tonumber(gState.flame_control) or 0
-    local holdMode = "Low Flame"
-    if flameLevel <= 2 then
-        holdMode = "Low Flame"
-    elseif flameLevel <= 4 then
-        holdMode = "Medium Flame"
-    else
-        holdMode = "High Flame"
-    end
-    C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = holdMode })
-    dbg_err("Hold mode updated to: " .. holdMode .. " (flame level " .. flameLevel .. ")")
+    C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "Permanent" })
+    dbg_err("Hold mode display updated to: Permanent (flame level " .. tostring(gState.flame_control) .. ")")
 end
 
 -- =============================================================================
@@ -2285,19 +2276,13 @@ function HandleThermostatCommand(strCommand, tParams)
         end
         if holdMode == "Low Flame" then
             -- Low flame (level 1)
-            if CommandSetFlame(1) then
-                C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "Low Flame" })
-            end
+            CommandSetFlame(1)
         elseif holdMode == "Medium Flame" then
             -- Medium flame (level 3)
-            if CommandSetFlame(3) then
-                C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "Medium Flame" })
-            end
+            CommandSetFlame(3)
         elseif holdMode == "High Flame" then
             -- High flame (level 6)
-            if CommandSetFlame(6) then
-                C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "High Flame" })
-            end
+            CommandSetFlame(6)
         end
         
     -- New extras commands (matching Ecobee-style format)
