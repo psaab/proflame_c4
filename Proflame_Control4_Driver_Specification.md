@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051729 (2026-05-17)
+- **Driver Version**: 2026051731 (2026-05-17)
 
 ---
 
@@ -439,8 +439,6 @@ Thermostat Presets are disabled because Navigator did not expose this menu relia
 
 The legacy `SET_PRESET` command is retained for existing Composer programming and logs a deprecation message before routing `Manual`, `Smart`, or `Eco` to the matching mode command. New programming should use explicit mode commands or the Extras `Mode` list.
 
-Runtime capability behavior is tracked in issue #39 so the static XML/runtime notification boundary can be documented separately from this UI experiment.
-
 ### 4.6 Hold Modes (Flame Presets)
 
 The Hold button remains visible with custom flame hold modes. Runtime testing showed the documented `Permanent` hold value renders under the Hold button but does not provide useful flame selections, so this driver keeps custom Low/Medium/High values and refreshes them dynamically. Navigator may still leave the under-button label blank because the SDK documents only standard thermostat hold values.
@@ -497,6 +495,22 @@ C4:SendToProxy(5001, "ALLOWED_HVAC_MODES_CHANGED", {MODES = "Off,Heat"})
 | `SET_MODE_HOLD` | MODE | Set flame preset hold mode (Low/Medium/High Flame) |
 | `GET_EXTRAS_SETUP` | - | Request extras XML |
 | `GET_EXTRAS_STATE` | - | Request extras state |
+
+### 4.10 Static XML vs Runtime UI Capabilities
+
+Treat `driver.xml` as the stable install-time contract. Static proxy, connection, property, command, and capability edits can cause heavier Control4 reload behavior than Lua-only/runtime UI refreshes, including possible Director restart/reload. Prefer runtime proxy notifications for Navigator experiments whenever the ThermostatV2 SDK provides an equivalent.
+
+| UI Surface | Preferred Update Path | Static XML Guidance |
+|------------|-----------------------|---------------------|
+| Hold modes | `DYNAMIC_CAPABILITIES_CHANGED` + `HOLD_MODE_CHANGED` | Keep XML stable; custom labels may still render blank because the SDK documents standard thermostat hold labels. |
+| Fan modes | `DYNAMIC_CAPABILITIES_CHANGED` + `ALLOWED_FAN_MODES_CHANGED` | Keep broad static fan support; refine runtime state in Lua. |
+| HVAC modes | `DYNAMIC_CAPABILITIES_CHANGED` + `ALLOWED_HVAC_MODES_CHANGED` | Mode-only changes should not require XML capability churn. |
+| Extras controls | `DataToUI` / Extras setup refresh | Keep `has_extras=true` static, then publish control layout at runtime. |
+| Presets | Runtime-disabled unless proven otherwise | Stable baseline is `can_preset=false`; do not reintroduce preset XML for experiments without Director restart notes. |
+
+PRs that edit static `driver.xml` capability/proxy/connection/property metadata must include Director restart/reload notes and explain why runtime proxy updates were not sufficient. The current XML restart-risk matrix is tracked in issue #39 and should be filled from real Controller/Navigator testing.
+
+Runtime refreshes send the full ThermostatV2 capability snapshot, not only the field that triggered the refresh. For example, a Hold-mode refresh also republishes preset, fan, HVAC, and Extras capability state so Navigator does not retain stale mixed capability data.
 
 ---
 
@@ -1039,7 +1053,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051729</version>
+  <version>2026051731</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1476,7 +1490,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051729"
+DRIVER_VERSION = "2026051731"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1578,6 +1592,8 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026051731 | 2026-05-17 | Broadened static XML guardrails and documented runtime capability snapshot behavior |
+| 2026051730 | 2026-05-17 | Centralized runtime ThermostatV2 capability refreshes and added static XML restart-risk guardrails |
 | 2026051729 | 2026-05-17 | Added deprecated SET_PRESET compatibility path and documented runtime capability probe behavior |
 | 2026051728 | 2026-05-17 | Restored custom Low/Medium/High Hold actions after documented Permanent display test |
 | 2026051727 | 2026-05-17 | Tested documented Hold display behavior while keeping Hold tap actions for flame height |

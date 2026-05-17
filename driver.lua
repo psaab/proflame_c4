@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051729"
+DRIVER_VERSION = "2026051731"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -112,7 +112,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260517-122513"
+BUILD_TIMESTAMP = "20260517-140643"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -1077,12 +1077,39 @@ function RequestAllStatus()
     SendWebSocketMessage("PROFLAMECONNECTION")
 end
 
-function UpdateAllProxies()
-    -- Send allowed modes first
+function BuildThermostatDynamicCapabilities()
+    -- Keep UI capability experiments in runtime notifications where possible.
+    -- Static driver.xml capability changes can trigger heavier Controller/Director reloads.
+    -- Match the casing already used by the static XML and README examples.
+    return {
+        HAS_EXTRAS = "true",
+        CAN_PRESET = "False",
+        CAN_PRESET_SCHEDULE = "False",
+        HOLD_MODES = FLAME_HOLD_MODES,
+        FAN_MODES = "Off,Low,Medium,High",
+        HVAC_MODES = "Off,Heat",
+        HVAC_STATES = "Off,Heat"
+    }
+end
+
+function SendThermostatDynamicCapabilities(reason)
+    local capabilities = BuildThermostatDynamicCapabilities()
+    -- SDK-supported hold labels are limited, so Navigator may not render custom labels under the button.
+    -- Treat this runtime capability refresh as a best-effort probe; some Navigators may ignore it.
+    C4:SendToProxy(THERMOSTAT_PROXY_ID, "DYNAMIC_CAPABILITIES_CHANGED", capabilities)
+    dbg_err("Thermostat dynamic capabilities refreshed" .. (reason and (": " .. tostring(reason)) or ""))
+end
+
+function SendThermostatAllowedModes(reason)
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "ALLOWED_FAN_MODES_CHANGED", { MODES = "Off,Low,Medium,High" })
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "ALLOWED_HVAC_MODES_CHANGED", { MODES = "Off,Heat" })
-    UpdateHoldModeCapabilities()
-    
+    dbg_err("Thermostat allowed modes refreshed" .. (reason and (": " .. tostring(reason)) or ""))
+end
+
+function RefreshThermostatUiSurface(reason, includeExtras)
+    SendThermostatDynamicCapabilities(reason)
+    SendThermostatAllowedModes(reason)
+
     UpdateThermostatProxy()
     UpdateThermostatSetpoint()
     UpdateRoomTemperature()
@@ -1090,17 +1117,18 @@ function UpdateAllProxies()
     UpdateFlameLevel()
     UpdateHoldModeFromFlame()
     UpdateExtrasState()
-    
-    -- Also send extras setup when proxies update
-    SetupExtras()
+
+    if includeExtras then
+        SetupExtras()
+    end
+end
+
+function UpdateAllProxies()
+    RefreshThermostatUiSurface("UpdateAllProxies", true)
 end
 
 function UpdateHoldModeCapabilities()
-    -- Refresh custom flame hold modes before sending/selecting a hold value.
-    -- SDK-supported hold labels are limited, so Navigator may not render these under the button.
-    -- Treat this runtime capability refresh as a best-effort probe; some Navigators may ignore it.
-    C4:SendToProxy(THERMOSTAT_PROXY_ID, "DYNAMIC_CAPABILITIES_CHANGED", { HOLD_MODES = FLAME_HOLD_MODES })
-    dbg_err("Hold mode capabilities refreshed: " .. FLAME_HOLD_MODES)
+    SendThermostatDynamicCapabilities("hold mode refresh")
 end
 
 function UpdateRoomTemperatureProperty()
@@ -2467,9 +2495,7 @@ function InitializePropertiesFromState()
     if burnerNum < 0 then burnerNum = burnerNum + 0x10000 end
     C4:UpdateProperty("Burner Status", string.format("0x%04X", burnerNum))
     C4:UpdateProperty("WiFi Signal Strength", "-" .. gState.wifi_signal_str .. " dBm")
-    UpdateThermostatSetpoint()
-    UpdateHoldModeCapabilities()
-    UpdateHoldModeFromFlame()
+    RefreshThermostatUiSurface("InitializePropertiesFromState", false)
 end
 
 function OnDriverDestroyed()

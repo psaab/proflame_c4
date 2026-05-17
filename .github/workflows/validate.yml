@@ -78,3 +78,21 @@ jobs:
           scripts/package.sh
           scripts/validate.sh
           cmp /tmp/proflame_wifi_connect.before.c4z proflame_wifi_connect.c4z
+
+  lint-driver-xml-static-surface:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        run: git fetch origin "${{ github.base_ref }}:${{ github.base_ref }}"
+
+      - name: Require Director restart note for sensitive driver.xml edits
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: scripts/check-driver-xml-static-surface.py "${{ github.base_ref }}"

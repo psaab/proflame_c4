@@ -5,6 +5,7 @@
 ## Verification
 
 - [ ] `scripts/validate.sh`
+- [ ] If this changes static `driver.xml` capability/proxy/connection/property metadata, note whether Director restarted/reloaded and why runtime proxy updates were not sufficient.
 
 ## Composer Command Smoke Test
 

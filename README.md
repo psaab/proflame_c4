@@ -130,7 +130,7 @@ The device sends status updates as JSON with indexed status/value pairs:
   <name>Proflame WiFi Fireplace</name>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
-  <version>2026051729</version>
+  <version>2026051731</version>
   
   <proxies>
     <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
@@ -175,6 +175,21 @@ The device sends status updates as JSON with indexed status/value pairs:
 
 ### Key Capability: has_extras
 The `<has_extras>true</has_extras>` capability MUST be set to enable the Extras tab in the Control4 UI. Note: Use lowercase `true`, not `True`.
+
+### Static XML vs Runtime UI Capabilities
+Treat `driver.xml` as the stable install-time contract. Static proxy, connection, property, command, and capability changes can cause heavier Control4 reload behavior than Lua-only/runtime UI refreshes. Prefer runtime proxy notifications for Navigator experiments whenever the ThermostatV2 SDK provides an equivalent.
+
+| UI surface | Preferred update path | Notes |
+|------------|-----------------------|-------|
+| Hold modes | `DYNAMIC_CAPABILITIES_CHANGED` + `HOLD_MODE_CHANGED` | Custom labels may still render blank because the SDK documents standard thermostat hold labels. |
+| Fan modes | `DYNAMIC_CAPABILITIES_CHANGED` + `ALLOWED_FAN_MODES_CHANGED` | Keep static XML broad and refresh runtime state on init/connect. |
+| HVAC modes | `DYNAMIC_CAPABILITIES_CHANGED` + `ALLOWED_HVAC_MODES_CHANGED` | Mode-only commands should not require XML capability churn. |
+| Extras controls | `DataToUI` / Extras setup refresh | Keep `has_extras=true` static, then publish control layout at runtime. |
+| Presets | Runtime-disabled unless proven otherwise | `can_preset=false` is the stable XML baseline; avoid reintroducing preset XML for experiments. |
+
+PRs that edit static `driver.xml` capability/proxy/connection/property metadata must note whether Director restarted/reloaded and why a runtime capability refresh was not sufficient.
+
+The runtime refresh intentionally sends a full capability snapshot, not only the field that triggered the refresh. This keeps Navigator state internally consistent and avoids piecemeal XML edits while issue #39 collects the real Controller/Navigator restart matrix.
 
 ### Default Timer Scope
 `Default Timer (minutes)` is used only when `Turn On` explicitly starts the fireplace. Mode-only commands such as `Set Mode Manual`, `Set Mode Smart`, and `Set Mode Eco` do not apply it, and `Set Timer` uses the requested `Minutes` value instead. Because the driver requires an active timer for on states, setting Default Timer to `0` means Turn On will be forced back off after confirmed status shows no running timer.
