@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051709"
+DRIVER_VERSION = "2026051710"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -1698,10 +1698,9 @@ function ClearTurnOffInProgress(reason)
 end
 
 function SendTurnOffControls(reason)
-    dbg_err("Sending Proflame-app turn off controls: " .. tostring(reason))
-    local sent = SendTurnOffDeviceControl("timer_status", "0")
-    sent = SendTurnOffDeviceControl("flame_control", "0") or sent
-    sent = SendTurnOffDeviceControl("main_mode", MODE_STANDBY_ALT) or sent
+    dbg_err("Sending legacy turn off controls: " .. tostring(reason))
+    local sent = SendLegacyDeviceControl("timer_status", "0", "turn off")
+    sent = SendLegacyDeviceControl("main_mode", MODE_OFF, "turn off") or sent
     return sent
 end
 
