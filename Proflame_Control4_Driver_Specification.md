@@ -1154,6 +1154,14 @@ end
 </events>
 ```
 
+Runtime event behavior:
+
+- `Fireplace Turned On` fires when confirmed `main_mode` changes from Off/Standby to Manual, Smart, or Eco.
+- `Fireplace Turned Off` fires when confirmed `main_mode` changes from Manual, Smart, or Eco to Off/Standby.
+- `Mode Changed` fires on confirmed `main_mode` changes after the first status value establishes a baseline.
+- `Connection Restored` fires after the WebSocket handshake completes.
+- `Connection Lost` fires when a previously handshaken connection is lost.
+
 ---
 
 ## 10. Common Pitfalls and Solutions

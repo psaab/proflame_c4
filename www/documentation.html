@@ -286,13 +286,11 @@
     <h3>Events</h3>
     <p>The following events are fired for use in programming:</p>
     <ul>
-        <li><strong>Fireplace Turned On</strong> - When fireplace changes from off to on</li>
-        <li><strong>Fireplace Turned Off</strong> - When fireplace changes from on to off</li>
-        <li><strong>Mode Changed</strong> - When operating mode changes</li>
-        <li><strong>Connection Lost</strong> - When connection to controller is lost</li>
-        <li><strong>Connection Restored</strong> - When connection is re-established</li>
-        <li><strong>Temperature Setpoint Reached</strong> - When target temperature is reached</li>
-        <li><strong>Timer Expired</strong> - When auto-off timer completes</li>
+        <li><strong>Fireplace Turned On</strong> - When confirmed device mode changes from Off/Standby to Manual, Smart, or Eco</li>
+        <li><strong>Fireplace Turned Off</strong> - When confirmed device mode changes from Manual, Smart, or Eco to Off/Standby</li>
+        <li><strong>Mode Changed</strong> - When confirmed device operating mode changes after initial status baseline</li>
+        <li><strong>Connection Lost</strong> - When a previously handshaken connection is lost</li>
+        <li><strong>Connection Restored</strong> - When WebSocket handshake completes after being disconnected</li>
     </ul>
 
     <h2>Troubleshooting</h2>

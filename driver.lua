@@ -8,11 +8,17 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2025013124"
-DRIVER_DATE = "2026-01-31"
+DRIVER_VERSION = "2026051621"
+DRIVER_DATE = "2026-05-16"
 
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
+
+EVENT_FIREPLACE_TURNED_ON = 1
+EVENT_FIREPLACE_TURNED_OFF = 2
+EVENT_MODE_CHANGED = 3
+EVENT_CONNECTION_LOST = 4
+EVENT_CONNECTION_RESTORED = 5
 
 MODE_OFF = "0"
 MODE_STANDBY = "1"
@@ -93,7 +99,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260131-151500"
+BUILD_TIMESTAMP = "20260516-215156"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -182,6 +188,9 @@ gExtrasThrottle = false
 gSuppressTimerUpdates = false  -- Suppress device timer_count updates while we're setting timer
 gTimerExpired = false  -- Set when timer reaches 0, cleared when timer_status goes to 1
 
+gLastMainMode = nil
+gLastConnectionOnline = false
+
 gPendingSetpointF = nil
 gPendingTimer = nil
 gPendingFlame = nil
@@ -227,6 +236,52 @@ end
 
 function dbg_all(msg)
     Log(msg, DEBUG_DEBUG)
+end
+
+-- =============================================================================
+-- EVENTS
+-- =============================================================================
+
+function IsFireplaceOnMode(mode)
+    return mode == MODE_MANUAL or mode == MODE_SMART or mode == MODE_ECO
+end
+
+function FireDriverEvent(eventId, eventName)
+    dbg_err("Firing event: " .. tostring(eventName) .. " (" .. tostring(eventId) .. ")")
+    C4:FireEventByID(eventId)
+end
+
+function HandleModeEvents(newMode)
+    if gLastMainMode == nil then
+        gLastMainMode = newMode
+        dbg_err("Mode event baseline set: " .. tostring(newMode))
+        return
+    end
+
+    if newMode == gLastMainMode then return end
+
+    local wasOn = IsFireplaceOnMode(gLastMainMode)
+    local isOn = IsFireplaceOnMode(newMode)
+
+    if not wasOn and isOn then
+        FireDriverEvent(EVENT_FIREPLACE_TURNED_ON, "Fireplace Turned On")
+    elseif wasOn and not isOn then
+        FireDriverEvent(EVENT_FIREPLACE_TURNED_OFF, "Fireplace Turned Off")
+    end
+
+    FireDriverEvent(EVENT_MODE_CHANGED, "Mode Changed")
+    gLastMainMode = newMode
+end
+
+function HandleConnectionEvent(online)
+    if online == gLastConnectionOnline then return end
+
+    gLastConnectionOnline = online
+    if online then
+        FireDriverEvent(EVENT_CONNECTION_RESTORED, "Connection Restored")
+    else
+        FireDriverEvent(EVENT_CONNECTION_LOST, "Connection Lost")
+    end
 end
 
 -- =============================================================================
@@ -764,6 +819,7 @@ function Disconnect()
     gConnecting = false
     gHandshakeComplete = false
     gReceiveBuffer = ""
+    HandleConnectionEvent(false)
     C4:UpdateProperty("Connection Status", "Disconnected")
 end
 
@@ -873,6 +929,7 @@ function ParseStatusMessage(data)
     if data == "PROFLAMECONNECTIONOPEN" then
         dbg_err("Connection acknowledged by device")
         C4:UpdateProperty("Connection Status", "Connected")
+        HandleConnectionEvent(true)
         return
     end
     if data:sub(1, 1) == "{" then
@@ -941,6 +998,7 @@ function ProcessStatusUpdate(status, value)
     UpdateExtrasState()
     
     if status == "main_mode" then
+        HandleModeEvents(value)
         C4:UpdateProperty("Operating Mode", GetModeString(value))
         UpdateThermostatProxy(value)
         UpdatePresetMode(value)
@@ -1219,6 +1277,7 @@ function OnConnectionStatusChanged(idBinding, nPort, strStatus)
         gConnecting = false
         gHandshakeComplete = false
         StopPingTimer()
+        HandleConnectionEvent(false)
         C4:UpdateProperty("Connection Status", "Disconnected")
         ScheduleReconnect()
     end
@@ -1235,6 +1294,7 @@ function ReceivedFromNetwork(idBinding, nPort, strData)
             if ValidateHandshakeResponse(response) then
                 gHandshakeComplete = true
                 C4:UpdateProperty("Connection Status", "Connected")
+                HandleConnectionEvent(true)
                 StartPingTimer()
                 RequestAllStatus()
                 UpdateAllProxies()
@@ -1746,6 +1806,8 @@ function ResetDriverState()
     gExtrasThrottle = false
     gSuppressTimerUpdates = false
     gTimerExpired = false
+    gLastMainMode = nil
+    gLastConnectionOnline = false
 
     -- Cancel any pending timers
     StopPingTimer()
