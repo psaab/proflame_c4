@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051713 (2026-05-17)
+- **Driver Version**: 2026051714 (2026-05-17)
 
 ---
 
@@ -56,7 +56,7 @@ This driver enables Control4 home automation systems to control Proflame WiFi-en
 | Strict WebSocket Handshake | LIST | Off | Require full WebSocket upgrade validation; Off allows legacy 101 fallback |
 | Default On Mode | LIST | Smart (Thermostat) | Mode when turning on: Manual, Smart (Thermostat), Eco |
 | Default Flame Level | INTEGER | 6 | Initial flame level (1-6) |
-| Default Timer | INTEGER | 180 | Auto-off timer in minutes (0=disabled) |
+| Default Timer | INTEGER | 180 | Auto-off timer used only by Turn On; 0 disables the Turn On default timer |
 | Command Format (non-Turn-Off) | LIST | Dual (Documented First) | Outbound format for non-Turn-Off device commands |
 | Debug Mode | LIST | On | Enable/disable debug logging |
 | Debug Level | LIST | Debug | Error, Warning, Info, Debug, Trace |
@@ -763,7 +763,7 @@ end
 
 ### 6.8 Auto-Timer on Turn-On
 
-When explicitly turning on the fireplace, automatically set timer and flame. Mode-only changes such as selecting Manual, Smart, or Eco send only the mode command; the driver does not adjust flame or timer values.
+When explicitly turning on the fireplace, automatically set timer and flame. `Default Timer (minutes)` is used only by Turn On. Mode-only changes such as selecting Manual, Smart, or Eco send only the mode command; the driver does not adjust flame or timer values. Set Timer uses the requested `Minutes` value, including when it first turns on an off fireplace.
 
 ```lua
 -- In SET_MODE_HVAC handler when mode == "Heat":
@@ -1026,7 +1026,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051713</version>
+  <version>2026051714</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1434,7 +1434,8 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 
 - [ ] Default On Mode is applied when turning on
 - [ ] Default Flame Level is applied when turning on
-- [ ] Default Timer is started when turning on
+- [ ] Default Timer is started by Turn On only
+- [ ] Set Timer while off uses the requested timer value, not Default Timer
 - [ ] Mode changes from extras do not change flame or timer
 
 ### 12.7 Driver Update Tests
@@ -1460,7 +1461,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051713"
+DRIVER_VERSION = "2026051714"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1563,6 +1564,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026051714 | 2026-05-17 | Clarified Default Timer scope without renaming the property |
 | 2026051713 | 2026-05-17 | Clarified command-format property scope and runtime order testing guidance |
 | 2026051712 | 2026-05-17 | Added configurable command-format compatibility mode for non-Turn-Off commands |
 | 2026051711 | 2026-05-17 | Hotfix JsonEscape runtime pattern, restored legacy turn-off command behavior, and documented Composer command smoke testing |

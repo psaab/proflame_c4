@@ -130,7 +130,7 @@ The device sends status updates as JSON with indexed status/value pairs:
   <name>Proflame WiFi Fireplace</name>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
-  <version>2026051713</version>
+  <version>2026051714</version>
   
   <proxies>
     <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
@@ -175,6 +175,9 @@ The device sends status updates as JSON with indexed status/value pairs:
 
 ### Key Capability: has_extras
 The `<has_extras>true</has_extras>` capability MUST be set to enable the Extras tab in the Control4 UI. Note: Use lowercase `true`, not `True`.
+
+### Default Timer Scope
+`Default Timer (minutes)` is used only when `Turn On` explicitly starts the fireplace. Mode-only commands such as `Set Mode Manual`, `Set Mode Smart`, and `Set Mode Eco` do not apply it, and `Set Timer` uses the requested `Minutes` value instead.
 
 ### Proxy Binding IDs
 - **5001**: Thermostat proxy (thermostatV2)
@@ -483,6 +486,7 @@ Run this checklist in Composer Pro before merging PRs that change command behavi
 - [ ] Set Fan Level applies the requested fan level.
 - [ ] Set Light Level applies the requested light level.
 - [ ] Set Timer while off turns the fireplace on and starts countdown.
+- [ ] Set Timer while off uses the requested timer value, not Default Timer.
 - [ ] Set Timer while already on updates the timer without changing mode, flame, fan, or light.
 - [ ] Cancel Timer clears timer state without directly changing fireplace mode.
 - [ ] Disconnect the fireplace network path; command attempts are refused/logged and do not change confirmed driver state.
