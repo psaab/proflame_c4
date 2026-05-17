@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051718 (2026-05-17)
+- **Driver Version**: 2026051719 (2026-05-17)
 
 ---
 
@@ -123,7 +123,7 @@ The default `Command Format (non-Turn-Off)` property sends the legacy indexed fo
 {"control0":"<parameter>","value0":"<value>"}
 ```
 
-Other `Command Format (non-Turn-Off)` options support runtime verification: `Documented Only`, `Dual (Documented First)`, and `Dual (Legacy First)`. Runtime verification should test and compare both dual orderings because order may affect which message the firmware accepts. All control writes are routed through `BuildDeviceControlCommandPlan`; Turn Off uses that same wrapper with the verified legacy-only plan.
+Other `Command Format (non-Turn-Off)` options support runtime verification: `Documented Only`, `Dual (Documented First)`, and `Dual (Legacy First)`. Runtime verification should test and compare both dual orderings because order may affect which message the firmware accepts. The legacy-only default was verified on firmware `FW: 625.04.673`; other firmware variants may need a different setting. All control writes are routed through `BuildDeviceControlCommandPlan`; Turn Off uses that same wrapper with the verified legacy-only plan.
 
 The driver sends one control per message. Multi-control writes should be sent as separate no-space JSON messages.
 
@@ -1042,7 +1042,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051718</version>
+  <version>2026051719</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1482,7 +1482,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051718"
+DRIVER_VERSION = "2026051719"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1585,6 +1585,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026051719 | 2026-05-17 | Documented firmware scope for the Legacy Only default |
 | 2026051718 | 2026-05-17 | Changed default non-Turn-Off command format to Legacy Only based on real-device single-format verification |
 | 2026051717 | 2026-05-17 | Centralized outbound command-format planning and documented manual format verification |
 | 2026051716 | 2026-05-17 | Added timer-required safety policy that forces off confirmed on states without an active timer |
