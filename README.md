@@ -130,7 +130,7 @@ The device sends status updates as JSON with indexed status/value pairs:
   <name>Proflame WiFi Fireplace</name>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
-  <version>2026051715</version>
+  <version>2026051716</version>
   
   <proxies>
     <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
@@ -177,7 +177,10 @@ The device sends status updates as JSON with indexed status/value pairs:
 The `<has_extras>true</has_extras>` capability MUST be set to enable the Extras tab in the Control4 UI. Note: Use lowercase `true`, not `True`.
 
 ### Default Timer Scope
-`Default Timer (minutes)` is used only when `Turn On` explicitly starts the fireplace. Mode-only commands such as `Set Mode Manual`, `Set Mode Smart`, and `Set Mode Eco` do not apply it, and `Set Timer` uses the requested `Minutes` value instead.
+`Default Timer (minutes)` is used only when `Turn On` explicitly starts the fireplace. Mode-only commands such as `Set Mode Manual`, `Set Mode Smart`, and `Set Mode Eco` do not apply it, and `Set Timer` uses the requested `Minutes` value instead. Because the driver requires an active timer for on states, setting Default Timer to `0` means Turn On will be forced back off after confirmed status shows no running timer.
+
+### Timer-Required Safety Policy
+The driver treats Manual, Smart, and Eco as on states that require an active auto-off timer. If confirmed status shows the fireplace on while `timer_status` is not running, or if `timer_status` remains unknown after status sync, the driver logs the safety action and sends Turn Off. Timer setup and Turn Off transitions are exempt while timer updates are intentionally suppressed. This is a behavior change from earlier versions: Cancel Timer while on and Turn On with Default Timer set to `0` both satisfy the missing-timer condition and turn the fireplace off.
 
 ### Flame Level Mode Side Effect
 `Set Flame Level` is a manual flame command. If the fireplace is in Smart, Eco, Off, or Standby, the driver switches to Manual mode before sending `flame_control`. Use mode commands when thermostat operation should be preserved.
@@ -491,7 +494,7 @@ Run this checklist in Composer Pro before merging PRs that change command behavi
 - [ ] Set Timer while off turns the fireplace on and starts countdown.
 - [ ] Set Timer while off uses the requested timer value, not Default Timer.
 - [ ] Set Timer while already on updates the timer without changing mode, flame, fan, or light.
-- [ ] Cancel Timer clears timer state without directly changing fireplace mode.
+- [ ] Cancel Timer while on triggers the timer-required safety policy and turns the fireplace off.
 - [ ] Disconnect the fireplace network path; command attempts are refused/logged and do not change confirmed driver state.
 - [ ] Programming events fire in Composer when fireplace power/mode state changes.
 - [ ] Extras flame, fan, and light sliders do not visibly snap back while waiting for device echoes.

@@ -182,7 +182,7 @@
         </tr>
         <tr>
             <td>Default Timer (minutes)</td>
-            <td>Auto-off timer used only by Turn On; mode-only changes and Set Timer do not use this default</td>
+            <td>Auto-off timer used only by Turn On; 0 disables timer arming and timer safety forces off</td>
             <td>180</td>
         </tr>
     </table>
@@ -243,7 +243,7 @@
     
     <h4>Power &amp; Mode</h4>
     <ul>
-        <li><code>Turn On</code> - Turn on using Default On Mode, Default Flame Level, and Default Timer</li>
+        <li><code>Turn On</code> - Turn on using defaults; Default Timer 0 is forced off by timer safety</li>
         <li><code>Turn Off</code> - Cancel any active timer and turn fireplace off</li>
         <li><code>Set Mode Manual</code> - Send manual mode change only; driver does not adjust flame or timer</li>
         <li><code>Set Mode Smart</code> - Send thermostat mode change only; driver does not adjust flame or timer</li>
@@ -282,8 +282,11 @@
         <li><code>Toggle Aux</code> - Toggle auxiliary output</li>
         <li><code>Toggle Front Flame</code> - Toggle split flow / front flame</li>
         <li><code>Set Timer</code> - Set requested auto-off timer minutes; Default Timer is not used</li>
-        <li><code>Cancel Timer</code> - Cancel active timer without changing fireplace mode</li>
+        <li><code>Cancel Timer</code> - Cancel active timer; while on, the timer-required safety policy turns the fireplace off</li>
     </ul>
+
+    <h3>Timer-Required Safety Policy</h3>
+    <p>Manual, Smart, and Eco are on states that require an active auto-off timer. If confirmed device status shows the fireplace on while <code>timer_status</code> is not running, or if <code>timer_status</code> remains unknown after status sync, the driver logs the safety action and sends Turn Off. Timer setup and Turn Off transitions are exempt while timer updates are intentionally suppressed. This changes earlier behavior: Canceling the timer while the fireplace is on, or turning on with Default Timer set to 0, also turns the fireplace off under this policy.</p>
 
     <h3>Events</h3>
     <p>The following events are fired for use in programming:</p>

@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051715 (2026-05-17)
+- **Driver Version**: 2026051716 (2026-05-17)
 
 ---
 
@@ -56,7 +56,7 @@ This driver enables Control4 home automation systems to control Proflame WiFi-en
 | Strict WebSocket Handshake | LIST | Off | Require full WebSocket upgrade validation; Off allows legacy 101 fallback |
 | Default On Mode | LIST | Smart (Thermostat) | Mode when turning on: Manual, Smart (Thermostat), Eco |
 | Default Flame Level | INTEGER | 6 | Initial flame level (1-6) |
-| Default Timer | INTEGER | 180 | Auto-off timer used only by Turn On; 0 disables the Turn On default timer |
+| Default Timer | INTEGER | 180 | Auto-off timer used only by Turn On; 0 disables timer arming and causes timer safety to force the fireplace off |
 | Command Format (non-Turn-Off) | LIST | Dual (Documented First) | Outbound format for non-Turn-Off device commands |
 | Debug Mode | LIST | On | Enable/disable debug logging |
 | Debug Level | LIST | Debug | Error, Warning, Info, Debug, Trace |
@@ -767,7 +767,7 @@ end
 
 ### 6.8 Auto-Timer on Turn-On
 
-When explicitly turning on the fireplace, automatically set timer and flame. `Default Timer (minutes)` is used only by Turn On. Mode-only changes such as selecting Manual, Smart, or Eco send only the mode command; the driver does not adjust flame or timer values. Set Timer uses the requested `Minutes` value, including when it first turns on an off fireplace.
+When explicitly turning on the fireplace, automatically set timer and flame. `Default Timer (minutes)` is used only by Turn On. Mode-only changes such as selecting Manual, Smart, or Eco send only the mode command; the driver does not adjust flame or timer values. Set Timer uses the requested `Minutes` value, including when it first turns on an off fireplace. Because on states require a running timer, Default Timer `0` means Turn On will be forced back off after confirmed status shows no running timer.
 
 ```lua
 -- In SET_MODE_HVAC handler when mode == "Heat":
@@ -786,6 +786,18 @@ C4:SetTimer(750, function()
     end
 end, false)
 ```
+
+### 6.9 Timer-Required Safety Policy
+
+Manual, Smart, and Eco are treated as on states that require an active auto-off timer. Confirmed status processing enforces this policy after `main_mode`, `timer_status`, or timer-expiry updates:
+
+- If the fireplace is on and `timer_status` is not `1`, the driver logs the safety action and sends the existing Turn Off sequence.
+- If `main_mode` is on but `timer_status` has not arrived yet, the driver defers briefly. If `timer_status` remains unknown after that status-sync grace period, it is treated as not running.
+- Enforcement is skipped while `gSuppressTimerUpdates` is true so normal Turn On and Set Timer flows are not interrupted while the timer is being armed.
+- A pending safety force-off is tracked so stale on-state echoes do not repeatedly spam off commands.
+- This intentionally changes earlier behavior: Cancel Timer while the fireplace is on also satisfies the force-off condition and results in Turn Off.
+- Turn On with `Default Timer (minutes)` set to `0` will also be forced back off after confirmed status shows no running timer.
+- The unknown-`timer_status` grace period is 1500 ms, long enough for the normal initial status burst to deliver adjacent timer fields before enforcement treats the timer state as missing.
 
 ---
 
@@ -1030,7 +1042,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051715</version>
+  <version>2026051716</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1440,6 +1452,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 - [ ] Default Flame Level is applied when turning on
 - [ ] Default Timer is started by Turn On only
 - [ ] Set Timer while off uses the requested timer value, not Default Timer
+- [ ] Cancel Timer while on triggers the timer-required safety policy and turns the fireplace off
 - [ ] Mode changes from extras do not change flame or timer
 - [ ] Set Flame Level changes operating mode to Manual when invoked from Smart, Eco, or Off
 
@@ -1466,7 +1479,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051715"
+DRIVER_VERSION = "2026051716"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1569,6 +1582,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026051716 | 2026-05-17 | Added timer-required safety policy that forces off confirmed on states without an active timer |
 | 2026051715 | 2026-05-17 | Clarified Set Flame Level Manual-mode side effect |
 | 2026051714 | 2026-05-17 | Clarified Default Timer scope without renaming the property |
 | 2026051713 | 2026-05-17 | Clarified command-format property scope and runtime order testing guidance |
