@@ -130,7 +130,7 @@ The device sends status updates as JSON with indexed status/value pairs:
   <name>Proflame WiFi Fireplace</name>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
-  <version>2026051714</version>
+  <version>2026051715</version>
   
   <proxies>
     <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
@@ -178,6 +178,9 @@ The `<has_extras>true</has_extras>` capability MUST be set to enable the Extras 
 
 ### Default Timer Scope
 `Default Timer (minutes)` is used only when `Turn On` explicitly starts the fireplace. Mode-only commands such as `Set Mode Manual`, `Set Mode Smart`, and `Set Mode Eco` do not apply it, and `Set Timer` uses the requested `Minutes` value instead.
+
+### Flame Level Mode Side Effect
+`Set Flame Level` is a manual flame command. If the fireplace is in Smart, Eco, Off, or Standby, the driver switches to Manual mode before sending `flame_control`. Use mode commands when thermostat operation should be preserved.
 
 ### Proxy Binding IDs
 - **5001**: Thermostat proxy (thermostatV2)
@@ -482,7 +485,7 @@ Run this checklist in Composer Pro before merging PRs that change command behavi
 - [ ] Turn On applies Default On Mode, Default Flame Level, and Default Timer.
 - [ ] Turn Off turns the fireplace off and clears the Extras timer display.
 - [ ] Set Mode Manual, Smart, and Eco change only the driver-requested mode; flame and timer are not adjusted by the driver.
-- [ ] Set Flame Level switches to Manual if needed and applies the requested flame level.
+- [ ] Set Flame Level switches Smart/Eco/Off to Manual if needed and applies the requested flame level.
 - [ ] Set Fan Level applies the requested fan level.
 - [ ] Set Light Level applies the requested light level.
 - [ ] Set Timer while off turns the fireplace on and starts countdown.

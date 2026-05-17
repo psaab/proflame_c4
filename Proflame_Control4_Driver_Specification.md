@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051714 (2026-05-17)
+- **Driver Version**: 2026051715 (2026-05-17)
 
 ---
 
@@ -452,9 +452,13 @@ Thermostat hold modes are intentionally repurposed as quick flame presets:
 | Medium Flame | 3 |
 | High Flame | 6 |
 
+### 4.7 Flame Level Command Side Effect
+
+`Set Flame Level` is a Manual-mode flame command. If confirmed state is Smart, Eco, Off, or Standby, the driver first sends `main_mode=5` (Manual), then sends `flame_control` after the mode-ready delay. This intentionally gives direct flame control but exits thermostat operation. Mode-only commands such as Set Mode Manual, Smart, and Eco do not adjust flame or timer values.
+
 The driver does not advertise thermostat scheduling capabilities because it does not implement schedule storage or execution.
 
-### 4.7 Key Proxy Notifications
+### 4.8 Key Proxy Notifications
 
 ```lua
 -- Temperature update (MUST be in Celsius for proxy)
@@ -483,7 +487,7 @@ C4:SendToProxy(5001, "ALLOWED_HVAC_MODES_CHANGED", {MODES = "Off,Heat"})
 
 **CRITICAL**: The proxy expects temperatures in Celsius, even if the display scale is Fahrenheit. Always convert before sending.
 
-### 4.8 Key Proxy Commands (ReceivedFromProxy)
+### 4.9 Key Proxy Commands (ReceivedFromProxy)
 
 | Command | Parameters | Description |
 |---------|------------|-------------|
@@ -1026,7 +1030,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051714</version>
+  <version>2026051715</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1358,7 +1362,7 @@ end, false)
 | `GET_EXTRAS_SETUP` | - | Request extras XML |
 | `GET_EXTRAS_STATE` | - | Request extras state |
 | `SELECT_MODE` | VALUE | Select mode from extras (manual/smart/eco) |
-| `SET_FLAME_LEVEL` | VALUE | Set flame from extras (1-6) |
+| `SET_FLAME_LEVEL` | VALUE | Set flame from extras (1-6); switches to Manual first if needed |
 | `SET_FAN_LEVEL` | VALUE | Set fan from extras (0-6) |
 | `SET_LIGHT_LEVEL` | VALUE | Set lamp from extras (0-6) |
 | `SET_TIMER_MINUTES` | VALUE | Set timer from extras (0-360) |
@@ -1437,6 +1441,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 - [ ] Default Timer is started by Turn On only
 - [ ] Set Timer while off uses the requested timer value, not Default Timer
 - [ ] Mode changes from extras do not change flame or timer
+- [ ] Set Flame Level changes operating mode to Manual when invoked from Smart, Eco, or Off
 
 ### 12.7 Driver Update Tests
 
@@ -1461,7 +1466,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051714"
+DRIVER_VERSION = "2026051715"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1564,6 +1569,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026051715 | 2026-05-17 | Clarified Set Flame Level Manual-mode side effect |
 | 2026051714 | 2026-05-17 | Clarified Default Timer scope without renaming the property |
 | 2026051713 | 2026-05-17 | Clarified command-format property scope and runtime order testing guidance |
 | 2026051712 | 2026-05-17 | Added configurable command-format compatibility mode for non-Turn-Off commands |

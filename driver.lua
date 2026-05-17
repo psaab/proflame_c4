@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051714"
+DRIVER_VERSION = "2026051715"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -100,7 +100,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260517-083413"
+BUILD_TIMESTAMP = "20260517-084447"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -1903,6 +1903,7 @@ function CommandSetFlame(level)
     end
 
     if gState.main_mode ~= MODE_MANUAL then
+        dbg_err("Set Flame Level switching fireplace to Manual mode before setting flame; previous mode: " .. tostring(gState.main_mode))
         if not SendDeviceControl("main_mode", MODE_MANUAL) then return false end
         ScheduleModeReadyWork(function()
             if not RequireDeviceCommandReady("Set Flame Level after mode change") then return end
