@@ -95,9 +95,9 @@ The device sends status updates as JSON with indexed status/value pairs:
 | fan_control | 0-6 | Fan speed (0=off, 6=max) |
 | lamp_control | 0-6 | Downlight brightness |
 | temperature_set | 600-900 | Target temp (encoded) |
-| pilot_mode | 0-1 | Pilot light on/off |
-| auxiliary_out | 0-1 | Auxiliary output |
-| split_flow | 0-1 | Split flame mode |
+| pilot_control | 0-1 | Pilot light on/off |
+| aux_control | 0-1 | Auxiliary output |
+| split_control | 0-1 | Split flame mode |
 
 ### Example Commands
 
@@ -127,10 +127,10 @@ The device sends status updates as JSON with indexed status/value pairs:
 <?xml version="1.0"?>
 <devicedata>
   <copyright>Copyright 2025</copyright>
-  <n>Proflame WiFi Fireplace</n>
+  <name>Proflame WiFi Fireplace</name>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
-  <version>2025121721</version>
+  <version>2026051701</version>
   
   <proxies>
     <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
@@ -309,8 +309,8 @@ function GetExtrasXML()
     '<extras_setup>' ..
       '<extra>' ..
         '<section label="Controls">' ..
-          '<object type="slider" id="pf_flame" label="Flame" command="SET_FLAME" min="1" max="6" value="' .. flame .. '"/>' ..
-          '<object type="slider" id="pf_fan" label="Fan" command="SET_FAN" min="0" max="6" value="' .. fan .. '"/>' ..
+          '<object type="slider" id="pf_flame" label="Flame" command="SET_FLAME_LEVEL" min="1" max="6" value="' .. flame .. '"/>' ..
+          '<object type="slider" id="pf_fan" label="Fan" command="SET_FAN_LEVEL" min="0" max="6" value="' .. fan .. '"/>' ..
         '</section>' ..
       '</extra>' ..
     '</extras_setup>'
@@ -502,7 +502,7 @@ end
 ```lua
 function BuildSetControlCommand(control, value)
     -- NO SPACES - Critical for Proflame protocol
-    return '{"command":"set_control","name":"' .. control .. '","value":"' .. tostring(value) .. '"}'
+    return '{"command":"set_control","name":"' .. JsonEscape(control) .. '","value":"' .. JsonEscape(value) .. '"}'
 end
 ```
 
@@ -511,15 +511,23 @@ During command-format migration, the driver also sends a legacy indexed fallback
 ### WebSocket Frame Builder
 ```lua
 function CreateWebSocketFrame(payload, opcode)
+    -- Client-to-device WebSocket frames are masked per RFC 6455.
     local len = #payload
     local frame = string.char(0x80 + opcode)  -- FIN + opcode
+    local mask = GenerateRandomBytes(4)
     if len < 126 then
-        frame = frame .. string.char(len)
+        frame = frame .. string.char(0x80 + len)
     elseif len < 65536 then
-        frame = frame .. string.char(126, 
+        frame = frame .. string.char(0x80 + 126,
             math.floor(len / 256), len % 256)
     end
-    return frame .. payload
+    frame = frame .. mask
+    for i = 1, #payload do
+        local byte = payload:byte(i)
+        local maskByte = mask:byte(((i - 1) % 4) + 1)
+        frame = frame .. string.char(bit.bxor(byte, maskByte))
+    end
+    return frame
 end
 ```
 

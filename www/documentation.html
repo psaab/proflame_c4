@@ -97,8 +97,8 @@
     <h1>🔥 Proflame WiFi Fireplace Driver</h1>
     
     <div class="version-info">
-        <strong>Version:</strong> 1.0.0<br>
-        <strong>Date:</strong> December 2, 2025<br>
+        <strong>Version:</strong> 2026051701<br>
+        <strong>Date:</strong> May 17, 2026<br>
         <strong>Author:</strong> Paul Saab<br>
         <strong>Device:</strong> SIT Group Proflame 2 WiFi Controller
     </div>
@@ -173,22 +173,17 @@
         <tr>
             <td>Default On Mode</td>
             <td>Mode to use when turning on: Manual, Smart (Thermostat), or Eco</td>
-            <td>Manual</td>
+            <td>Smart (Thermostat)</td>
         </tr>
         <tr>
             <td>Default Flame Level</td>
-            <td>Flame level to set when turning on (0-6)</td>
-            <td>3</td>
+            <td>Flame level to set when turning on (1-6)</td>
+            <td>6</td>
         </tr>
         <tr>
-            <td>Default Fan Level</td>
-            <td>Fan level when turning on (0-6)</td>
-            <td>0</td>
-        </tr>
-        <tr>
-            <td>Default Light Level</td>
-            <td>Accent light level when turning on (0-6)</td>
-            <td>0</td>
+            <td>Default Timer (minutes)</td>
+            <td>Auto-off timer used when explicitly turning on; 0 disables the default timer</td>
+            <td>180</td>
         </tr>
     </table>
 
@@ -308,7 +303,8 @@
             <li>Verify the fireplace controller is powered on and connected to WiFi</li>
             <li>Confirm the IP address is correct (check your router or use the Proflame app)</li>
             <li>Ensure port 88 is not blocked by any firewall</li>
-            <li>Try the "Reconnect" action in Composer Pro</li>
+            <li>Change the IP Address or Port property, or reload the driver, to force a reconnect</li>
+            <li>If Strict WebSocket Handshake is On, check Lua output for "Handshake failed" diagnostics</li>
             <li>Check WiFi Signal Strength property - poor signal may cause disconnects</li>
         </ol>
     </div>
@@ -349,8 +345,8 @@
     <p>For support or feature requests, please contact:</p>
     <ul>
         <li><strong>Author:</strong> Paul Saab</li>
-        <li><strong>Version:</strong> 1.0.0</li>
-        <li><strong>Date:</strong> December 2, 2025</li>
+        <li><strong>Version:</strong> 2026051701</li>
+        <li><strong>Date:</strong> May 17, 2026</li>
     </ul>
 
     <hr>
