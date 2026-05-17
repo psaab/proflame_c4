@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051621"
+DRIVER_VERSION = "2026051622"
 DRIVER_DATE = "2026-05-16"
 
 NETWORK_BINDING_ID = 6001
@@ -99,7 +99,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260516-215156"
+BUILD_TIMESTAMP = "20260516-221800"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -1303,35 +1303,49 @@ function GetCommandParam(tParams, ...)
 end
 
 function CancelPendingTimerCommandTimers()
+    CancelPendingModeReadyWork()
+    CancelPendingTimerStartWork()
+    CancelTimerSuppressionClear()
+end
+
+function CancelPendingModeReadyWork()
     if gTimerModeDelayTimer then
         gTimerModeDelayTimer:Cancel()
         gTimerModeDelayTimer = nil
     end
+end
+
+function CancelPendingTimerStartWork()
     if gTimerStartDelayTimer then
         gTimerStartDelayTimer:Cancel()
         gTimerStartDelayTimer = nil
     end
+end
+
+function CancelTimerSuppressionClear()
     if gTimerSuppressClearTimer then
         gTimerSuppressClearTimer:Cancel()
         gTimerSuppressClearTimer = nil
     end
 end
 
+function SetTimerSuppression(enabled, reason)
+    CancelTimerSuppressionClear()
+    gSuppressTimerUpdates = enabled
+    dbg_err("Timer suppression " .. (enabled and "enabled" or "disabled") .. ": " .. tostring(reason))
+end
+
 function ScheduleTimerSuppressionClear()
-    if gTimerSuppressClearTimer then
-        gTimerSuppressClearTimer:Cancel()
-        gTimerSuppressClearTimer = nil
-    end
+    CancelTimerSuppressionClear()
     gTimerSuppressClearTimer = C4:SetTimer(2000, function(timer)
         gTimerSuppressClearTimer = nil
-        gSuppressTimerUpdates = false
-        dbg_err("Timer suppression cleared")
+        SetTimerSuppression(false, "scheduled clear")
     end, false)
 end
 
 function ClearTimerStateAndSend(turnOff)
     CancelPendingTimerCommandTimers()
-    gSuppressTimerUpdates = true
+    SetTimerSuppression(true, "clearing timer")
     gState.timer_set = "0"
     gState.timer_count = "0"
     gState.timer_status = "0"
@@ -1370,13 +1384,14 @@ end
 
 function SetTimerValueAndArm(minutes, updateTimerExtras)
     local msValue = SetRequestedTimerState(minutes)
-    gSuppressTimerUpdates = true
+    SetTimerSuppression(true, "setting timer")
     gTimerExpired = false
     SendProflameCommand("timer_set", tostring(msValue))
     ArmTimerAfterDelay(updateTimerExtras)
 end
 
 function ScheduleModeReadyWork(callback)
+    CancelPendingModeReadyWork()
     gTimerModeDelayTimer = C4:SetTimer(750, function(timer)
         gTimerModeDelayTimer = nil
         callback()
@@ -1385,6 +1400,7 @@ end
 
 function CommandSetMode(mode)
     if mode == MODE_OFF or mode == MODE_MANUAL or mode == MODE_SMART or mode == MODE_ECO then
+        CancelPendingModeReadyWork()
         SendProflameCommand("main_mode", mode)
         return true
     end
@@ -1409,7 +1425,7 @@ function CommandTurnOn()
     end)
     -- If no timer will be armed, clear suppression now; no later callback will do it.
     if not defaultTimer or defaultTimer <= 0 then
-        gSuppressTimerUpdates = false
+        SetTimerSuppression(false, "turn on without default timer")
     end
     return true
 end
@@ -1423,10 +1439,11 @@ function CommandSetFlame(level)
 
     if gState.main_mode ~= MODE_MANUAL then
         SendProflameCommand("main_mode", MODE_MANUAL)
-        C4:SetTimer(750, function(timer)
+        ScheduleModeReadyWork(function()
             SendProflameCommand("flame_control", tostring(level))
-        end, false)
+        end)
     else
+        CancelPendingModeReadyWork()
         SendProflameCommand("flame_control", tostring(level))
     end
     return true
@@ -1504,7 +1521,7 @@ function CommandSetTimerMinutes(minutes)
 
     dbg_err("CommandSetTimerMinutes: " .. tostring(minutes) .. " minutes, current mode: " .. tostring(gState.main_mode))
     CancelPendingTimerCommandTimers()
-    gSuppressTimerUpdates = true
+    SetTimerSuppression(true, "set timer command")
     gTimerExpired = false
 
     if minutes > 0 then
@@ -1775,7 +1792,7 @@ function ResetDriverState()
     gHandshakeComplete = false
     gReceiveBuffer = ""
     gExtrasThrottle = false
-    gSuppressTimerUpdates = false
+    SetTimerSuppression(false, "driver state reset")
     gTimerExpired = false
     gLastMainMode = nil
     gLastConnectionOnline = false
