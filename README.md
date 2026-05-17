@@ -456,6 +456,22 @@ end
 
 ## Key Lessons Learned
 
+### Local Packaging And Validation
+
+Run the local validator before opening a PR:
+
+```sh
+scripts/validate.sh
+```
+
+Rebuild the checked-in Control4 archive from source files with:
+
+```sh
+scripts/package.sh
+```
+
+The validator checks `driver.xml` with `xmllint`, verifies required source/package files, confirms `proflame_wifi_connect.c4z` contains only the expected driver files, and fails if packaged source files are stale relative to the working tree.
+
 ### 1. Proflame Protocol
 - **No spaces in JSON** - Commands with spaces are silently ignored
 - **Temperature encoding** - Always multiply/divide by 10
