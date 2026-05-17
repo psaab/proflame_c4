@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051627"
+DRIVER_VERSION = "2026051628"
 DRIVER_DATE = "2026-05-16"
 
 NETWORK_BINDING_ID = 6001
@@ -99,7 +99,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260516-231348"
+BUILD_TIMESTAMP = "20260516-232007"
 
 -- Try to update version property immediately on load
 pcall(function()

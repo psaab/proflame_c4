@@ -9,9 +9,9 @@
   <manufacturer>SIT Group / Proflame</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051627</version>
+  <version>2026051628</version>
   <created>12/02/2025 12:00 PM</created>
-  <modified>05/16/2026 11:13 PM</modified>
+  <modified>05/16/2026 11:20 PM</modified>
   <auto_update>true</auto_update>
   <minimum_auto_update_version>1</minimum_auto_update_version>
   <proxies>
@@ -447,7 +447,7 @@
     <can_cool>False</can_cool>
     <can_do_auto>False</can_do_auto>
     <can_preset>True</can_preset>
-    <can_preset_schedule>True</can_preset_schedule>
+    <can_preset_schedule>False</can_preset_schedule>
     <preset_fields>Name</preset_fields>
     <preset_modes>Manual,Smart,Eco</preset_modes>
     <has_outdoor_temperature>False</has_outdoor_temperature>
@@ -458,10 +458,10 @@
     <setpoint_heat_min_f>60</setpoint_heat_min_f>
     <setpoint_heat_max_f>90</setpoint_heat_max_f>
     <setpoint_heat_resolution_f>1</setpoint_heat_resolution_f>
-    <scheduling>True</scheduling>
-    <can_schedule>True</can_schedule>
+    <scheduling>False</scheduling>
+    <can_schedule>False</can_schedule>
     <hvac_modes>Off,Heat</hvac_modes>
-    <hold_modes></hold_modes>
+    <hold_modes>Low Flame,Medium Flame,High Flame</hold_modes>
     <hvac_states>Off,Heat</hvac_states>
     <can_set_backlight>False</can_set_backlight>
     <has_time_settings>False</has_time_settings>
