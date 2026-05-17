@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051722 (2026-05-17)
+- **Driver Version**: 2026051725 (2026-05-17)
 
 ---
 
@@ -1035,7 +1035,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051722</version>
+  <version>2026051725</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1472,7 +1472,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051722"
+DRIVER_VERSION = "2026051725"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1574,7 +1574,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 2026051722 | 2026-05-17 | Disabled thermostat Presets menu and restored Hold menu as flame height control |
+| 2026051725 | 2026-05-17 | Disabled thermostat Presets menu and restored Hold menu as flame height control |
 | 2026051721 | 2026-05-17 | Refresh custom flame hold-mode capability list before sending current hold-mode value |
 | 2026051720 | 2026-05-17 | Initialize flame preset hold-mode display so the app control is labeled before status echoes |
 | 2026051719 | 2026-05-17 | Documented firmware scope for the Legacy Only default |
