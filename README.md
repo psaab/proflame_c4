@@ -130,7 +130,7 @@ The device sends status updates as JSON with indexed status/value pairs:
   <name>Proflame WiFi Fireplace</name>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
-  <version>2026051711</version>
+  <version>2026051713</version>
   
   <proxies>
     <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
@@ -541,7 +541,7 @@ function BuildSetControlCommand(control, value)
 end
 ```
 
-During command-format migration, the driver also sends a legacy indexed fallback (`{"control0":"...","value0":"..."}`) after the documented `set_control` message. Remove the fallback after real-device testing confirms the accepted format.
+The `Command Format (non-Turn-Off)` property controls non-Turn-Off command sends. The default sends the documented `set_control` message followed by the legacy indexed fallback (`{"control0":"...","value0":"..."}`). Use `Legacy Only`, `Documented Only`, and both dual orderings for real-device compatibility testing; compare `Dual (Documented First)` against `Dual (Legacy First)` because message order may determine which format the firmware accepts. Turn Off remains legacy-only because that path was verified against the device.
 
 ### WebSocket Frame Builder
 ```lua

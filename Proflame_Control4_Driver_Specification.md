@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051711 (2026-05-17)
+- **Driver Version**: 2026051713 (2026-05-17)
 
 ---
 
@@ -57,6 +57,7 @@ This driver enables Control4 home automation systems to control Proflame WiFi-en
 | Default On Mode | LIST | Smart (Thermostat) | Mode when turning on: Manual, Smart (Thermostat), Eco |
 | Default Flame Level | INTEGER | 6 | Initial flame level (1-6) |
 | Default Timer | INTEGER | 180 | Auto-off timer in minutes (0=disabled) |
+| Command Format (non-Turn-Off) | LIST | Dual (Documented First) | Outbound format for non-Turn-Off device commands |
 | Debug Mode | LIST | On | Enable/disable debug logging |
 | Debug Level | LIST | Debug | Error, Warning, Info, Debug, Trace |
 
@@ -116,13 +117,13 @@ Client-to-server frames MUST be masked. Server-to-client frames are NOT masked.
 {"command":"set_control","name":"<parameter>","value":"<value>"}
 ```
 
-During command-format migration, the driver sends the documented `set_control` message first and then sends a legacy indexed fallback:
+The default `Command Format (non-Turn-Off)` property sends the documented `set_control` message first and then sends a legacy indexed fallback:
 
 ```json
 {"control0":"<parameter>","value0":"<value>"}
 ```
 
-The fallback should be removed after real-device testing proves which format is accepted across supported Proflame firmware versions.
+Other `Command Format (non-Turn-Off)` options support runtime verification: `Legacy Only`, `Documented Only`, and `Dual (Legacy First)`. Runtime verification should test and compare both dual orderings because order may affect which message the firmware accepts. Turn Off intentionally bypasses this property and uses the verified legacy-only path.
 
 The driver sends one control per message. Multi-control writes should be sent as separate no-space JSON messages.
 
@@ -1025,7 +1026,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051711</version>
+  <version>2026051713</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1459,7 +1460,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051711"
+DRIVER_VERSION = "2026051713"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1562,6 +1563,8 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026051713 | 2026-05-17 | Clarified command-format property scope and runtime order testing guidance |
+| 2026051712 | 2026-05-17 | Added configurable command-format compatibility mode for non-Turn-Off commands |
 | 2026051711 | 2026-05-17 | Hotfix JsonEscape runtime pattern, restored legacy turn-off command behavior, and documented Composer command smoke testing |
 | 2026051701 | 2026-05-17 | Updated documentation to match implemented properties, commands, events, and protocol helpers |
 | 2026051628 | 2026-05-16 | Aligned thermostat capabilities and documentation with implemented behavior |
