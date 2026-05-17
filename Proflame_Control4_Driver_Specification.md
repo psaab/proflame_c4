@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051720 (2026-05-17)
+- **Driver Version**: 2026051721 (2026-05-17)
 
 ---
 
@@ -412,7 +412,6 @@ end
   <preset_modes>Manual,Smart,Eco</preset_modes>
   <scheduling>False</scheduling>
   <can_schedule>False</can_schedule>
-  <hold_modes>Low Flame,Medium Flame,High Flame</hold_modes>
 </capabilities>
 ```
 
@@ -442,11 +441,11 @@ Fan speed is mapped to standard thermostat fan modes:
 | Smart | 6 | Temperature-controlled |
 | Eco | 7 | Energy-saving thermostat |
 
-### 4.6 Hold Modes (Flame Presets)
+### 4.6 Extras Flame Height Presets
 
-Thermostat hold modes are intentionally repurposed as quick flame presets:
+The Extras UI exposes quick flame presets with a labeled `Flame Height` list:
 
-| Hold Mode | Flame Level |
+| Preset | Flame Level |
 |-----------|-------------|
 | Low Flame | 1 |
 | Medium Flame | 3 |
@@ -497,7 +496,6 @@ C4:SendToProxy(5001, "ALLOWED_HVAC_MODES_CHANGED", {MODES = "Off,Heat"})
 | `SET_MODE_FAN` | MODE | Set fan mode (Off/Low/Medium/High) |
 | `SET_SCALE` | SCALE | Change temperature scale |
 | `SET_PRESET` | PRESET, MODE, NAME | Set preset mode |
-| `SET_MODE_HOLD` | MODE | Set flame preset hold mode (Low/Medium/High Flame) |
 | `GET_EXTRAS_SETUP` | - | Request extras XML |
 | `GET_EXTRAS_STATE` | - | Request extras state |
 
@@ -1042,7 +1040,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051720</version>
+  <version>2026051721</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1482,7 +1480,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051720"
+DRIVER_VERSION = "2026051721"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1585,6 +1583,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026051721 | 2026-05-17 | Moved quick flame height presets from thermostat Hold to labeled Extras control |
 | 2026051720 | 2026-05-17 | Initialize flame preset hold-mode display so the app control is labeled before status echoes |
 | 2026051719 | 2026-05-17 | Documented firmware scope for the Legacy Only default |
 | 2026051718 | 2026-05-17 | Changed default non-Turn-Off command format to Legacy Only based on real-device single-format verification |

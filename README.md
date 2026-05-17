@@ -130,7 +130,7 @@ The device sends status updates as JSON with indexed status/value pairs:
   <name>Proflame WiFi Fireplace</name>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
-  <version>2026051720</version>
+  <version>2026051721</version>
   
   <proxies>
     <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
