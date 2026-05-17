@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051701"
+DRIVER_VERSION = "2026051702"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -190,6 +190,7 @@ gTimerExpired = false  -- Set when timer reaches 0, cleared when timer_status go
 
 gLastMainMode = nil
 gLastConnectionOnline = false
+gStatusSeen = {}
 
 gPendingSetpointF = nil
 gPendingTimer = nil
@@ -944,6 +945,10 @@ end
 
 function Disconnect()
     StopPingTimer()
+    CancelPendingTimerCommandTimers()
+    if gSuppressTimerUpdates then
+        SetTimerSuppression(false, "disconnect")
+    end
     local port = tonumber(Properties["Port"]) or 88
     if gConnected then
         pcall(function() C4:NetDisconnect(NETWORK_BINDING_ID, port) end)
@@ -982,6 +987,10 @@ function SendPong(payload)
 end
 
 function SendDeviceControl(control, value)
+    if not gConnected or not gHandshakeComplete then
+        dbg_err("Refusing device command while disconnected or handshaking: " .. tostring(control) .. "=" .. tostring(value))
+        return false
+    end
     local cmd = BuildSetControlCommand(control, value)
     dbg_err("Sending command: " .. cmd)
     local sentPrimary = SendWebSocketMessage(cmd)
@@ -1332,6 +1341,7 @@ function ProcessStatusUpdate(status, value)
     dbg_err("ProcessStatusUpdate: " .. tostring(status) .. " = " .. tostring(value))
     local change = ApplyDeviceStatus(status, value)
     if not change then return end
+    gStatusSeen[change.status] = true
 
     UpdatePropertiesForStatus(change)
     UpdateProxyForStatus(change)
@@ -1602,6 +1612,23 @@ function SetTimerSuppression(enabled, reason)
     dbg_err("Timer suppression " .. (enabled and "enabled" or "disabled") .. ": " .. tostring(reason))
 end
 
+function IsDeviceCommandReady()
+    return gConnected and gHandshakeComplete
+end
+
+function RequireDeviceCommandReady(action)
+    if IsDeviceCommandReady() then return true end
+    dbg_err("Command refused while device is disconnected or handshaking: " .. tostring(action))
+    return false
+end
+
+function RequireConfirmedDeviceStatus(status, action)
+    if not RequireDeviceCommandReady(action) then return false end
+    if gStatusSeen[status] then return true end
+    dbg_err("Command refused until device reports " .. tostring(status) .. ": " .. tostring(action))
+    return false
+end
+
 function ScheduleTimerSuppressionClear()
     CancelTimerSuppressionClear()
     gTimerSuppressClearTimer = C4:SetTimer(2000, function(timer)
@@ -1611,17 +1638,22 @@ function ScheduleTimerSuppressionClear()
 end
 
 function ClearTimerStateAndSend(turnOff)
+    if not RequireDeviceCommandReady(turnOff and "Turn Off" or "Cancel Timer") then return false end
     CancelPendingTimerCommandTimers()
     SetTimerSuppression(true, "clearing timer")
+    local sent = SendDeviceControl("timer_status", "0")
+    sent = SendDeviceControl("timer_set", "0") or sent
+    if turnOff then
+        sent = SendDeviceControl("main_mode", MODE_OFF) or sent
+    end
+    if not sent then
+        SetTimerSuppression(false, "clear timer send failed")
+        return false
+    end
     gState.timer_set = "0"
     gState.timer_count = "0"
     gState.timer_status = "0"
     C4:UpdateProperty("Timer Remaining", "Off")
-    SendDeviceControl("timer_status", "0")
-    SendDeviceControl("timer_set", "0")
-    if turnOff then
-        SendDeviceControl("main_mode", MODE_OFF)
-    end
     UpdateTimerExtras()
     ScheduleTimerSuppressionClear()
     return true
@@ -1630,8 +1662,11 @@ end
 function ArmTimerAfterDelay(updateTimerExtras)
     gTimerStartDelayTimer = C4:SetTimer(200, function(timer)
         gTimerStartDelayTimer = nil
-        SendDeviceControl("timer_status", "1")
-        ScheduleTimerSuppressionClear()
+        if SendDeviceControl("timer_status", "1") then
+            ScheduleTimerSuppressionClear()
+        else
+            SetTimerSuppression(false, "timer start send failed")
+        end
     end, false)
 
     if updateTimerExtras then
@@ -1652,11 +1687,17 @@ function SetRequestedTimerState(minutes)
 end
 
 function SetTimerValueAndArm(minutes, updateTimerExtras)
-    local msValue = SetRequestedTimerState(minutes)
+    if not RequireDeviceCommandReady("Set Timer") then return false end
+    local msValue = minutes * 60000
     SetTimerSuppression(true, "setting timer")
     gTimerExpired = false
-    SendDeviceControl("timer_set", tostring(msValue))
+    if not SendDeviceControl("timer_set", tostring(msValue)) then
+        SetTimerSuppression(false, "timer_set send failed")
+        return false
+    end
+    SetRequestedTimerState(minutes)
     ArmTimerAfterDelay(updateTimerExtras)
+    return true
 end
 
 function ScheduleModeReadyWork(callback)
@@ -1680,9 +1721,9 @@ end
 
 function CommandSetMode(mode)
     if mode == MODE_OFF or mode == MODE_MANUAL or mode == MODE_SMART or mode == MODE_ECO then
+        if not RequireDeviceCommandReady("Set Mode") then return false end
         CancelPendingModeReadyWork()
-        SendDeviceControl("main_mode", mode)
-        return true
+        return SendDeviceControl("main_mode", mode)
     end
     dbg_err("Invalid mode command value: " .. tostring(mode))
     return false
@@ -1693,13 +1734,16 @@ function CommandTurnOff()
 end
 
 function CommandTurnOn()
+    if not RequireDeviceCommandReady("Turn On") then return false end
     CancelPendingTimerCommandTimers()
-    SendDeviceControl("main_mode", GetDefaultOnMode())
+    if not SendDeviceControl("main_mode", GetDefaultOnMode()) then return false end
     local defaultFlame = GetDefaultFlameLevel()
     local defaultTimer = GetDefaultTimerMinutes()
     ScheduleModeReadyWork(function()
-        SetRequestedExtrasControlState("flame_control", defaultFlame)
-        SendDeviceControl("flame_control", tostring(defaultFlame))
+        if not RequireDeviceCommandReady("Turn On default flame") then return end
+        if SendDeviceControl("flame_control", tostring(defaultFlame)) then
+            SetRequestedExtrasControlState("flame_control", defaultFlame)
+        end
         if defaultTimer and defaultTimer > 0 then
             SetTimerValueAndArm(defaultTimer, false)
         end
@@ -1712,6 +1756,7 @@ function CommandTurnOn()
 end
 
 function CommandSetFlame(level)
+    if not RequireDeviceCommandReady("Set Flame Level") then return false end
     level = ClampNumber(level, 0, 6, nil)
     if level == nil then
         dbg_err("Set Flame Level missing or invalid Level parameter")
@@ -1719,15 +1764,17 @@ function CommandSetFlame(level)
     end
 
     if gState.main_mode ~= MODE_MANUAL then
-        SendDeviceControl("main_mode", MODE_MANUAL)
-        SetRequestedExtrasControlState("flame_control", level)
+        if not SendDeviceControl("main_mode", MODE_MANUAL) then return false end
         ScheduleModeReadyWork(function()
-            SendDeviceControl("flame_control", tostring(level))
+            if not RequireDeviceCommandReady("Set Flame Level after mode change") then return end
+            if SendDeviceControl("flame_control", tostring(level)) then
+                SetRequestedExtrasControlState("flame_control", level)
+            end
         end)
     else
         CancelPendingModeReadyWork()
+        if not SendDeviceControl("flame_control", tostring(level)) then return false end
         SetRequestedExtrasControlState("flame_control", level)
-        SendDeviceControl("flame_control", tostring(level))
     end
     return true
 end
@@ -1743,61 +1790,66 @@ function CommandFlameDown()
 end
 
 function CommandSetFan(level)
+    if not RequireDeviceCommandReady("Set Fan Level") then return false end
     level = ClampNumber(level, 0, 6, nil)
     if level == nil then
         dbg_err("Set Fan Level missing or invalid Level parameter")
         return false
     end
+    if not SendDeviceControl("fan_control", tostring(level)) then return false end
     SetRequestedExtrasControlState("fan_control", level)
-    SendDeviceControl("fan_control", tostring(level))
     return true
 end
 
 function CommandSetLight(level)
+    if not RequireDeviceCommandReady("Set Light Level") then return false end
     level = ClampNumber(level, 0, 6, nil)
     if level == nil then
         dbg_err("Set Light Level missing or invalid Level parameter")
         return false
     end
+    if not SendDeviceControl("lamp_control", tostring(level)) then return false end
     SetRequestedExtrasControlState("lamp_control", level)
-    SendDeviceControl("lamp_control", tostring(level))
     return true
 end
 
 function CommandSetTemperatureF(tempF)
+    if not RequireDeviceCommandReady("Set Temperature") then return false end
     tempF = ClampNumber(tempF, 60, 90, nil)
     if tempF == nil then
         dbg_err("Set Temperature missing or invalid Temperature parameter")
         return false
     end
+    if not SendDeviceControl("temperature_set", EncodeTemperature(tempF)) then return false end
     SetPendingSetpoint(tempF)
-    SendDeviceControl("temperature_set", EncodeTemperature(tempF))
     return true
 end
 
 function CommandSetPilot(value)
+    if not RequireDeviceCommandReady("Set Pilot") then return false end
     value = tostring(ClampNumber(value, 0, 1, 0))
-    SendDeviceControl("pilot_control", value)
-    return true
+    return SendDeviceControl("pilot_control", value)
 end
 
 function CommandTogglePilot()
+    if not RequireConfirmedDeviceStatus("pilot_control", "Toggle Pilot") then return false end
     return CommandSetPilot(gState.pilot_control == "1" and 0 or 1)
 end
 
 function CommandToggleAux()
+    if not RequireConfirmedDeviceStatus("aux_control", "Toggle Aux") then return false end
     local value = gState.aux_control == "1" and "0" or "1"
-    SendDeviceControl("aux_control", value)
-    return true
+    return SendDeviceControl("aux_control", value)
 end
 
 function CommandToggleFrontFlame()
+    if not RequireConfirmedDeviceStatus("split_control", "Toggle Front Flame") then return false end
     local value = gState.split_control == "1" and "0" or "1"
-    SendDeviceControl("split_control", value)
-    return true
+    return SendDeviceControl("split_control", value)
 end
 
 function CommandSetTimerMinutes(minutes)
+    if not RequireDeviceCommandReady("Set Timer") then return false end
     minutes = ClampNumber(minutes, 0, 480, nil)
     if minutes == nil then
         dbg_err("Set Timer missing or invalid Minutes parameter")
@@ -1806,23 +1858,30 @@ function CommandSetTimerMinutes(minutes)
 
     dbg_err("CommandSetTimerMinutes: " .. tostring(minutes) .. " minutes, current mode: " .. tostring(gState.main_mode))
     CancelPendingTimerCommandTimers()
-    SetTimerSuppression(true, "set timer command")
-    gTimerExpired = false
 
     if minutes > 0 then
-        SetRequestedTimerState(minutes)
+        SetTimerSuppression(true, "set timer command")
+        gTimerExpired = false
 
         if gState.main_mode == MODE_OFF or gState.main_mode == MODE_STANDBY then
             dbg_err("Fireplace is off, turning on with timer")
-            SendDeviceControl("main_mode", GetDefaultOnMode())
+            if not SendDeviceControl("main_mode", GetDefaultOnMode()) then
+                SetTimerSuppression(false, "timer mode send failed")
+                return false
+            end
             local defaultFlame = GetDefaultFlameLevel()
             ScheduleModeReadyWork(function()
-                SetRequestedExtrasControlState("flame_control", defaultFlame)
-                SendDeviceControl("flame_control", tostring(defaultFlame))
+                if not RequireDeviceCommandReady("Set Timer after mode change") then
+                    SetTimerSuppression(false, "timer mode-ready work disconnected")
+                    return
+                end
+                if SendDeviceControl("flame_control", tostring(defaultFlame)) then
+                    SetRequestedExtrasControlState("flame_control", defaultFlame)
+                end
                 SetTimerValueAndArm(minutes, true)
             end)
         else
-            SetTimerValueAndArm(minutes, true)
+            return SetTimerValueAndArm(minutes, true)
         end
     else
         dbg_err("Timer set to 0, turning off fireplace")
@@ -1989,21 +2048,24 @@ function HandleThermostatCommand(strCommand, tParams)
         
     elseif strCommand == "SET_PRESET" then
         local preset = tParams["PRESET"] or tParams["MODE"] or tParams["NAME"] or ""
+        local changed = false
         dbg_err("SET_PRESET received: " .. preset)
         if preset == "Manual" then
-            CommandSetMode(MODE_MANUAL)
+            changed = CommandSetMode(MODE_MANUAL)
         elseif preset == "Smart" then
-            CommandSetMode(MODE_SMART)
+            changed = CommandSetMode(MODE_SMART)
         elseif preset == "Eco" then
-            CommandSetMode(MODE_ECO)
+            changed = CommandSetMode(MODE_ECO)
         end
         -- Notify proxy of preset change immediately
-        UpdatePresetMode(
-            preset == "Manual" and MODE_MANUAL or
-            preset == "Smart" and MODE_SMART or
-            preset == "Eco" and MODE_ECO or
-            gState.main_mode
-        )
+        if changed then
+            UpdatePresetMode(
+                preset == "Manual" and MODE_MANUAL or
+                preset == "Smart" and MODE_SMART or
+                preset == "Eco" and MODE_ECO or
+                gState.main_mode
+            )
+        end
         
     elseif strCommand == "SET_MODE_HOLD" then
         -- Hold modes repurposed for quick flame control:
@@ -2012,16 +2074,19 @@ function HandleThermostatCommand(strCommand, tParams)
         dbg_err("SET_MODE_HOLD received: " .. holdMode)
         if holdMode == "Low Flame" then
             -- Low flame (level 1)
-            CommandSetFlame(1)
-            C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "Low Flame" })
+            if CommandSetFlame(1) then
+                C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "Low Flame" })
+            end
         elseif holdMode == "Medium Flame" then
             -- Medium flame (level 3)
-            CommandSetFlame(3)
-            C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "Medium Flame" })
+            if CommandSetFlame(3) then
+                C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "Medium Flame" })
+            end
         elseif holdMode == "High Flame" then
             -- High flame (level 6)
-            CommandSetFlame(6)
-            C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "High Flame" })
+            if CommandSetFlame(6) then
+                C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = "High Flame" })
+            end
         end
         
     -- New extras commands (matching Ecobee-style format)
@@ -2082,6 +2147,7 @@ function ResetDriverState()
     gTimerExpired = false
     gLastMainMode = nil
     gLastConnectionOnline = false
+    gStatusSeen = {}
 
     -- Cancel any pending timers
     StopPingTimer()
