@@ -182,7 +182,7 @@
         </tr>
         <tr>
             <td>Default Timer (minutes)</td>
-            <td>Auto-off timer used when explicitly turning on; 0 disables the default timer</td>
+            <td>Auto-off timer used only by Turn On; mode-only changes and Set Timer do not use this default</td>
             <td>180</td>
         </tr>
     </table>
@@ -243,7 +243,7 @@
     
     <h4>Power &amp; Mode</h4>
     <ul>
-        <li><code>Turn On</code> - Turn on using default mode, flame level, and timer</li>
+        <li><code>Turn On</code> - Turn on using Default On Mode, Default Flame Level, and Default Timer</li>
         <li><code>Turn Off</code> - Cancel any active timer and turn fireplace off</li>
         <li><code>Set Mode Manual</code> - Send manual mode change only; driver does not adjust flame or timer</li>
         <li><code>Set Mode Smart</code> - Send thermostat mode change only; driver does not adjust flame or timer</li>
@@ -281,7 +281,7 @@
         <li><code>Toggle Pilot</code> / <code>Pilot On</code> / <code>Pilot Off</code> - Continuous pilot control</li>
         <li><code>Toggle Aux</code> - Toggle auxiliary output</li>
         <li><code>Toggle Front Flame</code> - Toggle split flow / front flame</li>
-        <li><code>Set Timer</code> - Set auto-off timer (minutes)</li>
+        <li><code>Set Timer</code> - Set requested auto-off timer minutes; Default Timer is not used</li>
         <li><code>Cancel Timer</code> - Cancel active timer without changing fireplace mode</li>
     </ul>
 

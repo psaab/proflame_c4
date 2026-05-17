@@ -9,7 +9,7 @@
   <manufacturer>SIT Group / Proflame</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051713</version>
+  <version>2026051714</version>
   <created>12/02/2025 12:00 PM</created>
   <modified>05/17/2026 12:15 AM</modified>
   <auto_update>true</auto_update>
@@ -229,7 +229,7 @@
     <commands>
       <command>
         <name>Turn On</name>
-        <description>Turn the fireplace on</description>
+        <description>Turn on using Default On Mode, Default Flame Level, and Default Timer</description>
       </command>
       <command>
         <name>Turn Off</name>
@@ -341,7 +341,7 @@
       </command>
       <command>
         <name>Set Timer</name>
-        <description>Set auto-off timer in minutes</description>
+        <description>Set requested auto-off timer minutes; Default Timer is not used</description>
         <params>
           <param>
             <name>Minutes</name>
