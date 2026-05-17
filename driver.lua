@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051626"
+DRIVER_VERSION = "2026051627"
 DRIVER_DATE = "2026-05-16"
 
 NETWORK_BINDING_ID = 6001
@@ -99,7 +99,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260516-230818"
+BUILD_TIMESTAMP = "20260516-231348"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -1446,6 +1446,12 @@ function OnPropertyChanged(strProperty)
         dbg_err("Port changed, disconnecting and reconnecting...")
         Disconnect()
         C4:SetTimer(500, function() Connect() end, false)
+    elseif strProperty == "Strict WebSocket Handshake" then
+        dbg_err("Strict WebSocket Handshake changed, reconnecting to verify handshake mode...")
+        Disconnect()
+        if (Properties["IP Address"] or "") ~= "" then
+            C4:SetTimer(500, function() Connect() end, false)
+        end
     elseif strProperty == "Debug Mode" then
         gDebugEnabled = (Properties["Debug Mode"] == "On")
     elseif strProperty == "Debug Level" then
