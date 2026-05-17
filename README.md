@@ -472,6 +472,25 @@ scripts/package.sh [path/to/proflame_wifi_connect.c4z]
 
 Both scripts read the package file list from `scripts/manifest.txt`. The packager normalizes ZIP entry timestamps so repeated rebuilds produce byte-identical archives when the source files are unchanged. The validator checks `driver.xml` with `xmllint`, verifies required source/package files, confirms the `.c4z` contains only the expected driver files, and fails if packaged source files are stale relative to the working tree. The same validation and deterministic rebuild check run in GitHub Actions on pushes to `main` and on pull requests.
 
+### Composer Command Smoke Test
+
+Run this checklist in Composer Pro before merging PRs that change command behavior. Paste the completed checklist, controller version, driver version, and any skipped items into the PR.
+
+- [ ] Turn On applies Default On Mode, Default Flame Level, and Default Timer.
+- [ ] Turn Off turns the fireplace off and clears the Extras timer display.
+- [ ] Set Mode Manual, Smart, and Eco change only the driver-requested mode; flame and timer are not adjusted by the driver.
+- [ ] Set Flame Level switches to Manual if needed and applies the requested flame level.
+- [ ] Set Fan Level applies the requested fan level.
+- [ ] Set Light Level applies the requested light level.
+- [ ] Set Timer while off turns the fireplace on and starts countdown.
+- [ ] Set Timer while already on updates the timer without changing mode, flame, fan, or light.
+- [ ] Cancel Timer clears timer state without directly changing fireplace mode.
+- [ ] Disconnect the fireplace network path; command attempts are refused/logged and do not change confirmed driver state.
+- [ ] Programming events fire in Composer when fireplace power/mode state changes.
+- [ ] Extras flame, fan, and light sliders do not visibly snap back while waiting for device echoes.
+- [ ] Extras controls round-trip: each changed mode/flame/fan/light/timer value is reflected in device state, driver properties/proxy state, and the next Extras render.
+- [ ] If a case cannot be tested, note the reason explicitly in the PR.
+
 ### 1. Proflame Protocol
 - **No spaces in JSON** - Commands with spaces are silently ignored
 - **Temperature encoding** - Always multiply/divide by 10

@@ -44,11 +44,14 @@ grep -q '<documentation file="www/documentation.html"' "$ROOT_DIR/driver.xml" ||
 
 LUA_VERSION=$(sed -n 's/^DRIVER_VERSION = "\(.*\)"/\1/p' "$ROOT_DIR/driver.lua" | head -n 1)
 XML_VERSION=$(sed -n 's/.*<version>\(.*\)<\/version>.*/\1/p' "$ROOT_DIR/driver.xml" | head -n 1)
+SPEC_VERSION=$(sed -n 's/^- \*\*Driver Version\*\*: \([^ ]*\).*/\1/p' "$ROOT_DIR/Proflame_Control4_Driver_Specification.md" | head -n 1)
 BUILD_TIMESTAMP=$(sed -n 's/^BUILD_TIMESTAMP = "\(.*\)"/\1/p' "$ROOT_DIR/driver.lua" | head -n 1)
 
 [ -n "$LUA_VERSION" ] || fail "Could not read DRIVER_VERSION from driver.lua"
 [ -n "$XML_VERSION" ] || fail "Could not read <version> from driver.xml"
+[ -n "$SPEC_VERSION" ] || fail "Could not read Driver Version from Proflame_Control4_Driver_Specification.md"
 [ "$LUA_VERSION" = "$XML_VERSION" ] || fail "Version mismatch: driver.lua=$LUA_VERSION driver.xml=$XML_VERSION"
+[ "$LUA_VERSION" = "$SPEC_VERSION" ] || fail "Spec version mismatch: driver.lua=$LUA_VERSION spec=$SPEC_VERSION"
 
 EXPECTED=$(mktemp)
 ACTUAL=$(mktemp)

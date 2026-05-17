@@ -1382,6 +1382,8 @@ end, false)
 
 ## 12. Testing Checklist
 
+For PRs that change command behavior, run the shorter Composer Command Smoke Test in `README.md` or the pull request template and paste the results into the PR. Use the broader checklist below for release validation and larger driver changes.
+
 ### 12.1 Connection Tests
 
 - [ ] Driver connects on IP address entry
@@ -1560,7 +1562,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 2026051711 | 2026-05-17 | Hotfix JsonEscape runtime pattern and restored legacy turn-off command behavior |
+| 2026051711 | 2026-05-17 | Hotfix JsonEscape runtime pattern, restored legacy turn-off command behavior, and documented Composer command smoke testing |
 | 2026051701 | 2026-05-17 | Updated documentation to match implemented properties, commands, events, and protocol helpers |
 | 2026051628 | 2026-05-16 | Aligned thermostat capabilities and documentation with implemented behavior |
 | 2025013124 | 2026-01-31 | Updated mode values (Smart=6, Eco=7), build timestamp for cache busting |
