@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051716 (2026-05-17)
+- **Driver Version**: 2026051717 (2026-05-17)
 
 ---
 
@@ -123,7 +123,7 @@ The default `Command Format (non-Turn-Off)` property sends the documented `set_c
 {"control0":"<parameter>","value0":"<value>"}
 ```
 
-Other `Command Format (non-Turn-Off)` options support runtime verification: `Legacy Only`, `Documented Only`, and `Dual (Legacy First)`. Runtime verification should test and compare both dual orderings because order may affect which message the firmware accepts. Turn Off intentionally bypasses this property and uses the verified legacy-only path.
+Other `Command Format (non-Turn-Off)` options support runtime verification: `Legacy Only`, `Documented Only`, and `Dual (Legacy First)`. Runtime verification should test and compare both dual orderings because order may affect which message the firmware accepts. All control writes are routed through `BuildDeviceControlCommandPlan`; Turn Off uses that same wrapper with the verified legacy-only plan.
 
 The driver sends one control per message. Multi-control writes should be sent as separate no-space JSON messages.
 
@@ -1042,7 +1042,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051716</version>
+  <version>2026051717</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1361,6 +1361,8 @@ end, false)
 | `PROFLAMECONNECTION` | - | Initial connection announcement |
 | `PROFLAMEPING` | - | Keep-alive ping |
 
+Manual command-format verification should exercise `main_mode`, `flame_control`, `fan_control`, `lamp_control`, `temperature_set`, `timer_set`, and `timer_status` under the selected `Command Format (non-Turn-Off)` setting and record the status echo that confirms device acceptance. Turn Off verification should separately confirm the legacy-only plan still turns the fireplace off.
+
 ### 11.2 Control4 Proxy Commands (Receive)
 
 | Command | Parameters | Action |
@@ -1453,6 +1455,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 - [ ] Default Timer is started by Turn On only
 - [ ] Set Timer while off uses the requested timer value, not Default Timer
 - [ ] Cancel Timer while on triggers the timer-required safety policy and turns the fireplace off
+- [ ] Command Format testing records selected format and status echo for main_mode, flame_control, fan_control, lamp_control, temperature_set, timer_set, and timer_status
 - [ ] Mode changes from extras do not change flame or timer
 - [ ] Set Flame Level changes operating mode to Manual when invoked from Smart, Eco, or Off
 
@@ -1479,7 +1482,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051716"
+DRIVER_VERSION = "2026051717"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1582,6 +1585,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026051717 | 2026-05-17 | Centralized outbound command-format planning and documented manual format verification |
 | 2026051716 | 2026-05-17 | Added timer-required safety policy that forces off confirmed on states without an active timer |
 | 2026051715 | 2026-05-17 | Clarified Set Flame Level Manual-mode side effect |
 | 2026051714 | 2026-05-17 | Clarified Default Timer scope without renaming the property |

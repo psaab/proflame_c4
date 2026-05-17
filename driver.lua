@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051716"
+DRIVER_VERSION = "2026051717"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -26,6 +26,13 @@ MODE_STANDBY_ALT = "2"  -- Proflame reports this after app-driven off/standby ev
 MODE_MANUAL = "5"
 MODE_SMART = "6"
 MODE_ECO = "7"
+
+COMMAND_FORMAT_DUAL_DOCUMENTED_FIRST = "Dual (Documented First)"
+COMMAND_FORMAT_LEGACY_ONLY = "Legacy Only"
+COMMAND_FORMAT_DOCUMENTED_ONLY = "Documented Only"
+COMMAND_FORMAT_DUAL_LEGACY_FIRST = "Dual (Legacy First)"
+-- Internal-only alias so Turn Off cannot accidentally inherit the Composer-selected non-Turn-Off format.
+COMMAND_FORMAT_TURN_OFF_LEGACY_ONLY = "Turn Off Legacy Only"
 
 DEFAULT_FLAME_LEVEL = 6
 DEFAULT_TIMER_MINUTES = 180
@@ -104,7 +111,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260517-092400"
+BUILD_TIMESTAMP = "20260517-094700"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -562,6 +569,26 @@ function BuildLegacyIndexedCommand(control, value)
     return '{"control0":"' .. JsonEscape(control) .. '","value0":"' .. JsonEscape(value) .. '"}'
 end
 
+function BuildDeviceControlCommandPlan(control, value, format)
+    local documented = {
+        label = "documented",
+        payload = BuildSetControlCommand(control, value)
+    }
+    local legacy = {
+        label = "legacy",
+        payload = BuildLegacyIndexedCommand(control, value)
+    }
+
+    if format == COMMAND_FORMAT_LEGACY_ONLY or format == COMMAND_FORMAT_TURN_OFF_LEGACY_ONLY then
+        return { legacy }
+    elseif format == COMMAND_FORMAT_DOCUMENTED_ONLY then
+        return { documented }
+    elseif format == COMMAND_FORMAT_DUAL_LEGACY_FIRST then
+        return { legacy, documented }
+    end
+    return { documented, legacy }
+end
+
 function DecodeTemperature(encoded)
     local temp = tonumber(encoded) or 700
     return math.floor(temp / 10)
@@ -1013,32 +1040,23 @@ function SendPong(payload)
     return true
 end
 
-function SendDocumentedDeviceControl(control, value, context)
+function SendDeviceControlWithFormat(control, value, format, context)
+    -- This low-level sender intentionally does not check gTurnOffInProgress.
+    -- Public command paths should use SendDeviceControl unless they are part
+    -- of the Turn Off sequence that must run while the guard is active.
     if not gConnected or not gHandshakeComplete then
         dbg_err("Refusing device command while disconnected or handshaking: " .. tostring(control) .. "=" .. tostring(value))
         return false
     end
-    local cmd = BuildSetControlCommand(control, value)
-    if context then
-        dbg_err("Sending " .. tostring(context) .. " command: " .. cmd)
-    else
-        dbg_err("Sending command: " .. cmd)
-    end
-    return SendWebSocketMessage(cmd)
-end
 
-function SendLegacyDeviceControl(control, value, context)
-    if not gConnected or not gHandshakeComplete then
-        dbg_err("Refusing device command while disconnected or handshaking: " .. tostring(control) .. "=" .. tostring(value))
-        return false
+    local plan = BuildDeviceControlCommandPlan(control, value, format)
+    local sent = false
+    for _, command in ipairs(plan) do
+        local prefix = context and ("Sending " .. tostring(context) .. " " .. command.label .. " command: ") or ("Sending " .. command.label .. " command: ")
+        dbg_err(prefix .. command.payload)
+        sent = SendWebSocketMessage(command.payload) or sent
     end
-    local legacyCmd = BuildLegacyIndexedCommand(control, value)
-    if context then
-        dbg_err("Sending " .. tostring(context) .. " legacy command: " .. legacyCmd)
-    else
-        dbg_err("Sending legacy command fallback: " .. legacyCmd)
-    end
-    return SendWebSocketMessage(legacyCmd)
+    return sent
 end
 
 function SendDeviceControl(control, value)
@@ -1047,20 +1065,8 @@ function SendDeviceControl(control, value)
         return false
     end
 
-    local format = Properties["Command Format (non-Turn-Off)"] or "Dual (Documented First)"
-    if format == "Legacy Only" then
-        return SendLegacyDeviceControl(control, value)
-    elseif format == "Documented Only" then
-        return SendDocumentedDeviceControl(control, value)
-    elseif format == "Dual (Legacy First)" then
-        local sentLegacy = SendLegacyDeviceControl(control, value)
-        local sentPrimary = SendDocumentedDeviceControl(control, value)
-        return sentLegacy or sentPrimary
-    end
-
-    local sentPrimary = SendDocumentedDeviceControl(control, value)
-    local sentLegacy = SendLegacyDeviceControl(control, value)
-    return sentPrimary or sentLegacy
+    local format = Properties["Command Format (non-Turn-Off)"] or COMMAND_FORMAT_DUAL_DOCUMENTED_FIRST
+    return SendDeviceControlWithFormat(control, value, format, nil)
 end
 
 function RequestAllStatus()
@@ -1764,8 +1770,8 @@ end
 
 function SendTurnOffControls(reason)
     dbg_err("Sending legacy turn off controls: " .. tostring(reason))
-    local sent = SendLegacyDeviceControl("timer_status", "0", "turn off")
-    sent = SendLegacyDeviceControl("main_mode", MODE_OFF, "turn off") or sent
+    local sent = SendDeviceControlWithFormat("timer_status", "0", COMMAND_FORMAT_TURN_OFF_LEGACY_ONLY, "turn off")
+    sent = SendDeviceControlWithFormat("main_mode", MODE_OFF, COMMAND_FORMAT_TURN_OFF_LEGACY_ONLY, "turn off") or sent
     return sent
 end
 

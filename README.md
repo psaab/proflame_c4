@@ -130,7 +130,7 @@ The device sends status updates as JSON with indexed status/value pairs:
   <name>Proflame WiFi Fireplace</name>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
-  <version>2026051716</version>
+  <version>2026051717</version>
   
   <proxies>
     <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
@@ -495,6 +495,7 @@ Run this checklist in Composer Pro before merging PRs that change command behavi
 - [ ] Set Timer while off uses the requested timer value, not Default Timer.
 - [ ] Set Timer while already on updates the timer without changing mode, flame, fan, or light.
 - [ ] Cancel Timer while on triggers the timer-required safety policy and turns the fireplace off.
+- [ ] Command Format testing records selected format and status echo for main_mode, flame_control, fan_control, lamp_control, temperature_set, timer_set, and timer_status.
 - [ ] Disconnect the fireplace network path; command attempts are refused/logged and do not change confirmed driver state.
 - [ ] Programming events fire in Composer when fireplace power/mode state changes.
 - [ ] Extras flame, fan, and light sliders do not visibly snap back while waiting for device echoes.
@@ -549,9 +550,19 @@ function BuildSetControlCommand(control, value)
     -- NO SPACES - Critical for Proflame protocol
     return '{"command":"set_control","name":"' .. JsonEscape(control) .. '","value":"' .. JsonEscape(value) .. '"}'
 end
+
+function BuildLegacyIndexedCommand(control, value)
+    return '{"control0":"' .. JsonEscape(control) .. '","value0":"' .. JsonEscape(value) .. '"}'
+end
+
+function BuildDeviceControlCommandPlan(control, value, format)
+    -- Returns documented, legacy, or dual command payloads in the configured order.
+end
 ```
 
-The `Command Format (non-Turn-Off)` property controls non-Turn-Off command sends. The default sends the documented `set_control` message followed by the legacy indexed fallback (`{"control0":"...","value0":"..."}`). Use `Legacy Only`, `Documented Only`, and both dual orderings for real-device compatibility testing; compare `Dual (Documented First)` against `Dual (Legacy First)` because message order may determine which format the firmware accepts. Turn Off remains legacy-only because that path was verified against the device.
+All outbound control writes use `BuildDeviceControlCommandPlan`. The `Command Format (non-Turn-Off)` property controls non-Turn-Off command sends. The default sends the documented `set_control` message followed by the legacy indexed fallback (`{"control0":"...","value0":"..."}`). Use `Legacy Only`, `Documented Only`, and both dual orderings for real-device compatibility testing; compare `Dual (Documented First)` against `Dual (Legacy First)` because message order may determine which format the firmware accepts. Turn Off uses the same command-plan wrapper with the verified legacy-only format.
+
+Manual command-format verification should record the selected format and status echo for `main_mode`, `flame_control`, `fan_control`, `lamp_control`, `temperature_set`, `timer_set`, and `timer_status`.
 
 ### WebSocket Frame Builder
 ```lua
