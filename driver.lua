@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051623"
+DRIVER_VERSION = "2026051624"
 DRIVER_DATE = "2026-05-16"
 
 NETWORK_BINDING_ID = 6001
@@ -99,7 +99,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260516-222909"
+BUILD_TIMESTAMP = "20260516-223631"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -811,10 +811,6 @@ function SendDeviceControl(control, value)
     return sentPrimary or sentLegacy
 end
 
-function SendProflameCommand(control, value)
-    return SendDeviceControl(control, value)
-end
-
 function RequestAllStatus()
     -- The Proflame device requires PROFLAMECONNECTION to trigger full status dump
     -- This is similar to PROFLAMEPING/PROFLAMEPONG but for initial connection
@@ -928,6 +924,9 @@ function ParseStatusMessage(data)
     end
 end
 
+-- Returns a change table consumed by property/proxy/event/Extras adapters.
+-- Required fields: status, value. Optional fields: timerCleared,
+-- timerExpired, timerExtras, newCount.
 function ApplyDeviceStatus(status, value)
     if status == "temperature_set" then
         local incomingF = DecodeTemperature(value)
@@ -947,7 +946,7 @@ function ApplyDeviceStatus(status, value)
         if (value == MODE_OFF or value == MODE_STANDBY) and not gSuppressTimerUpdates then
             gState.timer_set = "0"
             gState.timer_count = "0"
-            return { status = status, value = value, timerCleared = true, extras = "timer" }
+            return { status = status, value = value, timerCleared = true, timerExtras = true }
         end
         return { status = status, value = value }
     elseif status == "timer_status" then
@@ -966,7 +965,7 @@ function ApplyDeviceStatus(status, value)
             gState.timer_set = "0"
             gState.timer_count = "0"
             gTimerExpired = true  -- Also set expired flag to ignore any stale timer_count updates
-            return { status = status, value = value, timerCleared = true, extras = "timer" }
+            return { status = status, value = value, timerCleared = true, timerExtras = true }
         end
         return { status = status, value = value }
     elseif status == "timer_set" then
@@ -1014,7 +1013,7 @@ function ApplyDeviceStatus(status, value)
             gTimerExpired = true
             gState.timer_count = "0"
             gState.timer_set = "0"
-            return { status = status, value = value, timerExpired = true, extras = "timer" }
+            return { status = status, value = value, timerExpired = true, timerExtras = true }
         end
 
         -- Store the raw count
@@ -1025,7 +1024,7 @@ function ApplyDeviceStatus(status, value)
             dbg_err("Timer minute changed: " .. oldMinutes .. " -> " .. newMinutes .. ", updating slider")
             -- Update timer_set to match for slider display
             gState.timer_set = tostring(newMinutes * 60000)
-            change.extras = "timer"
+            change.timerExtras = true
         end
         return change
     elseif status == "room_temperature" or status == "temperature_read" then
@@ -1107,7 +1106,6 @@ function UpdateProxyForStatus(change)
     local value = change.value
 
     if status == "main_mode" then
-        HandleModeEvents(value)
         UpdateThermostatProxy(value)
         UpdatePresetMode(value)
     elseif status == "flame_control" then
@@ -1119,6 +1117,12 @@ function UpdateProxyForStatus(change)
         UpdateThermostatSetpoint()
     elseif status == "room_temperature" then
         UpdateRoomTemperatureProxy()
+    end
+end
+
+function FireEventsForStatus(change)
+    if change.status == "main_mode" then
+        HandleModeEvents(change.value)
     end
 end
 
@@ -1149,7 +1153,8 @@ function ProcessStatusUpdate(status, value)
 
     UpdatePropertiesForStatus(change)
     UpdateProxyForStatus(change)
-    if change.extras == "timer" then
+    FireEventsForStatus(change)
+    if change.timerExtras then
         ScheduleExtrasRefresh("status:" .. tostring(change.status), true)
     elseif StatusAffectsExtras(change.status) then
         ScheduleExtrasRefresh("status:" .. tostring(change.status), false)
@@ -1408,10 +1413,10 @@ function ClearTimerStateAndSend(turnOff)
     gState.timer_count = "0"
     gState.timer_status = "0"
     C4:UpdateProperty("Timer Remaining", "Off")
-    SendProflameCommand("timer_status", "0")
-    SendProflameCommand("timer_set", "0")
+    SendDeviceControl("timer_status", "0")
+    SendDeviceControl("timer_set", "0")
     if turnOff then
-        SendProflameCommand("main_mode", MODE_OFF)
+        SendDeviceControl("main_mode", MODE_OFF)
     end
     UpdateTimerExtras()
     ScheduleTimerSuppressionClear()
@@ -1421,7 +1426,7 @@ end
 function ArmTimerAfterDelay(updateTimerExtras)
     gTimerStartDelayTimer = C4:SetTimer(200, function(timer)
         gTimerStartDelayTimer = nil
-        SendProflameCommand("timer_status", "1")
+        SendDeviceControl("timer_status", "1")
         ScheduleTimerSuppressionClear()
     end, false)
 
@@ -1446,7 +1451,7 @@ function SetTimerValueAndArm(minutes, updateTimerExtras)
     local msValue = SetRequestedTimerState(minutes)
     SetTimerSuppression(true, "setting timer")
     gTimerExpired = false
-    SendProflameCommand("timer_set", tostring(msValue))
+    SendDeviceControl("timer_set", tostring(msValue))
     ArmTimerAfterDelay(updateTimerExtras)
 end
 
@@ -1458,10 +1463,21 @@ function ScheduleModeReadyWork(callback)
     end, false)
 end
 
+function SetRequestedExtrasControlState(control, value)
+    -- Intentional optimistic Extras UI state: slider controls should not snap
+    -- back while waiting for the device echo to confirm the write.
+    if control == "flame_control" or control == "fan_control" or control == "lamp_control" then
+        local valueString = tostring(value)
+        gState[control] = valueString
+        UpdatePropertiesForStatus({ status = control, value = valueString })
+        ScheduleExtrasRefresh("optimistic:" .. control, false)
+    end
+end
+
 function CommandSetMode(mode)
     if mode == MODE_OFF or mode == MODE_MANUAL or mode == MODE_SMART or mode == MODE_ECO then
         CancelPendingModeReadyWork()
-        SendProflameCommand("main_mode", mode)
+        SendDeviceControl("main_mode", mode)
         return true
     end
     dbg_err("Invalid mode command value: " .. tostring(mode))
@@ -1474,11 +1490,12 @@ end
 
 function CommandTurnOn()
     CancelPendingTimerCommandTimers()
-    SendProflameCommand("main_mode", GetDefaultOnMode())
+    SendDeviceControl("main_mode", GetDefaultOnMode())
     local defaultFlame = GetDefaultFlameLevel()
     local defaultTimer = GetDefaultTimerMinutes()
     ScheduleModeReadyWork(function()
-        SendProflameCommand("flame_control", tostring(defaultFlame))
+        SetRequestedExtrasControlState("flame_control", defaultFlame)
+        SendDeviceControl("flame_control", tostring(defaultFlame))
         if defaultTimer and defaultTimer > 0 then
             SetTimerValueAndArm(defaultTimer, false)
         end
@@ -1498,13 +1515,15 @@ function CommandSetFlame(level)
     end
 
     if gState.main_mode ~= MODE_MANUAL then
-        SendProflameCommand("main_mode", MODE_MANUAL)
+        SendDeviceControl("main_mode", MODE_MANUAL)
+        SetRequestedExtrasControlState("flame_control", level)
         ScheduleModeReadyWork(function()
-            SendProflameCommand("flame_control", tostring(level))
+            SendDeviceControl("flame_control", tostring(level))
         end)
     else
         CancelPendingModeReadyWork()
-        SendProflameCommand("flame_control", tostring(level))
+        SetRequestedExtrasControlState("flame_control", level)
+        SendDeviceControl("flame_control", tostring(level))
     end
     return true
 end
@@ -1525,7 +1544,8 @@ function CommandSetFan(level)
         dbg_err("Set Fan Level missing or invalid Level parameter")
         return false
     end
-    SendProflameCommand("fan_control", tostring(level))
+    SetRequestedExtrasControlState("fan_control", level)
+    SendDeviceControl("fan_control", tostring(level))
     return true
 end
 
@@ -1535,7 +1555,8 @@ function CommandSetLight(level)
         dbg_err("Set Light Level missing or invalid Level parameter")
         return false
     end
-    SendProflameCommand("lamp_control", tostring(level))
+    SetRequestedExtrasControlState("lamp_control", level)
+    SendDeviceControl("lamp_control", tostring(level))
     return true
 end
 
@@ -1546,13 +1567,13 @@ function CommandSetTemperatureF(tempF)
         return false
     end
     SetPendingSetpoint(tempF)
-    SendProflameCommand("temperature_set", EncodeTemperature(tempF))
+    SendDeviceControl("temperature_set", EncodeTemperature(tempF))
     return true
 end
 
 function CommandSetPilot(value)
     value = tostring(ClampNumber(value, 0, 1, 0))
-    SendProflameCommand("pilot_control", value)
+    SendDeviceControl("pilot_control", value)
     return true
 end
 
@@ -1562,13 +1583,13 @@ end
 
 function CommandToggleAux()
     local value = gState.aux_control == "1" and "0" or "1"
-    SendProflameCommand("aux_control", value)
+    SendDeviceControl("aux_control", value)
     return true
 end
 
 function CommandToggleFrontFlame()
     local value = gState.split_control == "1" and "0" or "1"
-    SendProflameCommand("split_control", value)
+    SendDeviceControl("split_control", value)
     return true
 end
 
@@ -1589,10 +1610,11 @@ function CommandSetTimerMinutes(minutes)
 
         if gState.main_mode == MODE_OFF or gState.main_mode == MODE_STANDBY then
             dbg_err("Fireplace is off, turning on with timer")
-            SendProflameCommand("main_mode", GetDefaultOnMode())
+            SendDeviceControl("main_mode", GetDefaultOnMode())
             local defaultFlame = GetDefaultFlameLevel()
             ScheduleModeReadyWork(function()
-                SendProflameCommand("flame_control", tostring(defaultFlame))
+                SetRequestedExtrasControlState("flame_control", defaultFlame)
+                SendDeviceControl("flame_control", tostring(defaultFlame))
                 SetTimerValueAndArm(minutes, true)
             end)
         else
