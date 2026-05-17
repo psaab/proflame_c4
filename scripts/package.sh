@@ -37,6 +37,8 @@ done
 rm -f "$PACKAGE"
 (
     cd "$TMP_DIR"
+    find . -type d -exec chmod 0755 {} +
+    find . -type f -exec chmod 0644 {} +
     find . -exec touch -t "$NORMALIZED_MTIME" {} +
     zip -X -q "$PACKAGE" $FILES
 )
