@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051717 (2026-05-17)
+- **Driver Version**: 2026051718 (2026-05-17)
 
 ---
 
@@ -57,7 +57,7 @@ This driver enables Control4 home automation systems to control Proflame WiFi-en
 | Default On Mode | LIST | Smart (Thermostat) | Mode when turning on: Manual, Smart (Thermostat), Eco |
 | Default Flame Level | INTEGER | 6 | Initial flame level (1-6) |
 | Default Timer | INTEGER | 180 | Auto-off timer used only by Turn On; 0 disables timer arming and causes timer safety to force the fireplace off |
-| Command Format (non-Turn-Off) | LIST | Dual (Documented First) | Outbound format for non-Turn-Off device commands |
+| Command Format (non-Turn-Off) | LIST | Legacy Only | Outbound format for non-Turn-Off device commands |
 | Debug Mode | LIST | On | Enable/disable debug logging |
 | Debug Level | LIST | Debug | Error, Warning, Info, Debug, Trace |
 
@@ -117,13 +117,13 @@ Client-to-server frames MUST be masked. Server-to-client frames are NOT masked.
 {"command":"set_control","name":"<parameter>","value":"<value>"}
 ```
 
-The default `Command Format (non-Turn-Off)` property sends the documented `set_control` message first and then sends a legacy indexed fallback:
+The default `Command Format (non-Turn-Off)` property sends the legacy indexed format verified on real hardware:
 
 ```json
 {"control0":"<parameter>","value0":"<value>"}
 ```
 
-Other `Command Format (non-Turn-Off)` options support runtime verification: `Legacy Only`, `Documented Only`, and `Dual (Legacy First)`. Runtime verification should test and compare both dual orderings because order may affect which message the firmware accepts. All control writes are routed through `BuildDeviceControlCommandPlan`; Turn Off uses that same wrapper with the verified legacy-only plan.
+Other `Command Format (non-Turn-Off)` options support runtime verification: `Documented Only`, `Dual (Documented First)`, and `Dual (Legacy First)`. Runtime verification should test and compare both dual orderings because order may affect which message the firmware accepts. All control writes are routed through `BuildDeviceControlCommandPlan`; Turn Off uses that same wrapper with the verified legacy-only plan.
 
 The driver sends one control per message. Multi-control writes should be sent as separate no-space JSON messages.
 
@@ -1042,7 +1042,7 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051717</version>
+  <version>2026051718</version>
   <auto_update>true</auto_update>
 
   <proxies>
@@ -1482,7 +1482,7 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ```lua
 -- Constants
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051717"
+DRIVER_VERSION = "2026051718"
 DRIVER_DATE = "2026-05-17"
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -1585,6 +1585,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026051718 | 2026-05-17 | Changed default non-Turn-Off command format to Legacy Only based on real-device single-format verification |
 | 2026051717 | 2026-05-17 | Centralized outbound command-format planning and documented manual format verification |
 | 2026051716 | 2026-05-17 | Added timer-required safety policy that forces off confirmed on states without an active timer |
 | 2026051715 | 2026-05-17 | Clarified Set Flame Level Manual-mode side effect |

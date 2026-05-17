@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051717"
+DRIVER_VERSION = "2026051718"
 DRIVER_DATE = "2026-05-17"
 
 NETWORK_BINDING_ID = 6001
@@ -111,7 +111,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260517-094700"
+BUILD_TIMESTAMP = "20260517-102346"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -1065,7 +1065,7 @@ function SendDeviceControl(control, value)
         return false
     end
 
-    local format = Properties["Command Format (non-Turn-Off)"] or COMMAND_FORMAT_DUAL_DOCUMENTED_FIRST
+    local format = Properties["Command Format (non-Turn-Off)"] or COMMAND_FORMAT_LEGACY_ONLY
     return SendDeviceControlWithFormat(control, value, format, nil)
 end
 
