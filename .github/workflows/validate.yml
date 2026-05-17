@@ -2,11 +2,61 @@ name: Validate Driver Package
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches:
       - main
 
 jobs:
+  lint-pr-body:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Require Composer smoke-test reporting
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+
+          body = os.environ.get("PR_BODY") or ""
+          default_text = (
+              'For PRs that change command behavior, complete the source-of-truth '
+              'checklist in `README.md` under "Composer Command Smoke Test" and '
+              'paste the results here with controller/driver versions. For docs-only '
+              'or non-command PRs, mark it N/A with the reason.'
+          )
+          match = re.search(
+              r"(?ims)^##\s+Composer Command Smoke Test\s*(.*?)(?=^##\s+|\Z)",
+              body,
+          )
+
+          if not match:
+              print("ERROR: PR body must include a '## Composer Command Smoke Test' section.")
+              print("Complete the README checklist, or mark the section N/A with a reason.")
+              sys.exit(1)
+
+          section = match.group(1).strip()
+          if not section:
+              print("ERROR: Composer Command Smoke Test section is empty.")
+              print("Complete the README checklist, or mark the section N/A with a reason.")
+              sys.exit(1)
+
+          if section == default_text:
+              print("ERROR: Composer Command Smoke Test section still contains only the template instructions.")
+              print("Complete the README checklist, or mark the section N/A with a reason.")
+              sys.exit(1)
+
+          na_pattern = r"(?i)\b(?:N/?A|not applicable)\b"
+          reason_pattern = r"(?i)\b(?:reason|because|docs?-only|non-command|no command|documentation|workflow|ci|not applicable)\b"
+          if re.search(na_pattern, section) and not re.search(reason_pattern, section):
+              print("ERROR: N/A smoke-test section must include a reason.")
+              sys.exit(1)
+          PY
+
   validate:
     runs-on: ubuntu-latest
 
