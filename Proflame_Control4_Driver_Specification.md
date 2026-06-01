@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026053106 (2026-05-31)
+- **Driver Version**: 2026060101 (2026-06-01)
 
 ---
 
@@ -1612,6 +1612,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026060101 | 2026-06-01 | Vendored slim persist wrapper; log driver-version transitions on driver load |
 | 2026053106 | 2026-05-31 | Vendored lib/logging.lua; dbg/dbg_err/dbg_all retained as legacy delegates |
 | 2026053105 | 2026-05-31 | Extracted vendored JSON.lua to vendor/JSON.lua; bundle.sh now generates driver.lua from src/ + vendor/ |
 | 2026053104 | 2026-05-31 | Synced README/spec samples with the vendored JSON.lua wrappers and documented the alphabetical-sort wire-format contract |

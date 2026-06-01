@@ -8,8 +8,8 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026053106"
-DRIVER_DATE = "2026-05-31"
+DRIVER_VERSION = "2026060101"
+DRIVER_DATE = "2026-06-01"
 
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -114,7 +114,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260531-000006"
+BUILD_TIMESTAMP = "20260601-000001"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -458,8 +458,14 @@ end
 
 -- BUNDLE_INSERT vendor/logging.lua
 
+-- BUNDLE_INSERT vendor/persist.lua
+
 -- Initial log configuration. ApplyDebugLogSettings() above re-applies these
 -- from Composer Properties in OnDriverLateInit and OnPropertyChanged.
+-- Sentinel ordering is load-bearing: JSON must come before logging (logging's
+-- table-renderer uses JSON:encode) and before persist (persist serializes via
+-- JSON:encode/decode). Adding a new vendored library? Add it after the libs
+-- it depends on.
 log:setLogName("Proflame")
 log:setLogMode("Print and Log")
 log:setLogLevel(DEBUG_DEBUG)
@@ -2386,10 +2392,30 @@ function OnDriverInit()
     if not success then print("OnDriverInit Error: " .. tostring(err)) end
 end
 
+-- Persistence key for the last DRIVER_VERSION the driver was loaded with.
+-- Used to emit an upgrade message when the bundled version differs from
+-- the previously-seen one (across Director restarts, controller reboots,
+-- and driver re-installs that don't wipe PersistData).
+PERSIST_KEY_LAST_VERSION = "proflame.last_driver_version"
+
+function LogDriverVersionTransition()
+    local previous = persist:get(PERSIST_KEY_LAST_VERSION, nil)
+    if previous == DRIVER_VERSION then return end
+    if type(previous) == "string" then
+        dbg_err("Driver version changed: " .. previous .. " -> " .. DRIVER_VERSION)
+    elseif previous == nil then
+        dbg_err("Driver version first run on this controller: " .. DRIVER_VERSION)
+    end
+    persist:set(PERSIST_KEY_LAST_VERSION, DRIVER_VERSION)
+end
+
 function OnDriverLateInit()
     -- Re-apply debug log mode/level from Composer properties; the top-level
     -- log:setLogName/Mode/Level above set the defaults used during driver load.
     ApplyDebugLogSettings()
+
+    -- Surface upgrades/downgrades + first-install in the log.
+    pcall(LogDriverVersionTransition)
 
     dbg_err("OnDriverLateInit - Build: " .. BUILD_TIMESTAMP)
     local success, err = pcall(function()
