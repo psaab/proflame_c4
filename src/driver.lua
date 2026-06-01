@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026060103"
+DRIVER_VERSION = "2026060104"
 DRIVER_DATE = "2026-06-01"
 
 NETWORK_BINDING_ID = 6001
@@ -114,7 +114,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260601-000003"
+BUILD_TIMESTAMP = "20260601-000004"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -459,6 +459,8 @@ end
 -- BUNDLE_INSERT vendor/logging.lua
 
 -- BUNDLE_INSERT vendor/persist.lua
+
+-- BUNDLE_INSERT vendor/github_updater.lua
 
 -- Initial log configuration. ApplyDebugLogSettings() above re-applies these
 -- from Composer Properties in OnDriverLateInit and OnPropertyChanged.
@@ -2409,6 +2411,50 @@ function LogDriverVersionTransition()
     persist:set(PERSIST_KEY_LAST_VERSION, DRIVER_VERSION)
 end
 
+-- Persistence key for the timestamp (os.time()) of the last successful update
+-- check. CheckForUpdatesIfDue() skips a fresh check when the last one was
+-- within UPDATE_CHECK_INTERVAL_SEC.
+PERSIST_KEY_LAST_UPDATE_CHECK = "proflame.last_update_check_at"
+UPDATE_CHECK_INTERVAL_SEC = 86400 -- 24h
+
+function CheckForUpdatesIfDue()
+    local now = os.time()
+    local last = persist:get(PERSIST_KEY_LAST_UPDATE_CHECK, 0)
+    if type(last) == "number" and (now - last) < UPDATE_CHECK_INTERVAL_SEC then
+        return
+    end
+    persist:set(PERSIST_KEY_LAST_UPDATE_CHECK, now)
+    github_updater:check(function(result)
+        if result.err then
+            dbg_all("Update check failed: " .. tostring(result.err))
+            return
+        end
+        if result.available then
+            dbg_err(
+                "Update available: " .. tostring(result.latest)
+                    .. " (current: " .. tostring(result.current) .. "). "
+                    .. "Download .c4z from https://github.com/psaab/proflame_c4/releases"
+            )
+        else
+            dbg_all(
+                "Driver up to date: current " .. tostring(result.current)
+                    .. " == latest " .. tostring(result.latest)
+            )
+        end
+    end)
+end
+
+-- Top-level async response dispatcher. C4 invokes this for every C4:urlGet
+-- ticket the driver has in flight; route to the github_updater module which
+-- maintains its own ticket -> callback table. If a future feature uses
+-- C4:urlGet for a different purpose, add an `elseif` branch here.
+function ReceivedAsync(ticket, body, responseCode, headers, err)
+    if github_updater.handleAsyncResponse(ticket, body, responseCode, headers, err) then
+        return
+    end
+    dbg_all("ReceivedAsync ticket " .. tostring(ticket) .. " had no registered handler")
+end
+
 function OnDriverLateInit()
     -- Re-apply debug log mode/level from Composer properties; the top-level
     -- log:setLogName/Mode/Level above set the defaults used during driver load.
@@ -2416,6 +2462,13 @@ function OnDriverLateInit()
 
     -- Surface upgrades/downgrades + first-install in the log.
     pcall(LogDriverVersionTransition)
+
+    -- Once-per-day check against GitHub Releases for newer driver versions.
+    -- Log-only; never auto-installs. Delay 30s after init so the connection
+    -- to the fireplace gets priority on the boot path.
+    pcall(function()
+        C4:SetTimer(30 * 1000, function() pcall(CheckForUpdatesIfDue) end, false)
+    end)
 
     dbg_err("OnDriverLateInit - Build: " .. BUILD_TIMESTAMP)
     local success, err = pcall(function()
