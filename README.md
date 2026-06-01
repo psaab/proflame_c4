@@ -522,6 +522,18 @@ scripts/package.sh [path/to/proflame_wifi_connect.c4z]
 
 Both scripts read the package file list from `scripts/manifest.txt`. The packager normalizes ZIP entry timestamps so repeated rebuilds produce byte-identical archives when the source files are unchanged. The validator checks `driver.xml` with `xmllint`, verifies required source/package files, confirms the `.c4z` contains only the expected driver files, and fails if packaged source files are stale relative to the working tree. The same validation and deterministic rebuild check run in GitHub Actions on pushes to `main` and on pull requests.
 
+### Unit Tests
+
+Pure-Lua unit tests live under `test/`. Run them with:
+
+```sh
+test/run_tests.sh
+```
+
+Each `test/test_*.lua` file is executed in its own `lua5.1` process. The runner regenerates `driver.lua` from `src/` + `vendor/` via `bundle.sh` first so tests always reflect the current source. The C4 API is stubbed via `test/c4_shim.lua` (in-memory persist store, capturable Debug/Error log sinks, no-op fallbacks for everything else). Tests assert against the bundled driver's pure-logic functions: temperature codec, command builders, JSON wrappers, persist round-trip. The same suite runs in GitHub Actions on every push/PR.
+
+To add a test, drop a file matching `test/test_*.lua` that starts with `require("c4_shim"); dofile("driver.lua")` and uses `Test.assertEqual` / `Test.assert` from the shim.
+
 ### Composer Command Smoke Test
 
 Run this checklist in Composer Pro before merging PRs that change command behavior. Paste the completed checklist, controller version, driver version, and any skipped items into the PR.

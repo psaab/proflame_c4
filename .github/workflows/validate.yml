@@ -96,3 +96,18 @@ jobs:
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: scripts/check-driver-xml-static-surface.py "${{ github.base_ref }}"
+
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Lua 5.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends lua5.1
+
+      - name: Run unit tests
+        run: test/run_tests.sh

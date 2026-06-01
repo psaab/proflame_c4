@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026060101"
+DRIVER_VERSION = "2026060103"
 DRIVER_DATE = "2026-06-01"
 
 NETWORK_BINDING_ID = 6001
@@ -114,7 +114,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260601-000001"
+BUILD_TIMESTAMP = "20260601-000003"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -546,7 +546,7 @@ end
 
 function DecodeTemperature(encoded)
     local temp = tonumber(encoded) or 700
-    return math.floor(temp / 10)
+    return temp / 10
 end
 
 function EncodeTemperature(tempF)
