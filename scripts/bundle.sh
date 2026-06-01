@@ -78,9 +78,10 @@ bundle_one() {
 cp "$SRC" "$OUT"
 SRC="$OUT"  # Subsequent bundle_one calls splice into the in-progress output.
 
-bundle_one "-- BUNDLE_INSERT vendor/JSON.lua"    "vendor/JSON.lua"    "JSON"
-bundle_one "-- BUNDLE_INSERT vendor/logging.lua" "vendor/logging.lua" "log"
-bundle_one "-- BUNDLE_INSERT vendor/persist.lua" "vendor/persist.lua" "persist"
+bundle_one "-- BUNDLE_INSERT vendor/JSON.lua"           "vendor/JSON.lua"           "JSON"
+bundle_one "-- BUNDLE_INSERT vendor/logging.lua"        "vendor/logging.lua"        "log"
+bundle_one "-- BUNDLE_INSERT vendor/persist.lua"        "vendor/persist.lua"        "persist"
+bundle_one "-- BUNDLE_INSERT vendor/github_updater.lua" "vendor/github_updater.lua" "github_updater"
 
 # Prepend a header so anyone reading driver.lua sees this is generated.
 header=$(mktemp)
