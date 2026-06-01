@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026053105"
+DRIVER_VERSION = "2026053106"
 DRIVER_DATE = "2026-05-31"
 
 NETWORK_BINDING_ID = 6001
@@ -38,7 +38,9 @@ DEFAULT_FLAME_LEVEL = 6
 DEFAULT_TIMER_MINUTES = 180
 FLAME_HOLD_MODES = "Low Flame,Medium Flame,High Flame"
 
--- Debug levels
+-- Debug-level constants kept as aliases over vendor/logging.lua's LogLevel enum
+-- so legacy `Log(msg, DEBUG_DEBUG)` call sites keep working. The numeric values
+-- match the vendored Log.LogLevel.{ERROR,WARN,INFO,DEBUG,TRACE} on purpose.
 DEBUG_ERROR = 1
 DEBUG_WARN = 2
 DEBUG_INFO = 3
@@ -112,7 +114,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260531-000005"
+BUILD_TIMESTAMP = "20260531-000006"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -201,8 +203,6 @@ gTurnOffInProgress = false
 gTimerSafetyCheckTimer = nil
 gTimerSafetyOffPending = false
 gWebSocketKey = nil
-gDebugLevel = DEBUG_DEBUG
-gDebugEnabled = true
 gExtrasThrottle = false
 gSuppressTimerUpdates = false  -- Suppress device timer_count updates while we're setting timer
 gTimerExpired = false  -- Set when timer reaches 0, cleared when timer_status goes to 1
@@ -234,26 +234,42 @@ gState = {
 
 -- =============================================================================
 -- LOGGING
+-- Delegates to the `log` global provided by vendor/logging.lua (bundled
+-- below in the VENDORED section). All call sites pass user-supplied strings
+-- that may contain `%` characters, so we feed them through log:level("%s", s)
+-- rather than as the format string itself.
 -- =============================================================================
 
 function Log(msg, level)
-    if not gDebugEnabled then return end
-    level = level or DEBUG_INFO
-    if level <= gDebugLevel then
-        print("[Proflame] " .. tostring(msg))
-    end
+    log:log(level or log.LogLevel.INFO, "%s", tostring(msg))
 end
 
 function dbg(msg)
-    Log(msg, DEBUG_ERROR)
+    log:error("%s", tostring(msg))
 end
 
 function dbg_err(msg)
-    Log(msg, DEBUG_ERROR)
+    log:error("%s", tostring(msg))
 end
 
 function dbg_all(msg)
-    Log(msg, DEBUG_DEBUG)
+    log:debug("%s", tostring(msg))
+end
+
+-- Maps the Composer "Debug Level" property values to vendor LogLevel constants.
+DEBUG_LEVEL_MAP = {
+    Error = DEBUG_ERROR,
+    Warning = DEBUG_WARN,
+    Info = DEBUG_INFO,
+    Debug = DEBUG_DEBUG,
+    Trace = DEBUG_TRACE,
+}
+
+function ApplyDebugLogSettings()
+    local mode = (Properties and Properties["Debug Mode"] == "On") and "Print and Log" or ""
+    log:setLogMode(mode)
+    local levelName = Properties and Properties["Debug Level"]
+    log:setLogLevel(DEBUG_LEVEL_MAP[levelName] or DEBUG_DEBUG)
 end
 
 -- =============================================================================
@@ -439,6 +455,14 @@ function tostring_return_period(v)
 end
 
 -- BUNDLE_INSERT vendor/JSON.lua
+
+-- BUNDLE_INSERT vendor/logging.lua
+
+-- Initial log configuration. ApplyDebugLogSettings() above re-applies these
+-- from Composer Properties in OnDriverLateInit and OnPropertyChanged.
+log:setLogName("Proflame")
+log:setLogMode("Print and Log")
+log:setLogLevel(DEBUG_DEBUG)
 
 -- =============================================================================
 -- JSON HELPERS (thin wrappers over vendored JSON.lua)
@@ -1489,17 +1513,9 @@ function OnPropertyChanged(strProperty)
         end
     elseif strProperty == "Command Format (non-Turn-Off)" then
         dbg_err("Command Format (non-Turn-Off) set to: " .. tostring(Properties["Command Format (non-Turn-Off)"]))
-    elseif strProperty == "Debug Mode" then
-        gDebugEnabled = (Properties["Debug Mode"] == "On")
-    elseif strProperty == "Debug Level" then
-        local level = Properties["Debug Level"]
-        if level == "Error" then gDebugLevel = DEBUG_ERROR
-        elseif level == "Warning" then gDebugLevel = DEBUG_WARN
-        elseif level == "Info" then gDebugLevel = DEBUG_INFO
-        elseif level == "Debug" then gDebugLevel = DEBUG_DEBUG
-        elseif level == "Trace" then gDebugLevel = DEBUG_TRACE
-        end
-        dbg_err("Debug level set to: " .. tostring(gDebugLevel))
+    elseif strProperty == "Debug Mode" or strProperty == "Debug Level" then
+        ApplyDebugLogSettings()
+        dbg_err("Debug settings: mode=" .. tostring(Properties["Debug Mode"]) .. " level=" .. tostring(Properties["Debug Level"]))
     elseif strProperty == "Ping Interval (seconds)" then
         if gConnected and gHandshakeComplete then
             StartPingTimer()  -- Restart with new interval
@@ -2371,15 +2387,9 @@ function OnDriverInit()
 end
 
 function OnDriverLateInit()
-    -- Initialize debug settings from properties before any logging
-    gDebugEnabled = (Properties["Debug Mode"] == "On")
-    local level = Properties["Debug Level"]
-    if level == "Error" then gDebugLevel = DEBUG_ERROR
-    elseif level == "Warning" then gDebugLevel = DEBUG_WARN
-    elseif level == "Info" then gDebugLevel = DEBUG_INFO
-    elseif level == "Debug" then gDebugLevel = DEBUG_DEBUG
-    elseif level == "Trace" then gDebugLevel = DEBUG_TRACE
-    end
+    -- Re-apply debug log mode/level from Composer properties; the top-level
+    -- log:setLogName/Mode/Level above set the defaults used during driver load.
+    ApplyDebugLogSettings()
 
     dbg_err("OnDriverLateInit - Build: " .. BUILD_TIMESTAMP)
     local success, err = pcall(function()
