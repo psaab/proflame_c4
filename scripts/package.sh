@@ -11,6 +11,11 @@ case "$PACKAGE" in
     *) PACKAGE="$(pwd)/$PACKAGE" ;;
 esac
 
+# Regenerate driver.lua from src/ + vendor/ before packaging so the .c4z
+# always picks up the latest source. The bundled file is also checked in
+# so validate.sh can confirm package contents match the working tree.
+"$ROOT_DIR/scripts/bundle.sh" >/dev/null
+
 [ -f "$MANIFEST" ] || {
     echo "Missing required file: scripts/manifest.txt" >&2
     exit 1
