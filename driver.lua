@@ -8,8 +8,8 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026051731"
-DRIVER_DATE = "2026-05-17"
+DRIVER_VERSION = "2026053101"
+DRIVER_DATE = "2026-05-31"
 
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -112,7 +112,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260517-140643"
+BUILD_TIMESTAMP = "20260531-000001"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -304,126 +304,6 @@ function HandleConnectionEvent(online)
     else
         FireDriverEvent(EVENT_CONNECTION_LOST, "Connection Lost")
     end
-end
-
--- =============================================================================
--- CRYPTO / ENCODING
--- =============================================================================
-
-local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-
-function Base64Encode(data)
-    if not data or #data == 0 then return "" end
-    return ((data:gsub('.', function(x)
-        local r, b = '', x:byte()
-        for i = 8, 1, -1 do
-            r = r .. (b % 2 ^ i - b % 2 ^ (i - 1) > 0 and '1' or '0')
-        end
-        return r
-    end) .. '0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
-        if (#x < 6) then return '' end
-        local c = 0
-        for i = 1, 6 do
-            c = c + (x:sub(i, i) == '1' and 2 ^ (6 - i) or 0)
-        end
-        return b64chars:sub(c + 1, c + 1)
-    end) .. ({ '', '==', '=' })[#data % 3 + 1])
-end
-
-local function bytes_to_w32(a, b, c, d)
-    return (a or 0) * 0x1000000 + (b or 0) * 0x10000 + (c or 0) * 0x100 + (d or 0)
-end
-
-local function w32_to_bytes(i)
-    return math.floor(i / 0x1000000) % 0x100,
-           math.floor(i / 0x10000) % 0x100,
-           math.floor(i / 0x100) % 0x100,
-           i % 0x100
-end
-
-local function w32_rot(bits, a)
-    local b2 = 2 ^ (32 - bits)
-    local a1, b1 = math.modf(a / b2)
-    return a1 + b1 * b2 * (2 ^ bits)
-end
-
-local function w32_xor_n(...)
-    local args = {...}
-    local result = 0
-    for i = 1, #args do
-        result = bit.bxor(result, args[i] or 0)
-    end
-    return result
-end
-
-local function w32_or(a, b)
-    return bit.bor(a or 0, b or 0)
-end
-
-local function w32_and(a, b)
-    return bit.band(a or 0, b or 0)
-end
-
-local function w32_not(a)
-    return 4294967295 - (a or 0)
-end
-
-function SHA1(msg)
-    if not msg then return "" end
-    local H0, H1, H2, H3, H4 = 0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0
-    local msg_len_in_bits = #msg * 8
-    msg = msg .. string.char(0x80)
-    local extra = 64 - ((#msg + 8) % 64)
-    if extra == 64 then extra = 0 end
-    msg = msg .. string.rep(string.char(0), extra)
-    msg = msg .. string.char(0, 0, 0, 0)
-    for i = 1, 4 do
-        msg = msg .. string.char(math.floor(msg_len_in_bits / (256 ^ (4 - i))) % 256)
-    end
-    for chunk_start = 1, #msg, 64 do
-        local W = {}
-        for i = 0, 15 do
-            local offset = chunk_start + i * 4
-            W[i] = bytes_to_w32(msg:byte(offset, offset + 3))
-        end
-        for i = 16, 79 do
-            W[i] = w32_rot(1, w32_xor_n(W[i-3] or 0, W[i-8] or 0, W[i-14] or 0, W[i-16] or 0))
-        end
-        local A, B, C, D, E = H0, H1, H2, H3, H4
-        for i = 0, 79 do
-            local f, k
-            if i <= 19 then
-                f = w32_or(w32_and(B, C), w32_and(w32_not(B), D))
-                k = 0x5A827999
-            elseif i <= 39 then
-                f = w32_xor_n(B, C, D)
-                k = 0x6ED9EBA1
-            elseif i <= 59 then
-                f = w32_or(w32_or(w32_and(B, C), w32_and(B, D)), w32_and(C, D))
-                k = 0x8F1BBCDC
-            else
-                f = w32_xor_n(B, C, D)
-                k = 0xCA62C1D6
-            end
-            local temp = (w32_rot(5, A) + f + E + k + (W[i] or 0)) % 4294967296
-            E = D
-            D = C
-            C = w32_rot(30, B)
-            B = A
-            A = temp
-        end
-        H0 = (H0 + A) % 4294967296
-        H1 = (H1 + B) % 4294967296
-        H2 = (H2 + C) % 4294967296
-        H3 = (H3 + D) % 4294967296
-        H4 = (H4 + E) % 4294967296
-    end
-    local result = ""
-    for _, h in ipairs({H0, H1, H2, H3, H4}) do
-        local a, b, c, d = w32_to_bytes(h)
-        result = result .. string.char(a, b, c, d)
-    end
-    return result
 end
 
 function JsonEncode(tbl)
@@ -814,7 +694,7 @@ end
 
 function GenerateWebSocketKey()
     local bytes = GenerateRandomBytes(16)
-    return Base64Encode(bytes)
+    return C4:Base64Encode(bytes)
 end
 
 function BuildWebSocketHandshake(host, port)
@@ -843,7 +723,7 @@ end
 function ExpectedWebSocketAccept(key)
     if not key or key == "" then return nil end
     local guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-    return Base64Encode(SHA1(key .. guid))
+    return C4:Hash("SHA1", key .. guid, { return_encoding = "BASE64" })
 end
 
 function IsStrictWebSocketHandshakeEnabled()

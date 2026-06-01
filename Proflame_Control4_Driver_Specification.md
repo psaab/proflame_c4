@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026051731 (2026-05-17)
+- **Driver Version**: 2026053101 (2026-05-31)
 
 ---
 
@@ -1596,6 +1596,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026053101 | 2026-05-31 | Replaced hand-rolled SHA-1 and Base64 with C4:Hash and C4:Base64Encode |
 | 2026051731 | 2026-05-17 | Broadened static XML guardrails and documented runtime capability snapshot behavior |
 | 2026051730 | 2026-05-17 | Centralized runtime ThermostatV2 capability refreshes and added static XML restart-risk guardrails |
 | 2026051729 | 2026-05-17 | Added deprecated SET_PRESET compatibility path and documented runtime capability probe behavior |
