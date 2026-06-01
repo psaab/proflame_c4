@@ -80,6 +80,7 @@ SRC="$OUT"  # Subsequent bundle_one calls splice into the in-progress output.
 
 bundle_one "-- BUNDLE_INSERT vendor/JSON.lua"    "vendor/JSON.lua"    "JSON"
 bundle_one "-- BUNDLE_INSERT vendor/logging.lua" "vendor/logging.lua" "log"
+bundle_one "-- BUNDLE_INSERT vendor/persist.lua" "vendor/persist.lua" "persist"
 
 # Prepend a header so anyone reading driver.lua sees this is generated.
 header=$(mktemp)
