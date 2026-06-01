@@ -518,6 +518,8 @@ Rebuild the checked-in Control4 archive from source files with:
 scripts/package.sh [path/to/proflame_wifi_connect.c4z]
 ```
 
+`scripts/package.sh` first runs `scripts/bundle.sh`, which concatenates `src/driver.lua` and the vendored libraries under `vendor/` into the single `driver.lua` that ships inside the `.c4z`. **Edit `src/driver.lua` and `vendor/*.lua`, not `driver.lua` at the repo root** — that file is generated. `scripts/validate.sh` rejects working trees where `driver.lua` doesn't match what a fresh `bundle.sh` run would produce.
+
 Both scripts read the package file list from `scripts/manifest.txt`. The packager normalizes ZIP entry timestamps so repeated rebuilds produce byte-identical archives when the source files are unchanged. The validator checks `driver.xml` with `xmllint`, verifies required source/package files, confirms the `.c4z` contains only the expected driver files, and fails if packaged source files are stale relative to the working tree. The same validation and deterministic rebuild check run in GitHub Actions on pushes to `main` and on pull requests.
 
 ### Composer Command Smoke Test

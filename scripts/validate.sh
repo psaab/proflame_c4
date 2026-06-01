@@ -42,6 +42,16 @@ xmllint --noout "$ROOT_DIR/driver.xml"
 grep -q '<script file="driver.lua"' "$ROOT_DIR/driver.xml" || fail "driver.xml does not reference driver.lua"
 grep -q '<documentation file="www/documentation.html"' "$ROOT_DIR/driver.xml" || fail "driver.xml does not reference www/documentation.html"
 
+# Ensure the committed driver.lua matches what scripts/bundle.sh would produce
+# from src/driver.lua + vendor/*.lua. Direct edits to driver.lua are rejected.
+require_file src/driver.lua
+require_file vendor/JSON.lua
+require_file scripts/bundle.sh
+BUNDLE_CHECK=$(mktemp)
+"$ROOT_DIR/scripts/bundle.sh" "$BUNDLE_CHECK" >/dev/null
+cmp -s "$BUNDLE_CHECK" "$ROOT_DIR/driver.lua" || { rm -f "$BUNDLE_CHECK"; fail "driver.lua is out of sync with src/driver.lua + vendor/*.lua; re-run scripts/bundle.sh"; }
+rm -f "$BUNDLE_CHECK"
+
 LUA_VERSION=$(sed -n 's/^DRIVER_VERSION = "\(.*\)"/\1/p' "$ROOT_DIR/driver.lua" | head -n 1)
 XML_VERSION=$(sed -n 's/.*<version>\(.*\)<\/version>.*/\1/p' "$ROOT_DIR/driver.xml" | head -n 1)
 SPEC_VERSION=$(sed -n 's/^- \*\*Driver Version\*\*: \([^ ]*\).*/\1/p' "$ROOT_DIR/Proflame_Control4_Driver_Specification.md" | head -n 1)
