@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026053103 (2026-05-31)
+- **Driver Version**: 2026053104 (2026-05-31)
 
 ---
 
@@ -913,14 +913,12 @@ end
 
 ### 8.2 WebSocket Implementation
 
-Since Control4 doesn't provide a WebSocket library, implement manually. The
-SHA-1 and Base64 primitives needed by the handshake come from the Control4
-runtime (`C4:Hash`, `C4:Base64Encode`), not from hand-rolled Lua.
+Since Control4 doesn't provide a WebSocket library, implement manually:
 
 ```lua
 function GenerateWebSocketKey()
     local bytes = GenerateRandomBytes(16)
-    return C4:Base64Encode(bytes)
+    return Base64Encode(bytes)
 end
 
 function BuildWebSocketHandshake(host, port)
@@ -1534,10 +1532,12 @@ gState = {
 function Log(msg, level) ... end
 
 -- Crypto / Encoding
--- SHA-1 and Base64 are sourced from the Control4 runtime
--- (C4:Hash, C4:Base64Encode) rather than hand-rolled in Lua.
-function JsonEncode(tbl) ... end
-function JsonDecode(str) ... end
+-- SHA-1 and Base64 come from the Control4 runtime (C4:Hash, C4:Base64Encode).
+-- JSON is provided by an inlined vendored copy of Jeffrey Friedl's JSON.lua
+-- (version 20211016.28, Creative Commons CC-BY 3.0), exposed as the `JSON`
+-- global. The functions below are thin wrappers around it.
+function JsonEncode(tbl) ... end    -- -> JSON:encode(tbl)
+function JsonDecode(str) ... end    -- -> JSON:decode(str) with string-coercion shim
 
 -- Helper Functions
 function BuildSetControlCommand(control, value) ... end
@@ -1598,7 +1598,9 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026053104 | 2026-05-31 | Synced README/spec samples with the vendored JSON.lua wrappers and documented the alphabetical-sort wire-format contract |
 | 2026053103 | 2026-05-31 | Updated spec appendix sample code to reflect C4:Hash / C4:Base64Encode |
+| 2026053102 | 2026-05-31 | Vendored Jeffrey Friedl's JSON.lua and routed all JSON encode/decode through it |
 | 2026053101 | 2026-05-31 | Replaced hand-rolled SHA-1 and Base64 with C4:Hash and C4:Base64Encode |
 | 2026051731 | 2026-05-17 | Broadened static XML guardrails and documented runtime capability snapshot behavior |
 | 2026051730 | 2026-05-17 | Centralized runtime ThermostatV2 capability refreshes and added static XML restart-risk guardrails |

@@ -585,13 +585,16 @@ end
 
 ### JSON Command Builder
 ```lua
+-- Both builders rely on JSON.lua's alphabetical key sort matching the
+-- documented wire-format order: `command < name < value` and
+-- `control0 < value0`. Any new key added here must respect that ordering or
+-- the wire format will silently change.
 function BuildSetControlCommand(control, value)
-    -- NO SPACES - Critical for Proflame protocol
-    return '{"command":"set_control","name":"' .. JsonEscape(control) .. '","value":"' .. JsonEscape(value) .. '"}'
+    return JSON:encode({ command = "set_control", name = tostring(control), value = tostring(value) })
 end
 
 function BuildLegacyIndexedCommand(control, value)
-    return '{"control0":"' .. JsonEscape(control) .. '","value0":"' .. JsonEscape(value) .. '"}'
+    return JSON:encode({ control0 = tostring(control), value0 = tostring(value) })
 end
 
 function BuildDeviceControlCommandPlan(control, value, format)
