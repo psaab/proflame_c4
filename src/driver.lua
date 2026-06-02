@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026060104"
+DRIVER_VERSION = "2026060105"
 DRIVER_DATE = "2026-06-01"
 
 NETWORK_BINDING_ID = 6001
@@ -114,7 +114,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260601-000004"
+BUILD_TIMESTAMP = "20260601-000005"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -459,6 +459,14 @@ end
 -- BUNDLE_INSERT vendor/logging.lua
 
 -- BUNDLE_INSERT vendor/persist.lua
+
+-- BUNDLE_INSERT vendor/deferred.lua
+
+-- BUNDLE_INSERT vendor/version.lua
+
+-- BUNDLE_INSERT vendor/lib_helpers.lua
+
+-- BUNDLE_INSERT vendor/http.lua
 
 -- BUNDLE_INSERT vendor/github_updater.lua
 
@@ -2144,6 +2152,9 @@ function ExecuteCommand(strCommand, tParams)
         return CommandSetTimerMinutes(minutes)
     elseif strCommand == "Cancel Timer" then
         return CommandCancelTimer()
+    elseif strCommand == "Install Latest Release" then
+        InstallLatestReleaseNow()
+        return true
     end
 
     dbg_err("Unhandled ExecuteCommand: " .. tostring(strCommand))
@@ -2411,45 +2422,57 @@ function LogDriverVersionTransition()
     persist:set(PERSIST_KEY_LAST_VERSION, DRIVER_VERSION)
 end
 
--- Persistence key for the timestamp (os.time()) of the last successful update
--- check. CheckForUpdatesIfDue() skips a fresh check when the last one was
--- within UPDATE_CHECK_INTERVAL_SEC.
-PERSIST_KEY_LAST_UPDATE_CHECK = "proflame.last_update_check_at"
-UPDATE_CHECK_INTERVAL_SEC = 86400 -- 24h
+-- Repo + filename used by the full github-updater. Single-driver setup, so
+-- we hard-code the filename of our .c4z install.
+GITHUB_UPDATER_REPO = "psaab/proflame_c4"
+GITHUB_UPDATER_FILENAMES = { "proflame_wifi_connect.c4z" }
 
-function CheckForUpdatesIfDue()
-    local now = os.time()
-    local last = persist:get(PERSIST_KEY_LAST_UPDATE_CHECK, 0)
-    if type(last) == "number" and (now - last) < UPDATE_CHECK_INTERVAL_SEC then
+-- Tracks an in-flight Install Latest Release attempt so the Composer property
+-- can show progress.
+gUpdateInProgress = false
+
+function UpdateUpdateStatusProperty(text)
+    pcall(C4.UpdateProperty, C4, "Update Status", tostring(text or ""))
+end
+
+-- Trigger the full template github_updater. Downloads any .c4z whose
+-- DRIVER_VERSION is older than the latest release tag, writes it to
+-- C4Z_ROOT, then drives Composer's local SOAP endpoint to install it.
+-- Status updates surface in the "Update Status" property.
+function InstallLatestReleaseNow()
+    if gUpdateInProgress then
+        dbg_err("Install Latest Release ignored: an install is already running")
+        UpdateUpdateStatusProperty("Install already running")
         return
     end
-    persist:set(PERSIST_KEY_LAST_UPDATE_CHECK, now)
-    github_updater:check(function(result)
-        if result.err then
-            dbg_all("Update check failed: " .. tostring(result.err))
-            return
-        end
-        if result.available then
-            dbg_err(
-                "Update available: " .. tostring(result.latest)
-                    .. " (current: " .. tostring(result.current) .. "). "
-                    .. "Download .c4z from https://github.com/psaab/proflame_c4/releases"
-            )
+    gUpdateInProgress = true
+    UpdateUpdateStatusProperty("Checking GitHub for the latest release...")
+    dbg_err("InstallLatestReleaseNow: starting")
+
+    local d = github_updater:updateAll(GITHUB_UPDATER_REPO, GITHUB_UPDATER_FILENAMES, false, false)
+    d:next(function(updated)
+        gUpdateInProgress = false
+        if not updated or #updated == 0 then
+            UpdateUpdateStatusProperty("Already up to date (" .. DRIVER_VERSION .. ")")
+            dbg_err("InstallLatestReleaseNow: no update needed")
         else
-            dbg_all(
-                "Driver up to date: current " .. tostring(result.current)
-                    .. " == latest " .. tostring(result.latest)
-            )
+            UpdateUpdateStatusProperty("Installed: " .. table.concat(updated, ", ") .. " (controller may reload driver)")
+            dbg_err("InstallLatestReleaseNow: triggered Composer install of " .. table.concat(updated, ", "))
         end
+    end, function(err)
+        gUpdateInProgress = false
+        local msg = type(err) == "string" and err or (err and err.error) or "unknown error"
+        UpdateUpdateStatusProperty("Failed: " .. tostring(msg))
+        dbg_err("InstallLatestReleaseNow: failed - " .. tostring(msg))
     end)
 end
 
--- Top-level async response dispatcher. C4 invokes this for every C4:urlGet
--- ticket the driver has in flight; route to the github_updater module which
--- maintains its own ticket -> callback table. If a future feature uses
--- C4:urlGet for a different purpose, add an `elseif` branch here.
+-- Top-level async response dispatcher. C4 invokes this for every urlGet/Post
+-- ticket the driver has in flight; route to http_client which maintains its
+-- own ticket -> callback table. Future C4:urlGet consumers add their own
+-- `elseif` branch here.
 function ReceivedAsync(ticket, body, responseCode, headers, err)
-    if github_updater.handleAsyncResponse(ticket, body, responseCode, headers, err) then
+    if http_client.handleAsyncResponse(ticket, body, responseCode, headers, err) then
         return
     end
     dbg_all("ReceivedAsync ticket " .. tostring(ticket) .. " had no registered handler")
@@ -2463,12 +2486,9 @@ function OnDriverLateInit()
     -- Surface upgrades/downgrades + first-install in the log.
     pcall(LogDriverVersionTransition)
 
-    -- Once-per-day check against GitHub Releases for newer driver versions.
-    -- Log-only; never auto-installs. Delay 30s after init so the connection
-    -- to the fireplace gets priority on the boot path.
-    pcall(function()
-        C4:SetTimer(30 * 1000, function() pcall(CheckForUpdatesIfDue) end, false)
-    end)
+    -- Update checking is now manual-trigger only via the "Install Latest
+    -- Release" Composer command (see ExecuteCommand). No periodic polling
+    -- happens during driver load.
 
     dbg_err("OnDriverLateInit - Build: " .. BUILD_TIMESTAMP)
     local success, err = pcall(function()

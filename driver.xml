@@ -9,7 +9,7 @@
   <manufacturer>SIT Group / Proflame</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026060104</version>
+  <version>2026060105</version>
   <created>12/02/2025 12:00 PM</created>
   <modified>06/01/2026 07:00 AM</modified>
   <auto_update>true</auto_update>
@@ -225,8 +225,18 @@
         <default>Debug</default>
         <readonly>false</readonly>
       </property>
+      <property>
+        <name>Update Status</name>
+        <type>STRING</type>
+        <default/>
+        <readonly>true</readonly>
+      </property>
     </properties>
     <commands>
+      <command>
+        <name>Install Latest Release</name>
+        <description>Check GitHub for a newer driver release and (if found) download + install it via Composer. Updates the Update Status property with progress.</description>
+      </command>
       <command>
         <name>Turn On</name>
         <description>Turn on using defaults; Default Timer 0 will be forced off by timer safety</description>

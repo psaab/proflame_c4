@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026060104 (2026-06-01)
+- **Driver Version**: 2026060105 (2026-06-01)
 
 ---
 
@@ -1612,6 +1612,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026060105 | 2026-06-01 | Replaced slim updater with full template github-updater (auto-install via Composer SOAP); manual-trigger only via "Install Latest Release" command |
 | 2026060104 | 2026-06-01 | Added log-only GitHub Releases update notifier (rate-limited to 24h, no auto-install) |
 | 2026060103 | 2026-06-01 | Added test/ scaffolding + CI test job; fixed DecodeTemperature half-degree precision loss |
 | 2026060101 | 2026-06-01 | Vendored slim persist wrapper; log driver-version transitions on driver load |

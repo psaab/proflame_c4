@@ -1,126 +1,224 @@
--- GitHub Releases polling client for the Proflame driver.
---
--- Fires an async HTTP GET against the GitHub Releases API for the configured
--- repo, parses the `tag_name` of the latest release, and invokes a callback
--- with the parse result. Designed for log-only notification, NOT auto-install:
--- the callback receives the new version string and the driver decides what
--- to do with it (currently: dbg_err it).
---
--- Async wiring: C4:urlGet returns a "ticket" identifier; the response arrives
--- via the global `ReceivedAsync(ticket, body, responseCode, headers, err)`
--- handler. We register the per-ticket callback in a module-local table so
--- multiple in-flight requests don't collide.
---
--- Returned via the bundler as the global `github_updater`.
+--- A utility module for updating drivers from GitHub releases.
+--- This module provides functionality to check for, download, and install driver updates from GitHub repositories.
 
-local Updater = {}
-Updater.__index = Updater
+-- Adapted from upstream control4-driver-template: the bundler hands us
+-- globals named http_client / log / deferred / version_lib instead of Lua
+-- require()s. Alias them to the names the original module body expects.
+local http = http_client
+local log = log
+local deferred = deferred
+local version = version_lib
 
--- ticket -> callback. Module-local so multiple updaters share dispatch.
-local _pending = {}
+--- Utility class for updating drivers from GitHub releases.
+--- @class GitHubUpdater
+local GitHubUpdater = {}
+GitHubUpdater.__index = GitHubUpdater
 
-function Updater:new(repo)
-    return setmetatable({ repo = repo or "" }, self)
+--- Default headers for all HTTP requests to GitHub.
+--- @type table<string, string>
+local DEFAULT_HEADERS = {
+  ["User-Agent"] = "curl/8.1.2",
+  Accept = "*/*",
+}
+
+--- Create a new instance of GitHubUpdater.
+--- @return GitHubUpdater updater A new GitHubUpdater instance.
+function GitHubUpdater:new()
+  local instance = setmetatable({}, self)
+  return instance
 end
 
---- Dispatch table entry for an async fetch result. Returns true if the
---- ticket was ours and was handled; false if it belongs to someone else.
-function Updater.handleAsyncResponse(ticket, body, responseCode, headers, err)
-    local entry = _pending[ticket]
-    if not entry then return false end
-    _pending[ticket] = nil
-    if entry.watchdog and C4 and C4.KillTimer and entry.watchdog ~= nil then
-        pcall(C4.KillTimer, C4, entry.watchdog)
+--- Retrieve the latest release from a GitHub repository.
+--- @param repo string The GitHub repository, in the format "owner/repo".
+--- @param includePrereleases? boolean If true, includes pre-releases (optional).
+--- @return Deferred<table|nil, string> latestRelease Deferred resolving to the latest release table, or rejected with an error message.
+--- @diagnostic disable-next-line: unused
+function GitHubUpdater:getLatestRelease(repo, includePrereleases)
+  log:trace("GitHubUpdater:getLatestRelease(%s, %s)", repo, includePrereleases)
+  if IsEmpty(repo) then
+    return reject("repo name is required")
+  end
+  return http:get("https://api.github.com/repos/" .. repo .. "/releases", DEFAULT_HEADERS):next(function(response)
+    for _, release in pairs(response.body or {}) do
+      local releaseVersion, err = version(release.tag_name)
+      if IsEmpty(err) then
+        if not release.draft and (toboolean(includePrereleases) or not release.prerelease) then
+          release.version = releaseVersion
+          return release
+        end
+      else
+        log:warn("repo %s release '%s' has an invalid tag version '%s'", repo, release.name, release.tag_name)
+      end
     end
-    local ok, callErr = pcall(entry.cb, body, responseCode, err)
-    if not ok then
-        if dbg_err then dbg_err("github_updater callback error: " .. tostring(callErr)) end
-    end
-    return true
+    return reject(string.format("repo %s does not have any valid releases", repo))
+  end, function(response)
+    return reject(response.error)
+  end)
 end
 
---- Number of seconds to wait for a response before garbage-collecting a
---- ticket whose callback never fired. Bounds memory growth across many
---- driver restarts where C4:urlGet hands out a ticket but the network
---- request never completes.
-local TICKET_WATCHDOG_SEC = 60
-
---- Fetch the latest release tag from GitHub and invoke `callback` with one of:
----   { available = true,  current = "X", latest = "Y" }   -- newer version found
----   { available = false, current = "X", latest = "Y" }   -- already up-to-date
----   { available = false, err = "..." }                    -- fetch/parse failure
-function Updater:check(callback)
-    if type(callback) ~= "function" then return end
-    if self.repo == "" then
-        callback({ available = false, err = "no repo configured" })
-        return
+--- Identify assets for driver files that are outdated compared to the latest GitHub release.
+--- @param repo string The GitHub repository, in the format "owner/repo".
+--- @param driverFilenames string[] List of driver filenames to check.
+--- @param includePrereleases? boolean If true, includes pre-releases (optional).
+--- @param forceUpdate? boolean If true, all assets will be treated as outdated regardless of version (optional).
+--- @return Deferred<table[], string> outdatedAssets Deferred resolving to a list of assets to be updated, or rejected with an error message.
+function GitHubUpdater:getOutdatedDriverAssets(repo, driverFilenames, includePrereleases, forceUpdate)
+  log:trace(
+    "GitHubUpdater:getOutdatedDriverAssets(%s, %s, %s, %s)",
+    repo,
+    driverFilenames,
+    includePrereleases,
+    forceUpdate
+  )
+  if IsEmpty(driverFilenames) then
+    return reject(string.format("at least one driver filename is required to check for updates"))
+  end
+  -- Determine the minimum driver version from the provided filenames; this determines if an update is needed.
+  local minDriverVersion
+  for _, driverFilename in pairs(driverFilenames) do
+    local driverVersion, err = version(GetDriverVersion(driverFilename))
+    if not IsEmpty(err) then
+      return reject(string.format("failed to determine the current %s driver version", driverFilename))
+    elseif minDriverVersion == nil or minDriverVersion > driverVersion then
+      minDriverVersion = driverVersion
     end
-    if not C4 or type(C4.urlGet) ~= "function" then
-        callback({ available = false, err = "C4:urlGet not available" })
-        return
+  end
+
+  return self:getLatestRelease(repo, includePrereleases):next(function(latestRelease)
+    if not forceUpdate and latestRelease.version <= minDriverVersion then
+      return {}
     end
+    --- @type table[]
+    local assets = {}
+    local driverFilenamesMap = TableReverse(driverFilenames)
+    for _, asset in pairs(Select(latestRelease, "assets") or {}) do
+      local assetName = Select(asset, "name")
+      if driverFilenamesMap[assetName] ~= nil then
+        driverFilenamesMap[assetName] = nil
+        table.insert(assets, asset)
+      end
+    end
+    if not IsEmpty(driverFilenamesMap) then
+      return reject(
+        string.format(
+          "repo %s latest release does not have the following asset(s): %s",
+          repo,
+          table.concat(TableKeys(driverFilenamesMap), ", ")
+        )
+      )
+    end
+    return assets
+  end)
+end
 
-    local url = "https://api.github.com/repos/" .. self.repo .. "/releases/latest"
-    local headers = {
-        Accept = "application/vnd.github.v3+json",
-        ["User-Agent"] = "proflame_c4",
-    }
+--- Download outdated driver assets from GitHub and write them to the specified directory.
+--- @param dir string Target directory to save downloaded driver assets.
+--- @param repo string The GitHub repository, in the format "owner/repo".
+--- @param driverFilenames string[] List of driver filenames to update.
+--- @param includePrereleases? boolean If true, includes pre-releases (optional).
+--- @param forceUpdate? boolean Optional. If true, downloads all drivers regardless of version (optional).
+--- @return Deferred<string[], table<number, string>> outdatedDrivers Deferred resolving to a list of successfully downloaded driver filenames, or rejected with a table of error messages indexed by number.
+function GitHubUpdater:downloadOutdatedDrivers(dir, repo, driverFilenames, includePrereleases, forceUpdate)
+  log:trace(
+    "GitHubUpdater:downloadOutdatedDrivers(%s, %s, %s, %s, %s)",
+    dir,
+    repo,
+    driverFilenames,
+    includePrereleases,
+    forceUpdate
+  )
+  return self:getOutdatedDriverAssets(repo, driverFilenames, includePrereleases, forceUpdate):next(function(assets)
+    --- @type Deferred<string, string>[]
+    local downloads = {}
+    for _, asset in pairs(assets) do
+      if IsEmpty(asset.browser_download_url) then
+        return reject(string.format("repo %s latest release asset %s download is unavailable", repo, asset.name))
+      end
 
-    local current = DRIVER_VERSION or ""
+      --- @type Deferred<string, string>
+      local download = http:get(asset.browser_download_url, DEFAULT_HEADERS):next(function(response)
+        local downloadSize = string.len(response.body)
+        if downloadSize < 1 then
+          return reject(string.format("asset %s download is empty", asset.name))
+        end
+        C4:FileSetDir(dir)
+        local currentContents = C4:FileExists(asset.name) and FileRead(asset.name) or nil
+        if FileWrite(asset.name, response.body, true) == -1 then
+          -- Restore the previous contents if the write failed
+          if currentContents ~= nil then
+            FileWrite(asset.name, currentContents, true)
+          end
+          return reject(string.format("failed to download asset %s", asset.name))
+        end
+        log:info("Downloaded asset %s (%d bytes)", asset.name, downloadSize)
+        return asset.name
+      end, function(response)
+        return reject(response.error)
+      end)
 
-    local ok, ticket = pcall(function()
-        return C4:urlGet(url, headers)
+      table.insert(downloads, download)
+    end
+    return deferred.all(downloads)
+  end)
+end
+
+--- Update all given drivers to the latest release from GitHub.
+--- Downloads new drivers, writes them, and sends them for update over TCP to the local system.
+--- @param repo string The GitHub repository, in the format "owner/repo".
+--- @param driverFilenames string[] List of driver filenames to update.
+--- @param includePrereleases? boolean If true, includes pre-releases (optional).
+--- @param forceUpdate? boolean If true, runs update even if drivers are up to date (optional).
+--- @return Deferred<string[], table<number, string>> updatedDrivers Deferred resolving to a list of updated driver filenames, or rejected with an error table.
+function GitHubUpdater:updateAll(repo, driverFilenames, includePrereleases, forceUpdate)
+  log:trace("GitHubUpdater:updateAll(%s, %s, %s, %s)", repo, driverFilenames, includePrereleases, forceUpdate)
+  -- Only update drivers that are already installed.
+  local installedDriverFilenames = {}
+  for _, driverFilename in pairs(driverFilenames) do
+    if not IsEmpty(C4:GetDevicesByC4iName(driverFilename) or {}) then
+      table.insert(installedDriverFilenames, driverFilename)
+    end
+  end
+
+  return self
+    :downloadOutdatedDrivers("C4Z_ROOT", repo, installedDriverFilenames, includePrereleases, forceUpdate)
+    :next(function(downloadedDriverFilenames)
+      --- @type Deferred<string[], table<number, string>>
+      local d = deferred.new()
+      if IsEmpty(downloadedDriverFilenames) then
+        return d:resolve(downloadedDriverFilenames)
+      end
+
+      C4:CreateTCPClient()
+        :OnConnect(function(client)
+          for _, driverFilename in pairs(downloadedDriverFilenames) do
+            local c4soap = XMLTag(
+              "c4soap",
+              XMLTag("param", driverFilename, nil, nil, {
+                name = "name",
+                type = "string",
+              }),
+              false,
+              false,
+              {
+                name = "UpdateProjectC4i",
+                session = "0",
+                operation = "RWX",
+                category = "composer",
+                async = "0",
+              }
+            ) .. "\0"
+            client:Write(c4soap)
+          end
+          client:Close()
+          d:resolve(downloadedDriverFilenames)
+        end)
+        :OnError(function(client, errCode, errMsg)
+          client:Close()
+          d:reject("Error " .. errCode .. ": " .. errMsg)
+        end)
+        :Connect("127.0.0.1", 5020)
+      return d
     end)
-    if not ok or ticket == nil then
-        callback({ available = false, err = "urlGet failed: " .. tostring(ticket) })
-        return
-    end
-
-    local cb = function(body, responseCode, err)
-        if err and err ~= "" then
-            callback({ available = false, err = "http error: " .. tostring(err) })
-            return
-        end
-        if responseCode and tonumber(responseCode) and tonumber(responseCode) >= 400 then
-            local snippet = (body and tostring(body):sub(1, 200)) or ""
-            callback({ available = false, err = "http " .. tostring(responseCode) .. ": " .. snippet })
-            return
-        end
-        if not body or body == "" then
-            callback({ available = false, err = "empty response (code=" .. tostring(responseCode) .. ")" })
-            return
-        end
-        local decodeOk, data = pcall(JSON.decode, JSON, body)
-        if not decodeOk or type(data) ~= "table" or type(data.tag_name) ~= "string" then
-            callback({ available = false, err = "invalid JSON response" })
-            return
-        end
-        -- Tag scheme: v2026053101 -> 2026053101. Strip optional leading 'v'.
-        local latest = data.tag_name:gsub("^v", "")
-        -- DRIVER_VERSION is a date-stamp like "2026060103"; lexicographic
-        -- ordering matches chronological ordering for fixed-width date stamps,
-        -- so string comparison is correct here.
-        local available = latest > current
-        callback({ available = available, current = current, latest = latest })
-    end
-
-    -- Schedule a watchdog so a ticket that never receives a ReceivedAsync
-    -- response gets cleared from _pending after TICKET_WATCHDOG_SEC. Uses
-    -- C4:SetTimer if available; falls back to no-cleanup (memory leak is
-    -- bounded by driver-load cadence, which is infrequent).
-    local watchdog
-    if C4 and type(C4.SetTimer) == "function" then
-        local ok, t = pcall(C4.SetTimer, C4, TICKET_WATCHDOG_SEC * 1000, function()
-            local stale = _pending[ticket]
-            if stale then
-                _pending[ticket] = nil
-                pcall(stale.cb, nil, 0, "watchdog: no response after " .. TICKET_WATCHDOG_SEC .. "s")
-            end
-        end, false)
-        if ok then watchdog = t end
-    end
-
-    _pending[ticket] = { cb = cb, watchdog = watchdog }
 end
 
-return Updater:new("psaab/proflame_c4")
+return GitHubUpdater:new()
