@@ -534,6 +534,18 @@ Each `test/test_*.lua` file is executed in its own `lua5.1` process. The runner 
 
 To add a test, drop a file matching `test/test_*.lua` that starts with `require("c4_shim"); dofile("driver.lua")` and uses `Test.assertEqual` / `Test.assert` from the shim.
 
+### Updating the driver from inside Composer
+
+The driver exposes an `Install Latest Release` Composer command and an `Update Status` read-only property. Click the command in Composer to:
+
+1. Query `https://api.github.com/repos/psaab/proflame_c4/releases/latest` for the latest release
+2. Compare the release tag to the installed `DRIVER_VERSION` via the vendored semver comparator
+3. If newer: download the matching `.c4z` asset, write it to `C4Z_ROOT/`, and drive Composer's local SOAP endpoint at `127.0.0.1:5020` to invoke `UpdateProjectC4i` — Composer tears down the running driver instance and loads the new one
+
+`Update Status` reflects progress and surfaces every failure mode as a human-readable string: `Idle`, `Checking GitHub for the latest release...`, `Installed: <files> (controller may reload driver)`, `Failed: <reason>`, or `Install already running` for repeat clicks while an install is in flight.
+
+The button is **opt-in** and **manual** — no background polling, no auto-check on driver load. If the click fires but no progress appears within 60 seconds, an internal watchdog clears the in-flight state and surfaces a timeout error.
+
 ### Composer Command Smoke Test
 
 Run this checklist in Composer Pro before merging PRs that change command behavior. Paste the completed checklist, controller version, driver version, and any skipped items into the PR.

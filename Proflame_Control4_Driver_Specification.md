@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026060105 (2026-06-01)
+- **Driver Version**: 2026060106 (2026-06-01)
 
 ---
 
@@ -255,15 +255,28 @@ In this repo, `driver.lua` is the deployment artifact only — never edit it
 directly. The source of truth lives in:
 
 ```
-src/driver.lua      - Driver source, with vendored libs replaced by sentinels
-vendor/JSON.lua     - Jeffrey Friedl's JSON.lua (vendored as-is, CC-BY 3.0)
-scripts/bundle.sh   - Splices vendor libs into src/driver.lua to produce driver.lua
+src/driver.lua                  - Driver source; vendored libs replaced by `-- BUNDLE_INSERT` sentinels
+vendor/JSON.lua                 - Jeffrey Friedl's JSON.lua (CC-BY 3.0)
+vendor/logging.lua              - Finite Labs structured logging
+vendor/persist.lua              - Slim wrapper over C4:PersistGetValue/SetValue
+vendor/deferred.lua             - Promise/Deferred library (used by the updater)
+vendor/version.lua              - Semver comparator (used by the updater)
+vendor/lib_helpers.lua          - Hand-extracted helpers (IsEmpty/Select/FileWrite/XMLTag/...)
+vendor/http.lua                 - C4:urlGet wrapper returning Deferred promises
+vendor/github_updater.lua       - GitHub Releases self-installer (Snap One template)
+scripts/bundle.sh               - Splices vendor libs into src/driver.lua to produce driver.lua
+test/                           - Unit tests run by run_tests.sh + CI
 ```
 
-Future vendored libraries (WebSocket, logging, persistence, etc.) drop into
-`vendor/` and get a sentinel + bundle entry. `scripts/validate.sh` rejects a
-working tree where `driver.lua` is out of sync with what `bundle.sh` would
-produce, so direct edits to `driver.lua` cannot land.
+`bundle.sh` order is **load-bearing**: JSON before logging (logging encodes
+tables via `JSON:encode`) and before persist (persist serializes via
+JSON); deferred before lib_helpers (`reject`/`resolve` build Deferreds);
+http before github_updater (the updater calls `http:get`). The sentinel
+order in `src/driver.lua` must match the order in `bundle.sh`.
+
+`scripts/validate.sh` rejects a working tree where `driver.lua` is out of
+sync with what `bundle.sh` would produce, so direct edits to `driver.lua`
+cannot land.
 
 ### 3.2 Driver Lifecycle Callbacks
 
@@ -1612,6 +1625,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026060106 | 2026-06-01 | Review-cleanup: restored http_client watchdog (T2d+ regression), removed dead dbg() function, clarified empty-asset install message, Update Status default Idle |
 | 2026060105 | 2026-06-01 | Replaced slim updater with full template github-updater (auto-install via Composer SOAP); manual-trigger only via "Install Latest Release" command |
 | 2026060104 | 2026-06-01 | Added log-only GitHub Releases update notifier (rate-limited to 24h, no auto-install) |
 | 2026060103 | 2026-06-01 | Added test/ scaffolding + CI test job; fixed DecodeTemperature half-degree precision loss |

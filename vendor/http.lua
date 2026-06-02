@@ -28,12 +28,26 @@ function Http.handleAsyncResponse(ticket, body, responseCode, headers, err)
     local entry = _pending[ticket]
     if not entry then return false end
     _pending[ticket] = nil
+    -- Best-effort cancel the watchdog so it doesn't fire after we've already
+    -- handled the response. C4 timers are silently ignored if cancellation
+    -- isn't available, which is fine — the watchdog's own check guards
+    -- against double-handling.
+    if entry.watchdog and C4 and type(C4.KillTimer) == "function" then
+        pcall(C4.KillTimer, C4, entry.watchdog)
+    end
     local ok, callErr = pcall(entry.cb, body, responseCode, headers, err)
     if not ok and dbg_err then
         dbg_err("http_client callback error: " .. tostring(callErr))
     end
     return true
 end
+
+--- Seconds to wait for a response before garbage-collecting a ticket whose
+--- callback never fired. Bounds memory growth across many driver lifetimes
+--- where C4:urlGet hands out a ticket but the network request never completes
+--- (DNS black-hole, OS bug, etc.). Reasserts the regression-protected behavior
+--- from T2d (#49) that was lost when T2d+ replaced the slim updater.
+local TICKET_WATCHDOG_SEC = 60
 
 local function build_result(url, code, body, headers)
     return { url = url, code = code, body = body, headers = headers or {} }
@@ -93,7 +107,25 @@ function Http:request(method, url, data, headers, options)
         return d
     end
 
-    _pending[ticket] = { cb = cb }
+    -- Schedule a watchdog so a ticket that never receives a ReceivedAsync
+    -- response gets cleared from _pending and the deferred rejects. Without
+    -- this, a stuck request hangs the caller's deferred chain forever (and
+    -- in the Install Latest Release case, leaves gUpdateInProgress = true
+    -- until driver reload). Uses C4:SetTimer if available; falls back to
+    -- no-cleanup, which is the same behavior as pre-watchdog.
+    local watchdog
+    if C4 and type(C4.SetTimer) == "function" then
+        local sok, t = pcall(C4.SetTimer, C4, TICKET_WATCHDOG_SEC * 1000, function()
+            local stale = _pending[ticket]
+            if stale then
+                _pending[ticket] = nil
+                pcall(stale.cb, nil, 0, nil, "watchdog: no response after " .. TICKET_WATCHDOG_SEC .. "s")
+            end
+        end, false)
+        if sok then watchdog = t end
+    end
+
+    _pending[ticket] = { cb = cb, watchdog = watchdog }
     return d
 end
 
