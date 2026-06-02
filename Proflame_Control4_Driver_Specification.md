@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026060106 (2026-06-01)
+- **Driver Version**: 2026060107 (2026-06-01)
 
 ---
 
@@ -1625,6 +1625,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026060107 | 2026-06-01 | Logging discipline: classified 101 dbg_err calls by intent into dbg_err/warn/info/debug; added dbg_trace helper |
 | 2026060106 | 2026-06-01 | Review-cleanup: restored http_client watchdog (T2d+ regression), removed dead dbg() function, clarified empty-asset install message, Update Status default Idle |
 | 2026060105 | 2026-06-01 | Replaced slim updater with full template github-updater (auto-install via Composer SOAP); manual-trigger only via "Install Latest Release" command |
 | 2026060104 | 2026-06-01 | Added log-only GitHub Releases update notifier (rate-limited to 24h, no auto-install) |

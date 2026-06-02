@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026060106"
+DRIVER_VERSION = "2026060107"
 DRIVER_DATE = "2026-06-01"
 
 NETWORK_BINDING_ID = 6001
@@ -114,7 +114,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260601-000006"
+BUILD_TIMESTAMP = "20260601-000007"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -244,8 +244,36 @@ function Log(msg, level)
     log:log(level or log.LogLevel.INFO, "%s", tostring(msg))
 end
 
+-- Severity-tagged wrappers. Each takes a single argument and passes it as a
+-- format ARGUMENT (not the format string itself) so `%` characters in device
+-- responses don't trip string.format.
+--
+-- Naming convention (per the 2026-06-02 logging discipline refactor):
+--   dbg_err   -> log:error  (true failures, refused/invalid input)
+--   dbg_warn  -> log:warn   (recoverable / ignored / suppressed conditions)
+--   dbg_info  -> log:info   (lifecycle, connection state, config changes)
+--   dbg_debug -> log:debug  (wire data, status processing, command echo)
+--   dbg_trace -> log:trace  (high-volume / rarely-needed debugging)
+-- Plus the legacy `dbg_all` alias, identical to `dbg_debug`, kept for the
+-- handful of call sites that already used it.
 function dbg_err(msg)
     log:error("%s", tostring(msg))
+end
+
+function dbg_warn(msg)
+    log:warn("%s", tostring(msg))
+end
+
+function dbg_info(msg)
+    log:info("%s", tostring(msg))
+end
+
+function dbg_debug(msg)
+    log:debug("%s", tostring(msg))
+end
+
+function dbg_trace(msg)
+    log:trace("%s", tostring(msg))
 end
 
 function dbg_all(msg)
@@ -281,14 +309,14 @@ function IsFireplaceOffMode(mode)
 end
 
 function FireDriverEvent(eventId, eventName)
-    dbg_err("Firing event: " .. tostring(eventName) .. " (" .. tostring(eventId) .. ")")
+    dbg_info("Firing event: " .. tostring(eventName) .. " (" .. tostring(eventId) .. ")")
     C4:FireEventByID(eventId)
 end
 
 function HandleModeEvents(newMode)
     if gLastMainMode == nil then
         gLastMainMode = newMode
-        dbg_err("Mode event baseline set: " .. tostring(newMode))
+        dbg_info("Mode event baseline set: " .. tostring(newMode))
         return
     end
 
@@ -722,7 +750,7 @@ end
 
 -- Separate function for timer updates - always sends immediately
 function UpdateTimerExtras()
-    dbg_err("Updating timer extras (minutes changed)")
+    dbg_debug("Updating timer extras (minutes changed)")
     SetupExtras()
 end
 
@@ -737,7 +765,7 @@ end
 function OnReconnectTimer()
     gReconnectTimerId = nil
     if not gConnected and not gConnecting then
-        dbg_err("Reconnect timer fired")
+        dbg_info("Reconnect timer fired")
         Connect()
     end
 end
@@ -815,7 +843,7 @@ function AllowLenientHandshakeFallback(response, reason)
         return false
     end
     if response and response:find("101", 1, true) then
-        dbg_err("Handshake strict validation failed (" .. tostring(reason) .. "); accepting legacy 101 response because Strict WebSocket Handshake is Off")
+        dbg_warn("Handshake strict validation failed (" .. tostring(reason) .. "); accepting legacy 101 response because Strict WebSocket Handshake is Off")
         return true
     end
     return false
@@ -1014,7 +1042,7 @@ function SendDeviceControlWithFormat(control, value, format, context)
     local sent = false
     for _, command in ipairs(plan) do
         local prefix = context and ("Sending " .. tostring(context) .. " " .. command.label .. " command: ") or ("Sending " .. command.label .. " command: ")
-        dbg_err(prefix .. command.payload)
+        dbg_debug(prefix .. command.payload)
         sent = SendWebSocketMessage(command.payload) or sent
     end
     return sent
@@ -1033,7 +1061,7 @@ end
 function RequestAllStatus()
     -- The Proflame device requires PROFLAMECONNECTION to trigger full status dump
     -- This is similar to PROFLAMEPING/PROFLAMEPONG but for initial connection
-    dbg_err("Sending PROFLAMECONNECTION to request full status")
+    dbg_debug("Sending PROFLAMECONNECTION to request full status")
     SendWebSocketMessage("PROFLAMECONNECTION")
 end
 
@@ -1057,13 +1085,13 @@ function SendThermostatDynamicCapabilities(reason)
     -- SDK-supported hold labels are limited, so Navigator may not render custom labels under the button.
     -- Treat this runtime capability refresh as a best-effort probe; some Navigators may ignore it.
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "DYNAMIC_CAPABILITIES_CHANGED", capabilities)
-    dbg_err("Thermostat dynamic capabilities refreshed" .. (reason and (": " .. tostring(reason)) or ""))
+    dbg_info("Thermostat dynamic capabilities refreshed" .. (reason and (": " .. tostring(reason)) or ""))
 end
 
 function SendThermostatAllowedModes(reason)
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "ALLOWED_FAN_MODES_CHANGED", { MODES = "Off,Low,Medium,High" })
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "ALLOWED_HVAC_MODES_CHANGED", { MODES = "Off,Heat" })
-    dbg_err("Thermostat allowed modes refreshed" .. (reason and (": " .. tostring(reason)) or ""))
+    dbg_info("Thermostat allowed modes refreshed" .. (reason and (": " .. tostring(reason)) or ""))
 end
 
 function RefreshThermostatUiSurface(reason, includeExtras)
@@ -1101,7 +1129,7 @@ function UpdateRoomTemperatureProxy()
     local tempEncoded = gState.room_temperature or "700"
     local tempF = DecodeTemperature(tempEncoded)
     local tempC = FahrenheitToCelsius(tempF)
-    dbg_err("Sending room temperature to proxy: " .. tempF .. "F (" .. tempC .. "C)")
+    dbg_debug("Sending room temperature to proxy: " .. tempF .. "F (" .. tempC .. "C)")
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "TEMPERATURE_CHANGED", {TEMPERATURE = tempC, SCALE = "C"})
 end
 
@@ -1116,10 +1144,10 @@ end
 
 function SetPendingSetpoint(tempF)
     gPendingSetpointF = tempF
-    dbg_err("SetPendingSetpoint locked: " .. tostring(tempF))
+    dbg_debug("SetPendingSetpoint locked: " .. tostring(tempF))
     if gPendingTimer then gPendingTimer:Cancel() end
     gPendingTimer = C4:SetTimer(5000, function()
-        dbg_err("Pending setpoint timer expired, unlocking")
+        dbg_warn("Pending setpoint timer expired, unlocking")
         gPendingSetpointF = nil
     end, false)
 end
@@ -1135,13 +1163,13 @@ function ParseStatusMessage(data)
         return
     end
     if data == "PROFLAMECONNECTIONOPEN" then
-        dbg_err("Connection acknowledged by device")
+        dbg_info("Connection acknowledged by device")
         C4:UpdateProperty("Connection Status", "Connected")
         HandleConnectionEvent(true)
         return
     end
     if data:sub(1, 1) == "{" then
-        dbg_err("Received JSON: " .. data:sub(1, 200))
+        dbg_debug("Received JSON: " .. data:sub(1, 200))
         local json = JsonDecode(data)
         
         -- First try indexed format (status0/value0, status1/value1, etc.)
@@ -1190,10 +1218,10 @@ function ApplyDeviceStatus(status, value)
         local incomingF = DecodeTemperature(value)
         if gPendingSetpointF ~= nil then
             if math.abs(incomingF - gPendingSetpointF) < 1 then
-                dbg_err("Pending setpoint confirmed: " .. incomingF)
+                dbg_debug("Pending setpoint confirmed: " .. incomingF)
                 gPendingSetpointF = nil
             else
-                dbg_err("Ignoring stale setpoint: " .. incomingF)
+                dbg_warn("Ignoring stale setpoint: " .. incomingF)
                 return
             end
         end
@@ -1204,7 +1232,7 @@ function ApplyDeviceStatus(status, value)
         if gTurnOffInProgress and IsFireplaceOffMode(value) then
             ClearTurnOffInProgress("confirmed off mode " .. tostring(value))
         elseif gTurnOffInProgress and IsFireplaceOnMode(value) then
-            dbg_err("Turn off still pending; ignoring on-mode echo: " .. tostring(value))
+            dbg_warn("Turn off still pending; ignoring on-mode echo: " .. tostring(value))
             ScheduleTurnOffRetry("on-mode echo " .. tostring(value))
             return
         end
@@ -1219,7 +1247,7 @@ function ApplyDeviceStatus(status, value)
     elseif status == "timer_status" then
         -- Skip timer_status updates while we're actively setting the timer
         if gSuppressTimerUpdates then
-            dbg_err("Timer status update suppressed: " .. tostring(value))
+            dbg_warn("Timer status update suppressed: " .. tostring(value))
             return
         end
         gState.timer_status = value
@@ -1242,18 +1270,18 @@ function ApplyDeviceStatus(status, value)
         -- We only set timer_set from our own commands to avoid sync issues
         -- Just log the device's reported value for debugging
         local minutes = math.floor(tonumber(value) / 60000)
-        dbg_err("Device timer_set: " .. tostring(value) .. " ms (" .. minutes .. " minutes), our timer_set: " .. tostring(gState.timer_set))
+        dbg_debug("Device timer_set: " .. tostring(value) .. " ms (" .. minutes .. " minutes), our timer_set: " .. tostring(gState.timer_set))
         return
     elseif status == "timer_count" then
         -- Skip timer_count updates while we're actively setting the timer
         if gSuppressTimerUpdates then
-            dbg_err("Timer count update suppressed: " .. tostring(value))
+            dbg_warn("Timer count update suppressed: " .. tostring(value))
             return
         end
 
         -- Ignore timer_count updates when timer has expired (device sends default values)
         if gTimerExpired then
-            dbg_err("Timer count ignored (timer expired): " .. tostring(value))
+            dbg_warn("Timer count ignored (timer expired): " .. tostring(value))
             return
         end
 
@@ -1261,11 +1289,11 @@ function ApplyDeviceStatus(status, value)
         -- The device sends default timer values when entering standby which we should ignore
         local mode = gState.main_mode
         if IsFireplaceOffMode(mode) then
-            dbg_err("Timer count ignored (mode=" .. tostring(mode) .. "): " .. tostring(value))
+            dbg_warn("Timer count ignored (mode=" .. tostring(mode) .. "): " .. tostring(value))
             return
         end
         if gState.timer_status == "0" then
-            dbg_err("Timer count ignored (timer_status=0): " .. tostring(value))
+            dbg_warn("Timer count ignored (timer_status=0): " .. tostring(value))
             return
         end
 
@@ -1278,7 +1306,7 @@ function ApplyDeviceStatus(status, value)
 
         -- Detect timer expiry: count reaches 0
         if newCount == 0 and oldCount > 0 then
-            dbg_err("Timer expired (count reached 0)")
+            dbg_info("Timer expired (count reached 0)")
             gTimerExpired = true
             gState.timer_count = "0"
             gState.timer_set = "0"
@@ -1288,9 +1316,9 @@ function ApplyDeviceStatus(status, value)
         -- Store the raw count
         gState.timer_count = value
         local change = { status = status, value = value, newCount = newCount }
-        dbg_err("Timer count: " .. newCount .. "ms (" .. newMinutes .. "m), old count: " .. oldCount .. "ms (" .. oldMinutes .. "m)")
+        dbg_debug("Timer count: " .. newCount .. "ms (" .. newMinutes .. "m), old count: " .. oldCount .. "ms (" .. oldMinutes .. "m)")
         if oldMinutes ~= newMinutes then
-            dbg_err("Timer minute changed: " .. oldMinutes .. " -> " .. newMinutes .. ", updating slider")
+            dbg_debug("Timer minute changed: " .. oldMinutes .. " -> " .. newMinutes .. ", updating slider")
             -- Update timer_set to match for slider display
             gState.timer_set = tostring(newMinutes * 60000)
             change.timerExtras = true
@@ -1298,7 +1326,7 @@ function ApplyDeviceStatus(status, value)
         return change
     elseif status == "room_temperature" or status == "temperature_read" then
         gState.room_temperature = value
-        dbg_err("Room temperature updated: " .. value .. " (raw) = " .. DecodeTemperature(value) .. "F")
+        dbg_debug("Room temperature updated: " .. value .. " (raw) = " .. DecodeTemperature(value) .. "F")
         return { status = "room_temperature", value = value }
     end
 
@@ -1414,7 +1442,7 @@ end
 function ProcessStatusUpdate(status, value)
     if not status or not value then return end
 
-    dbg_err("ProcessStatusUpdate: " .. tostring(status) .. " = " .. tostring(value))
+    dbg_debug("ProcessStatusUpdate: " .. tostring(status) .. " = " .. tostring(value))
     local change = ApplyDeviceStatus(status, value)
     if not change then return end
     gStatusSeen[change.status] = true
@@ -1471,7 +1499,7 @@ function UpdateFanMode()
     else
         fanMode = "High"
     end
-    dbg_err("Fan mode updated: level " .. levelNum .. " = " .. fanMode)
+    dbg_debug("Fan mode updated: level " .. levelNum .. " = " .. fanMode)
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "FAN_MODE_CHANGED", { MODE = fanMode })
 end
 
@@ -1479,7 +1507,7 @@ function UpdateFlameLevel()
     local flameLevel = tonumber(gState.flame_control) or 0
     local percent = math.floor(flameLevel / 6 * 100)
     local isOn = (flameLevel > 0) and IsFireplaceOnMode(gState.main_mode)
-    dbg_err("Flame level updated: " .. flameLevel .. " = " .. percent .. "%, on=" .. tostring(isOn))
+    dbg_debug("Flame level updated: " .. flameLevel .. " = " .. percent .. "%, on=" .. tostring(isOn))
 end
 
 function UpdateHoldModeFromFlame()
@@ -1494,7 +1522,7 @@ function UpdateHoldModeFromFlame()
         holdMode = "High Flame"
     end
     C4:SendToProxy(THERMOSTAT_PROXY_ID, "HOLD_MODE_CHANGED", { MODE = holdMode })
-    dbg_err("Hold mode display updated to: " .. holdMode .. " (flame level " .. flameLevel .. ")")
+    dbg_debug("Hold mode display updated to: " .. holdMode .. " (flame level " .. flameLevel .. ")")
 end
 
 -- =============================================================================
@@ -1502,9 +1530,9 @@ end
 -- =============================================================================
 
 function OnPropertyChanged(strProperty)
-    dbg_err("OnPropertyChanged: " .. tostring(strProperty))
+    dbg_info("OnPropertyChanged: " .. tostring(strProperty))
     if strProperty == "IP Address" then 
-        dbg_err("IP Address changed, disconnecting and reconnecting...")
+        dbg_info("IP Address changed, disconnecting and reconnecting...")
         Disconnect()
         local ipAddress = Properties["IP Address"] or ""
         if ipAddress ~= "" then
@@ -1514,20 +1542,20 @@ function OnPropertyChanged(strProperty)
             C4:UpdateProperty("Connection Status", "Not Configured")
         end
     elseif strProperty == "Port" then
-        dbg_err("Port changed, disconnecting and reconnecting...")
+        dbg_info("Port changed, disconnecting and reconnecting...")
         Disconnect()
         C4:SetTimer(500, function() Connect() end, false)
     elseif strProperty == "Strict WebSocket Handshake" then
-        dbg_err("Strict WebSocket Handshake changed, reconnecting to verify handshake mode...")
+        dbg_info("Strict WebSocket Handshake changed, reconnecting to verify handshake mode...")
         Disconnect()
         if (Properties["IP Address"] or "") ~= "" then
             C4:SetTimer(500, function() Connect() end, false)
         end
     elseif strProperty == "Command Format (non-Turn-Off)" then
-        dbg_err("Command Format (non-Turn-Off) set to: " .. tostring(Properties["Command Format (non-Turn-Off)"]))
+        dbg_info("Command Format (non-Turn-Off) set to: " .. tostring(Properties["Command Format (non-Turn-Off)"]))
     elseif strProperty == "Debug Mode" or strProperty == "Debug Level" then
         ApplyDebugLogSettings()
-        dbg_err("Debug settings: mode=" .. tostring(Properties["Debug Mode"]) .. " level=" .. tostring(Properties["Debug Level"]))
+        dbg_info("Debug settings: mode=" .. tostring(Properties["Debug Mode"]) .. " level=" .. tostring(Properties["Debug Level"]))
     elseif strProperty == "Ping Interval (seconds)" then
         if gConnected and gHandshakeComplete then
             StartPingTimer()  -- Restart with new interval
@@ -1597,11 +1625,11 @@ function ReceivedFromNetwork(idBinding, nPort, strData)
         if opcode == 0x01 then
             ParseStatusMessage(payload)
         elseif opcode == 0x08 then
-            dbg_err("WebSocket close frame received")
+            dbg_info("WebSocket close frame received")
             Disconnect()
             ScheduleReconnect()
         elseif opcode == 0x09 then
-            dbg_err("WebSocket ping frame received")
+            dbg_debug("WebSocket ping frame received")
             SendPong(payload)
         elseif opcode == 0x0A then
             dbg_all("WebSocket pong frame received")
@@ -1684,7 +1712,7 @@ end
 
 function ClearTurnOffInProgress(reason)
     if gTurnOffInProgress then
-        dbg_err("Turn off guard cleared: " .. tostring(reason))
+        dbg_debug("Turn off guard cleared: " .. tostring(reason))
     end
     gTimerSafetyOffPending = false
     gTurnOffInProgress = false
@@ -1694,7 +1722,7 @@ end
 
 function ScheduleTimerSafetyCheck(reason)
     if gTimerSafetyCheckTimer then return end
-    dbg_err("Timer safety check deferred: " .. tostring(reason))
+    dbg_debug("Timer safety check deferred: " .. tostring(reason))
     gTimerSafetyCheckTimer = C4:SetTimer(1500, function(timer)
         gTimerSafetyCheckTimer = nil
         EnforceTimerRequiredForOnState("timer_status unknown after status sync", true)
@@ -1718,7 +1746,7 @@ function EnforceTimerRequiredForOnState(reason, allowUnknownTimerStatus)
     end
 
     if gSuppressTimerUpdates then
-        dbg_err("Timer safety check skipped while timer updates are suppressed: " .. tostring(reason))
+        dbg_debug("Timer safety check skipped while timer updates are suppressed: " .. tostring(reason))
         return
     end
     if gTurnOffInProgress then
@@ -1729,17 +1757,17 @@ function EnforceTimerRequiredForOnState(reason, allowUnknownTimerStatus)
         return
     end
     if gTimerSafetyOffPending then
-        dbg_err("Timer safety force-off already pending: mode=" .. tostring(mode) .. ", timer_status=" .. tostring(gState.timer_status))
+        dbg_debug("Timer safety force-off already pending: mode=" .. tostring(mode) .. ", timer_status=" .. tostring(gState.timer_status))
         return
     end
 
     gTimerSafetyOffPending = true
-    dbg_err("Timer safety policy forcing fireplace off: mode=" .. tostring(mode) .. ", timer_status=" .. tostring(gState.timer_status) .. ", reason=" .. tostring(reason))
+    dbg_warn("Timer safety policy forcing fireplace off: mode=" .. tostring(mode) .. ", timer_status=" .. tostring(gState.timer_status) .. ", reason=" .. tostring(reason))
     ClearTimerStateAndSend(true)
 end
 
 function SendTurnOffControls(reason)
-    dbg_err("Sending legacy turn off controls: " .. tostring(reason))
+    dbg_debug("Sending legacy turn off controls: " .. tostring(reason))
     local sent = SendDeviceControlWithFormat("timer_status", "0", COMMAND_FORMAT_TURN_OFF_LEGACY_ONLY, "turn off")
     sent = SendDeviceControlWithFormat("main_mode", MODE_OFF, COMMAND_FORMAT_TURN_OFF_LEGACY_ONLY, "turn off") or sent
     return sent
@@ -1755,7 +1783,7 @@ function ScheduleTurnOffRetry(reason)
     end
     gTurnOffRetryCount = gTurnOffRetryCount + 1
     local delay = 750 * gTurnOffRetryCount
-    dbg_err("Scheduling turn off retry " .. tostring(gTurnOffRetryCount) .. " in " .. tostring(delay) .. "ms: " .. tostring(reason))
+    dbg_debug("Scheduling turn off retry " .. tostring(gTurnOffRetryCount) .. " in " .. tostring(delay) .. "ms: " .. tostring(reason))
     gTurnOffRetryTimer = C4:SetTimer(delay, function(timer)
         gTurnOffRetryTimer = nil
         if RequireDeviceCommandReady("Turn Off retry") and gTurnOffInProgress then
@@ -1768,7 +1796,7 @@ end
 function SetTimerSuppression(enabled, reason)
     CancelTimerSuppressionClear()
     gSuppressTimerUpdates = enabled
-    dbg_err("Timer suppression " .. (enabled and "enabled" or "disabled") .. ": " .. tostring(reason))
+    dbg_debug("Timer suppression " .. (enabled and "enabled" or "disabled") .. ": " .. tostring(reason))
     if not enabled then
         EnforceTimerRequiredForOnState("timer suppression cleared: " .. tostring(reason), false)
     end
@@ -1780,14 +1808,14 @@ end
 
 function RequireDeviceCommandReady(action)
     if IsDeviceCommandReady() then return true end
-    dbg_err("Command refused while device is disconnected or handshaking: " .. tostring(action))
+    dbg_warn("Command refused while device is disconnected or handshaking: " .. tostring(action))
     return false
 end
 
 function RequireConfirmedDeviceStatus(status, action)
     if not RequireDeviceCommandReady(action) then return false end
     if gStatusSeen[status] then return true end
-    dbg_err("Command refused until device reports " .. tostring(status) .. ": " .. tostring(action))
+    dbg_warn("Command refused until device reports " .. tostring(status) .. ": " .. tostring(action))
     return false
 end
 
@@ -1957,7 +1985,7 @@ end
 
 function CommandSetFlame(level)
     if gTurnOffInProgress then
-        dbg_err("Set Flame Level ignored while turn off is in progress")
+        dbg_warn("Set Flame Level ignored while turn off is in progress")
         return false
     end
     if not RequireDeviceCommandReady("Set Flame Level") then return false end
@@ -1968,7 +1996,7 @@ function CommandSetFlame(level)
     end
 
     if gState.main_mode ~= MODE_MANUAL then
-        dbg_err("Set Flame Level switching fireplace to Manual mode before setting flame; previous mode: " .. tostring(gState.main_mode))
+        dbg_info("Set Flame Level switching fireplace to Manual mode before setting flame; previous mode: " .. tostring(gState.main_mode))
         if not SendDeviceControl("main_mode", MODE_MANUAL) then return false end
         ScheduleModeReadyWork(function()
             if not RequireDeviceCommandReady("Set Flame Level after mode change") then return end
@@ -2061,7 +2089,7 @@ function CommandSetTimerMinutes(minutes)
         return false
     end
 
-    dbg_err("CommandSetTimerMinutes: " .. tostring(minutes) .. " minutes, current mode: " .. tostring(gState.main_mode))
+    dbg_debug("CommandSetTimerMinutes: " .. tostring(minutes) .. " minutes, current mode: " .. tostring(gState.main_mode))
     CancelPendingTimerCommandTimers()
 
     if minutes > 0 then
@@ -2069,7 +2097,7 @@ function CommandSetTimerMinutes(minutes)
         gTimerExpired = false
 
         if IsFireplaceOffMode(gState.main_mode) then
-            dbg_err("Fireplace is off, turning on with timer")
+            dbg_info("Fireplace is off, turning on with timer")
             if not SendDeviceControl("main_mode", GetDefaultOnMode()) then
                 SetTimerSuppression(false, "timer mode send failed")
                 return false
@@ -2089,7 +2117,7 @@ function CommandSetTimerMinutes(minutes)
             return SetTimerValueAndArm(minutes, true)
         end
     else
-        dbg_err("Timer set to 0, turning off fireplace")
+        dbg_info("Timer set to 0, turning off fireplace")
         return ClearTimerStateAndSend(true)
     end
     return true
@@ -2101,7 +2129,7 @@ end
 
 function ExecuteCommand(strCommand, tParams)
     tParams = tParams or {}
-    dbg_err("ExecuteCommand: " .. tostring(strCommand))
+    dbg_debug("ExecuteCommand: " .. tostring(strCommand))
 
     if strCommand == "Turn On" then
         return CommandTurnOn()
@@ -2166,7 +2194,7 @@ function ReceivedFromProxy(idBinding, strCommand, tParams)
     
     -- Handle Request for Extras
     if strCommand == "GET_EXTRAS_SETUP" then
-        dbg_err("GET_EXTRAS_SETUP received - returning extras setup XML directly")
+        dbg_debug("GET_EXTRAS_SETUP received - returning extras setup XML directly")
         local xml = GetExtrasXML()
         dbg_all("Extras XML: " .. xml)
         -- Return the XML directly as the response
@@ -2175,7 +2203,7 @@ function ReceivedFromProxy(idBinding, strCommand, tParams)
     
     -- Handle Request for Extras State
     if strCommand == "GET_EXTRAS_STATE" then
-        dbg_err("GET_EXTRAS_STATE received - returning extras setup XML with current values")
+        dbg_debug("GET_EXTRAS_STATE received - returning extras setup XML with current values")
         -- Return the setup XML which contains current values embedded
         return GetExtrasXML()
     end
@@ -2221,16 +2249,16 @@ function HandleThermostatCommand(strCommand, tParams)
             -- Try parsing as number for backwards compatibility
             level = tonumber(mode) or 0
         end
-        dbg_err("SET_MODE_FAN: " .. tostring(mode) .. " -> level " .. level)
+        dbg_debug("SET_MODE_FAN: " .. tostring(mode) .. " -> level " .. level)
         CommandSetFan(level)
         
     elseif strCommand == "SET_EXTRAS" then
-        dbg_err("Received SET_EXTRAS command")
+        dbg_debug("Received SET_EXTRAS command")
         -- Handle flame preset (Low/Medium/High quick select)
         if tParams["pf_flame_preset"] then
             local val = tonumber(tParams["pf_flame_preset"])
             if val then
-                dbg_err("Flame preset selected: " .. val)
+                dbg_debug("Flame preset selected: " .. val)
                 CommandSetFlame(val)
             end
         end
@@ -2256,7 +2284,7 @@ function HandleThermostatCommand(strCommand, tParams)
 
     elseif strCommand == "SET_PRESET" then
         local preset = tParams["PRESET"] or tParams["MODE"] or tParams["NAME"] or ""
-        dbg_err("SET_PRESET is deprecated because thermostat Presets are disabled; routing legacy preset command: " .. tostring(preset))
+        dbg_warn("SET_PRESET is deprecated because thermostat Presets are disabled; routing legacy preset command: " .. tostring(preset))
         if preset == "Manual" then
             CommandSetMode(MODE_MANUAL)
         elseif preset == "Smart" then
@@ -2271,13 +2299,13 @@ function HandleThermostatCommand(strCommand, tParams)
         -- Hold modes repurposed for quick flame control:
         -- "Low Flame" = level 1, "Medium Flame" = level 3, "High Flame" = level 6
         local holdMode = tParams["MODE"] or ""
-        dbg_err("SET_MODE_HOLD received: " .. holdMode)
+        dbg_debug("SET_MODE_HOLD received: " .. holdMode)
         if gTurnOffInProgress then
-            dbg_err("SET_MODE_HOLD ignored while turn off is in progress: " .. tostring(holdMode))
+            dbg_warn("SET_MODE_HOLD ignored while turn off is in progress: " .. tostring(holdMode))
             return
         end
         if not IsFireplaceOnMode(gState.main_mode) then
-            dbg_err("SET_MODE_HOLD ignored while fireplace mode is off/standby: " .. tostring(gState.main_mode))
+            dbg_warn("SET_MODE_HOLD ignored while fireplace mode is off/standby: " .. tostring(gState.main_mode))
             return
         end
         if holdMode == "Low Flame" then
@@ -2300,7 +2328,7 @@ function HandleThermostatCommand(strCommand, tParams)
     -- New extras commands (matching Ecobee-style format)
     elseif strCommand == "SELECT_MODE" then
         local val = tParams["VALUE"] or tParams["value"] or ""
-        dbg_err("SELECT_MODE: " .. tostring(val))
+        dbg_debug("SELECT_MODE: " .. tostring(val))
         if val == "off" then
             CommandTurnOff()
         elseif val == "manual" then
@@ -2313,31 +2341,31 @@ function HandleThermostatCommand(strCommand, tParams)
         
     elseif strCommand == "SELECT_FLAME_PRESET" then
         local val = tonumber(tParams["VALUE"] or tParams["value"])
-        dbg_err("SELECT_FLAME_PRESET: " .. tostring(val))
+        dbg_debug("SELECT_FLAME_PRESET: " .. tostring(val))
         if val then
             CommandSetFlame(val)
         end
         
     elseif strCommand == "SET_FLAME_LEVEL" then
         local val = tonumber(tParams["VALUE"] or tParams["value"])
-        dbg_err("SET_FLAME_LEVEL: " .. tostring(val))
+        dbg_debug("SET_FLAME_LEVEL: " .. tostring(val))
         if val then
             CommandSetFlame(val)
         end
         
     elseif strCommand == "SET_FAN_LEVEL" then
         local val = tonumber(tParams["VALUE"] or tParams["value"])
-        dbg_err("SET_FAN_LEVEL: " .. tostring(val))
+        dbg_debug("SET_FAN_LEVEL: " .. tostring(val))
         if val then CommandSetFan(val) end
         
     elseif strCommand == "SET_LIGHT_LEVEL" then
         local val = tonumber(tParams["VALUE"] or tParams["value"])
-        dbg_err("SET_LIGHT_LEVEL: " .. tostring(val))
+        dbg_debug("SET_LIGHT_LEVEL: " .. tostring(val))
         if val then CommandSetLight(val) end
         
     elseif strCommand == "SET_TIMER_MINUTES" then
         local val = tonumber(tParams["VALUE"] or tParams["value"])
-        dbg_err("SET_TIMER_MINUTES: " .. tostring(val) .. " minutes, current mode: " .. tostring(gState.main_mode))
+        dbg_debug("SET_TIMER_MINUTES: " .. tostring(val) .. " minutes, current mode: " .. tostring(gState.main_mode))
         if val and val >= 0 then CommandSetTimerMinutes(val) end
     end
 end
@@ -2388,12 +2416,12 @@ function ResetDriverState()
         timer_count = "0"
     }
     
-    dbg_err("Driver state reset")
+    dbg_info("Driver state reset")
 end
 
 function OnDriverInit()
     local success, err = pcall(function()
-        dbg_err("OnDriverInit - resetting state")
+        dbg_info("OnDriverInit - resetting state")
         math.randomseed(os.time())
         ResetDriverState()
         InitializePropertiesFromState()
@@ -2411,9 +2439,9 @@ function LogDriverVersionTransition()
     local previous = persist:get(PERSIST_KEY_LAST_VERSION, nil)
     if previous == DRIVER_VERSION then return end
     if type(previous) == "string" then
-        dbg_err("Driver version changed: " .. previous .. " -> " .. DRIVER_VERSION)
+        dbg_info("Driver version changed: " .. previous .. " -> " .. DRIVER_VERSION)
     elseif previous == nil then
-        dbg_err("Driver version first run on this controller: " .. DRIVER_VERSION)
+        dbg_info("Driver version first run on this controller: " .. DRIVER_VERSION)
     end
     persist:set(PERSIST_KEY_LAST_VERSION, DRIVER_VERSION)
 end
@@ -2437,13 +2465,13 @@ end
 -- Status updates surface in the "Update Status" property.
 function InstallLatestReleaseNow()
     if gUpdateInProgress then
-        dbg_err("Install Latest Release ignored: an install is already running")
+        dbg_warn("Install Latest Release ignored: an install is already running")
         UpdateUpdateStatusProperty("Install already running")
         return
     end
     gUpdateInProgress = true
     UpdateUpdateStatusProperty("Checking GitHub for the latest release...")
-    dbg_err("InstallLatestReleaseNow: starting")
+    dbg_info("InstallLatestReleaseNow: starting")
 
     local d = github_updater:updateAll(GITHUB_UPDATER_REPO, GITHUB_UPDATER_FILENAMES, false, false)
     d:next(function(updated)
@@ -2463,10 +2491,10 @@ function InstallLatestReleaseNow()
                     .. "). If a release exists with a newer tag, verify its asset is named "
                     .. table.concat(GITHUB_UPDATER_FILENAMES, ", ")
             )
-            dbg_err("InstallLatestReleaseNow: no update applied (current=" .. DRIVER_VERSION .. ")")
+            dbg_info("InstallLatestReleaseNow: no update applied (current=" .. DRIVER_VERSION .. ")")
         else
             UpdateUpdateStatusProperty("Installed: " .. table.concat(updated, ", ") .. " (controller may reload driver)")
-            dbg_err("InstallLatestReleaseNow: triggered Composer install of " .. table.concat(updated, ", "))
+            dbg_info("InstallLatestReleaseNow: triggered Composer install of " .. table.concat(updated, ", "))
         end
     end, function(err)
         gUpdateInProgress = false
@@ -2499,7 +2527,7 @@ function OnDriverLateInit()
     -- Release" Composer command (see ExecuteCommand). No periodic polling
     -- happens during driver load.
 
-    dbg_err("OnDriverLateInit - Build: " .. BUILD_TIMESTAMP)
+    dbg_info("OnDriverLateInit - Build: " .. BUILD_TIMESTAMP)
     local success, err = pcall(function()
         C4:UpdateProperty("Driver Version", DRIVER_VERSION .. " (" .. DRIVER_DATE .. ") [" .. BUILD_TIMESTAMP .. "]")
         
@@ -2541,7 +2569,7 @@ function InitializePropertiesFromState()
 end
 
 function OnDriverDestroyed()
-    dbg_err("OnDriverDestroyed - cleaning up")
+    dbg_info("OnDriverDestroyed - cleaning up")
     StopPingTimer()
     StopReconnectTimer()
     CancelPendingTimerCommandTimers()
@@ -2553,7 +2581,7 @@ end
 
 function OnDriverUpdated()
     -- Called when driver is updated/reloaded
-    dbg_err("OnDriverUpdated - driver updated to version " .. DRIVER_VERSION)
+    dbg_info("OnDriverUpdated - driver updated to version " .. DRIVER_VERSION)
     
     -- Clean up old state
     StopPingTimer()
