@@ -12,7 +12,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026060104"
+DRIVER_VERSION = "2026060105"
 DRIVER_DATE = "2026-06-01"
 
 NETWORK_BINDING_ID = 6001
@@ -118,7 +118,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260601-000004"
+BUILD_TIMESTAMP = "20260601-000005"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -2602,134 +2602,1535 @@ persist = Persist:new()
 end
 -- ===== END BUNDLED vendor/persist.lua =====
 
--- ===== BUNDLED FROM vendor/github_updater.lua =====
+-- ===== BUNDLED FROM vendor/deferred.lua =====
 do
--- GitHub Releases polling client for the Proflame driver.
---
--- Fires an async HTTP GET against the GitHub Releases API for the configured
--- repo, parses the `tag_name` of the latest release, and invokes a callback
--- with the parse result. Designed for log-only notification, NOT auto-install:
--- the callback receives the new version string and the driver decides what
--- to do with it (currently: dbg_err it).
---
--- Async wiring: C4:urlGet returns a "ticket" identifier; the response arrives
--- via the global `ReceivedAsync(ticket, body, responseCode, headers, err)`
--- handler. We register the per-ticket callback in a module-local table so
--- multiple in-flight requests don't collide.
---
--- Returned via the bundler as the global `github_updater`.
+--- A+ promises in Lua.
+--- @module "deferred"
+local M = {}
 
-local Updater = {}
-Updater.__index = Updater
+--- Global hook called when a promise is rejected with no downstream handlers.
+--- Set this to a function(value) to capture unhandled rejections externally.
+--- @type fun(value: any)|nil
+ON_UNHANDLED_REJECTION = ON_UNHANDLED_REJECTION
 
--- ticket -> callback. Module-local so multiple updaters share dispatch.
-local _pending = {}
+--- @generic S,F
+--- @class Deferred<S,F>
+--- @field state DeferredState The current state of the promise
+--- @field value S|F The resolved or rejected value
+--- @field queue Deferred<S,F>[] A list of chained promises
+--- @field success (fun(value: S))? The success callback function
+--- @field failure (fun(reason: F))? The failure callback function
+--- @field extend (fun(d: Deferred<S,F>))? Optional extension function
+local Deferred = {}
+Deferred.__index = Deferred
 
-function Updater:new(repo)
-    return setmetatable({ repo = repo or "" }, self)
+--- Deferred states
+--- @enum DeferredState
+local DeferredState = {
+  PENDING = 0,
+  RESOLVING = 1,
+  REJECTING = 2,
+  RESOLVED = 3,
+  REJECTED = 4,
+}
+
+--- Chains a callback to be executed when the promise resolves.
+--- When the callback returns a Deferred, the result is flattened.
+--- @generic S, F, V
+--- @param success (fun(value: S): Deferred<V,F>)? Callback that returns a Deferred
+--- @param failure (fun(reason: F): Deferred<V,F>)?
+--- @return Deferred<V,F>
+--- @overload fun(self: Deferred<S,F>, success: (fun(value: S): V)?, failure: (fun(reason: F): V)?): Deferred<V,F>
+function Deferred:next(success, failure)
+  local nextFn = M.new({ success = success, failure = failure, extend = self.extend })
+  if self.state == DeferredState.RESOLVED then
+    nextFn:resolve(self.value)
+  elseif self.state == DeferredState.REJECTED then
+    nextFn:reject(self.value)
+  else
+    table.insert(self.queue, nextFn)
+  end
+  return nextFn
 end
 
---- Dispatch table entry for an async fetch result. Returns true if the
---- ticket was ours and was handled; false if it belongs to someone else.
-function Updater.handleAsyncResponse(ticket, body, responseCode, headers, err)
+--- Finalizes the promise by resolving or rejecting it.
+--- @generic S,F
+--- @param deferred Deferred<S,F> The deferred object.
+--- @param state? DeferredState The final state of the promise (RESOLVED or REJECTED).
+local function finish(deferred, state)
+  if state == nil then
+    state = DeferredState.REJECTED
+  end
+  for _, f in ipairs(deferred.queue) do
+    if state == DeferredState.RESOLVED then
+      --- @cast deferred.value S
+      f:resolve(deferred.value)
+    else
+      --- @cast deferred.value F
+      f:reject(deferred.value)
+    end
+  end
+  deferred.state = state
+  if
+    state == DeferredState.REJECTED
+    and #deferred.queue == 0
+    and ON_UNHANDLED_REJECTION
+    and (deferred.success ~= nil or deferred.failure ~= nil)
+  then
+    ON_UNHANDLED_REJECTION(deferred.value)
+  end
+end
+
+--- Checks if a value is a callable function or table with a `__call` metamethod.
+--- @param f any The value to check.
+--- @return boolean isFunction True if the value is callable, false otherwise.
+local function isfunction(f)
+  if type(f) == "table" then
+    local mt = getmetatable(f)
+    return mt ~= nil and type(mt.__call) == "function"
+  end
+  return type(f) == "function"
+end
+
+--- Handles promise chaining and resolution.
+--- @generic S,V,F
+--- @param deferred Deferred<S,F> The deferred object.
+--- @param nextFn fun(self: Deferred<S,F>, success: (fun(value: S): V?)?, failure: (fun(reason: F): V?)?)? The next function in the chain.
+--- @param success function The success callback.
+--- @param failure function The failure callback.
+--- @param nonpromisecb function The callback for non-promise values.
+local function promise(deferred, nextFn, success, failure, nonpromisecb)
+  if type(deferred) == "table" and type(deferred.value) == "table" and isfunction(nextFn) then
+    --- @cast nextFn -nil
+    --- @cast deferred.value Deferred<S,F>
+    local called = false
+    local ok, err = pcall(nextFn, deferred.value, function(v)
+      if called then
+        return
+      end
+      called = true
+      deferred.value = v
+      success()
+    end, function(v)
+      if called then
+        return
+      end
+      called = true
+      deferred.value = v
+      failure()
+    end)
+    if not ok and not called then
+      deferred.value = err
+      failure()
+    end
+  else
+    nonpromisecb()
+  end
+end
+
+--- Fires the promise resolution or rejection process.
+--- @generic S,F
+--- @param deferred Deferred<S,F> The deferred object.
+local function fire(deferred)
+  local nextFn
+  if type(deferred.value) == "table" then
+    nextFn = deferred.value.next
+  end
+  promise(deferred, nextFn, function()
+    deferred.state = DeferredState.RESOLVING
+    fire(deferred)
+  end, function()
+    deferred.state = DeferredState.REJECTING
+    fire(deferred)
+  end, function()
+    local ok, v
+    if deferred.state == DeferredState.RESOLVING and deferred.success ~= nil and isfunction(deferred.success) then
+      --- @cast deferred.value S
+      ok, v = pcall(deferred.success, deferred.value)
+    elseif deferred.state == DeferredState.REJECTING and deferred.failure ~= nil and isfunction(deferred.failure) then
+      --- @cast deferred.value F
+      ok, v = pcall(deferred.failure, deferred.value)
+      if ok then
+        deferred.state = DeferredState.RESOLVING
+      end
+    end
+
+    if ok ~= nil then
+      if ok then
+        deferred.value = v
+      else
+        deferred.value = v
+        return finish(deferred)
+      end
+    end
+
+    if deferred.value == deferred then
+      deferred.value = pcall(error, "resolving promise with itself")
+      return finish(deferred)
+    else
+      promise(deferred, nextFn, function()
+        finish(deferred, DeferredState.RESOLVED)
+      end, function(state)
+        finish(deferred, state)
+      end, function()
+        finish(deferred, deferred.state == DeferredState.RESOLVING and DeferredState.RESOLVED or DeferredState.REJECTED)
+      end)
+    end
+  end)
+end
+
+--- Resolves or rejects the promise.
+--- @generic S,F
+--- @param deferred Deferred<S,F> The deferred object.
+--- @param state DeferredState The state to resolve or reject to.
+--- @param value S|F The value to resolve or reject with.
+--- @return Deferred<S,F> deferred The deferred object.
+local function resolve(deferred, state, value)
+  if deferred.state == DeferredState.PENDING then
+    deferred.value = value
+    deferred.state = state
+    fire(deferred)
+  end
+  return deferred
+end
+
+--- Resolves the promise with a value.
+--- @generic S,F
+--- @param value S The value to resolve with.
+--- @return Deferred<S,F> deferred The deferred object.
+function Deferred:resolve(value)
+  return resolve(self, DeferredState.RESOLVING, value)
+end
+
+--- Rejects the promise with a value.
+--- @generic S,F
+--- @param value F The value to reject with.
+--- @return Deferred<S,F> deferred The deferred object.
+function Deferred:reject(value)
+  return resolve(self, DeferredState.REJECTING, value)
+end
+
+--- Creates a new deferred object.
+--- @generic S,F
+--- @param options? table Optional configuration for the deferred object.
+--- @return Deferred<S,F> deferred A new deferred object.
+function M.new(options)
+  options = options or {}
+  --- @type Deferred<S,F>
+  local d = setmetatable({}, Deferred)
+  d.state = DeferredState.PENDING
+  d.value = nil
+  d.queue = {}
+  d.success = options.success
+  d.failure = options.failure
+  d.extend = options.extend -- Store for chained deferreds
+
+  if isfunction(options.extend) then
+    options.extend(d)
+  end
+  return d
+end
+
+--- Resolves when all promises in the list are resolved or rejected.
+--- @generic S,F
+--- @param args Deferred<S,F>[] A list of promises.
+--- @return Deferred<S[], table<number, F>> deferred A new promise.
+function M.all(args)
+  --- @type Deferred<S|F[], S|F[]>>
+  local d = M.new()
+  if #args == 0 then
+    return d:resolve({})
+  end
+  local pending = #args
+
+  local hasRejections = false
+  --- @type table<number, S>
+  local resolves = {}
+  --- @type table<number, F>
+  local rejects = {}
+
+  --- @param i integer
+  --- @param resolved boolean
+  --- @return fun(value: S|F): void
+  local function synchronizer(i, resolved)
+    return function(value)
+      if not resolved then
+        hasRejections = true
+        rejects[i] = value
+      else
+        resolves[i] = value
+      end
+      pending = pending - 1
+      if pending == 0 then
+        --- @diagnostic disable-next-line: unnecessary-if
+        if hasRejections then
+          d:reject(rejects)
+        else
+          d:resolve(resolves)
+        end
+      end
+    end
+  end
+
+  for i = 1, pending do
+    assert(args[i]):next(synchronizer(i, true), synchronizer(i, false))
+  end
+  return d
+end
+
+--- Resolves with the values of sequential application of a function to each element in the list.
+--- @generic S,F
+--- @param args table A list of values.
+--- @param fn function A function that returns a promise for each value.
+--- @return Deferred<S,F> deferred A new promise.
+function M.map(args, fn)
+  local d = M.new()
+  local results = {}
+  local function donext(i)
+    if i > #args then
+      d:resolve(results)
+    else
+      fn(args[i]):next(function(res)
+        table.insert(results, res)
+        donext(i + 1)
+      end, function(err)
+        d:reject(err)
+      end)
+    end
+  end
+  donext(1)
+  return d
+end
+
+--- Resolves as soon as the first promise in the list is resolved or rejected.
+--- @generic S,F
+--- @param args Deferred<S,F>[] A list of promises.
+--- @return Deferred<S,F> deferred A new promise.
+function M.first(args)
+  --- @type Deferred<S,F>
+  local d = M.new()
+  for _, v in ipairs(args) do
+    v:next(function(res)
+      d:resolve(res)
+    end, function(err)
+      d:reject(err)
+    end)
+  end
+  return d
+end
+
+--- Runs self-tests to verify the functionality of the Deferred module.
+--- @return boolean success True if all tests passed.
+function M.selftest()
+  print("Running Deferred test vectors...")
+  local passed = 0
+  local failed = 0
+
+  local function assert_eq(actual, expected, msg)
+    if actual == expected then
+      passed = passed + 1
+      print("  PASS: " .. msg)
+      return true
+    else
+      failed = failed + 1
+      print("  FAIL: " .. msg .. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
+      return false
+    end
+  end
+
+  local function assert_true(cond, msg)
+    return assert_eq(cond, true, msg)
+  end
+
+  -- ==========================================
+  -- BASIC RESOLVE/REJECT TESTS
+  -- ==========================================
+
+  -- Test: resolve with value
+  do
+    local d = M.new()
+    local result = nil
+    d:next(function(v)
+      result = v
+    end)
+    d:resolve("hello")
+    assert_eq(result, "hello", "resolve with value")
+    assert_eq(d.state, DeferredState.RESOLVED, "state after resolve")
+  end
+
+  -- Test: reject with value
+  do
+    local d = M.new()
+    local result = nil
+    d:next(nil, function(v)
+      result = v
+    end)
+    d:reject("error")
+    assert_eq(result, "error", "reject with value")
+    assert_eq(d.state, DeferredState.REJECTED, "state after reject")
+  end
+
+  -- Test: resolve only fires once
+  do
+    local d = M.new()
+    local count = 0
+    d:next(function()
+      count = count + 1
+    end)
+    d:resolve("first")
+    d:resolve("second")
+    assert_eq(count, 1, "resolve only fires once")
+  end
+
+  -- ==========================================
+  -- CHAINING TESTS
+  -- ==========================================
+
+  -- Test: next() returns transformed value
+  do
+    local d = M.new()
+    local result = nil
+    d:next(function(v)
+      return v * 2
+    end):next(function(v)
+      result = v
+    end)
+    d:resolve(21)
+    assert_eq(result, 42, "next() transforms value")
+  end
+
+  -- Test: next() with returned Deferred (flattening)
+  do
+    local d = M.new()
+    local result = nil
+    d:next(function(v)
+      local inner = M.new()
+      inner:resolve(v .. " world")
+      return inner
+    end):next(function(v)
+      result = v
+    end)
+    d:resolve("hello")
+    assert_eq(result, "hello world", "next() flattens returned Deferred")
+  end
+
+  -- Test: chaining after already resolved
+  do
+    local d = M.new()
+    d:resolve("immediate")
+    local result = nil
+    d:next(function(v)
+      result = v
+    end)
+    assert_eq(result, "immediate", "chaining after already resolved")
+  end
+
+  -- Test: error in callback rejects chain
+  do
+    local d = M.new()
+    local errorResult = nil
+    d:next(function()
+      error("test error")
+    end):next(nil, function(e)
+      errorResult = e
+    end)
+    d:resolve("trigger")
+    assert_true(errorResult ~= nil, "error in callback rejects chain")
+  end
+
+  -- Test: rejection recovery
+  do
+    local d = M.new()
+    local result = nil
+    d:next(nil, function()
+      return "recovered"
+    end):next(function(v)
+      result = v
+    end)
+    d:reject("error")
+    assert_eq(result, "recovered", "rejection can be recovered")
+  end
+
+  -- ==========================================
+  -- M.all() TESTS
+  -- ==========================================
+
+  -- Test: all() with all resolved
+  do
+    local d1, d2, d3 = M.new(), M.new(), M.new()
+    --- @type string[]?
+    local results = nil
+    M.all({ d1, d2, d3 }):next(function(v)
+      results = v
+    end)
+    d1:resolve("a")
+    d2:resolve("b")
+    d3:resolve("c")
+    assert_true(results ~= nil, "all() resolves when all resolve")
+    --- @cast results -nil
+    assert_eq(results[1], "a", "all() result[1]")
+    assert_eq(results[2], "b", "all() result[2]")
+    assert_eq(results[3], "c", "all() result[3]")
+  end
+
+  -- Test: all() with empty array
+  do
+    local results = nil
+    M.all({}):next(function(v)
+      results = v
+    end)
+    assert_true(results ~= nil, "all([]) resolves immediately")
+    assert_eq(#results, 0, "all([]) resolves with empty array")
+  end
+
+  -- Test: all() with rejection
+  do
+    local d1, d2 = M.new(), M.new()
+    local rejected = nil
+    M.all({ d1, d2 }):next(nil, function(v)
+      rejected = v
+    end)
+    d1:resolve("ok")
+    d2:reject("fail")
+    assert_true(rejected ~= nil, "all() rejects if any reject")
+  end
+
+  -- ==========================================
+  -- M.first() TESTS
+  -- ==========================================
+
+  -- Test: first() resolves with first resolved
+  do
+    local d1, d2 = M.new(), M.new()
+    local result = nil
+    M.first({ d1, d2 }):next(function(v)
+      result = v
+    end)
+    d2:resolve("second wins")
+    assert_eq(result, "second wins", "first() resolves with first resolved")
+  end
+
+  -- ==========================================
+  -- M.map() TESTS
+  -- ==========================================
+
+  -- Test: map() sequential processing
+  do
+    --- @type number[]?
+    local results = nil
+    M.map({ 1, 2, 3 }, function(v)
+      local d = M.new()
+      d:resolve(v * 10)
+      return d
+    end):next(function(v)
+      results = v
+    end)
+    assert_true(results ~= nil, "map() resolves")
+    --- @cast results -nil
+    assert_eq(results[1], 10, "map() result[1]")
+    assert_eq(results[2], 20, "map() result[2]")
+    assert_eq(results[3], 30, "map() result[3]")
+  end
+
+  -- ==========================================
+  -- EXTEND OPTION TESTS
+  -- ==========================================
+
+  -- Test: extend option is called
+  do
+    local extended = false
+    M.new({
+      extend = function()
+        extended = true
+      end,
+    })
+    assert_true(extended, "extend option is called")
+  end
+
+  -- Test: extend propagates to chained deferreds
+  do
+    local extendCount = 0
+    local d = M.new({
+      extend = function()
+        extendCount = extendCount + 1
+      end,
+    })
+    d:next(function()
+      return "value"
+    end)
+    d:resolve("trigger")
+    assert_true(extendCount >= 2, "extend propagates to chained deferreds")
+  end
+
+  -- ==========================================
+  -- SUMMARY
+  -- ==========================================
+  print(string.format("\nDeferred operations: %d/%d tests passed\n", passed, passed + failed))
+  return failed == 0
+end
+
+deferred = M
+end
+-- ===== END BUNDLED vendor/deferred.lua =====
+
+-- ===== BUNDLED FROM vendor/version.lua =====
+do
+---
+-- Version comparison library for Lua.
+--
+-- Comparison is simple and straightforward, with basic support for SemVer.
+--
+-- @usage
+-- local version = require("version")
+--
+-- -- create a version and perform some comparisons
+-- local v = version("3.1.0")
+-- assert( v == version("3.1"))   -- missing elements default to zero, and hence are equal
+-- assert( v > version("3.0"))
+--
+-- -- create a version range, and check whether a version is within that range
+-- local r = version.range("2.75", "3.50.3")
+-- assert(r:matches(v))
+--
+-- -- create a set of multiple ranges, adding elements in a chained fashion
+-- local compatible = version.set("1.1","1.2"):allowed("2.1", "2.5"):disallowed("2.3")
+--
+-- assert(compatible:matches("1.1.3"))
+-- assert(compatible:matches("1.1.3"))
+-- assert(compatible:matches("2.4"))
+-- assert(not compatible:matches("2.0"))
+-- assert(not compatible:matches("2.3"))
+--
+-- -- print a formatted set
+-- print(compatible) --> "1.1 to 1.2 and 2.1 to 2.5, but not 2.3"
+--
+-- -- create an upwards compatibility check, allowing all versions 1.x
+-- local c = version.set("1.0","2.0"):disallowed("2.0")
+-- assert(c:matches("1.4"))
+-- assert(not c:matches("2.0"))
+--
+-- -- default parsing
+-- print(version("5.2"))                    -- "5.2"
+-- print(version("Lua 5.2 for me"))         -- "5.2"
+-- print(version("5..2"))                   -- nil, "Not a valid version element: '5..2'"
+--
+-- -- strict parsing
+-- print(version.strict("5.2"))             -- "5.2"
+-- print(version.strict("Lua 5.2 for me"))  -- nil, "Not a valid version element: 'Lua 5.2 for me'"
+-- print(version.strict("5..2"))            -- nil, "Not a valid version element: '5..2'"
+--
+-- @copyright Kong Inc.
+-- @author Thijs Schreijer
+-- @license Apache 2.0
+
+local table_insert = table.insert
+local table_concat = table.concat
+local math_max = math.max
+
+-- Utility split function
+local function split(str, pat)
+  local t = {}
+  local fpat = "(.-)" .. pat
+  local last_end = 1
+  local s, e, cap = str:find(fpat, 1)
+
+  while s do
+    if s ~= 1 or cap ~= "" then
+      table_insert(t, cap)
+    end
+
+    last_end = e + 1
+    s, e, cap = str:find(fpat, last_end)
+  end
+
+  if last_end <= #str then
+    cap = str:sub(last_end)
+    table_insert(t, cap)
+  end
+
+  return t
+end
+
+-- foreward declaration of constructor
+local _new, _range, _set
+
+-- Metatables for version, range and set
+local mt_version
+mt_version = {
+  __index = {
+    --- Matches a provider-version on a consumer-version based on the
+    -- semantic versioning specification.
+    -- The implementation does not support pre-release and/or build metadata,
+    -- only the major, minor, and patch levels are compared.
+    -- @function ver:semver
+    -- @param v Version (string or `version` object) as served by the provider
+    -- @return `true` or `false` whether the version matches, or `nil+err`
+    -- @usage local consumer = "1.2"     -- consumer requested version
+    -- local provider = "1.5.2"   -- provider served version
+    --
+    -- local compatible = version(consumer):semver(provider)
+    semver = function(self, v)
+      -- this function will be called once (in the meta table), it will set
+      -- the actual function on the version table itself
+      if self[1] == 0 then
+        -- major 0 is only compatible when equal
+        self.semver = function(self2, v2)
+          if getmetatable(v2) ~= mt_version then
+            local parsed, err = _new(v2, self2.strict)
+            if not parsed then
+              return nil, err
+            end
+            v2 = parsed
+          end
+          return self2 == v2
+        end
+      elseif self[4] then
+        -- more than 3 elements, cannot compare
+        self.semver = function()
+          return nil, "Version has too many elements (semver max 3)"
+        end
+      else
+        local semver_set = _set(self, self[1] + 1, self.strict):disallowed(self[1] + 1)
+        self.semver = function(_, v2)
+          return semver_set:matches(v2)
+        end
+      end
+      return self:semver(v)
+    end,
+  },
+  __eq = function(a, b)
+    local l = math_max(#a, #b)
+    for i = 1, l do
+      if (a[i] or 0) ~= (b[i] or 0) then
+        return false
+      end
+    end
+    return true
+  end,
+  __lt = function(a, b)
+    if getmetatable(a) ~= mt_version or getmetatable(b) ~= mt_version then
+      local t = getmetatable(a) ~= mt_version and type(a) or type(b)
+      error("cannot compare a 'version' to a '" .. t .. "'", 2)
+    end
+    local l = math_max(#a, #b)
+    for i = 1, l do
+      if (a[i] or 0) < (b[i] or 0) then
+        return true
+      end
+      if (a[i] or 0) > (b[i] or 0) then
+        return false
+      end
+    end
+    return false
+  end,
+  __tostring = function(self)
+    return table_concat(self, ".")
+  end,
+}
+
+local mt_range = {
+  __index = {
+    --- Matches a version on a range.
+    -- @function range:matches
+    -- @param v Version (string or `version` object) to match
+    -- @return `true` or `false` whether the version matches the range, or `nil+err`
+    matches = function(self, v)
+      if getmetatable(v) ~= mt_version then
+        local parsed, err = _new(v, self.strict)
+        if not parsed then
+          return nil, err
+        end
+        v = parsed
+      end
+
+      return (v >= self.from) and (v <= self.to)
+    end,
+  },
+  __tostring = function(self)
+    local f, t = tostring(self.from), tostring(self.to)
+    if f == t then
+      return f
+    else
+      return f .. " to " .. t
+    end
+  end,
+}
+
+local mt_set = {
+  __index = {
+    --- Adds an ALLOWED range to the set.
+    -- @function set:allowed
+    -- @param v1 Version or range, if version, the FROM version in either string or `version` object format
+    -- @param v2 Version (optional), TO version in either string or `version` object format
+    -- @return The `set` object, to easy chain multiple allowed/disallowed ranges, or `nil+err`
+    allowed = function(self, v1, v2)
+      if getmetatable(v1) == mt_range then
+        assert(v2 == nil, "First parameter was a range, second must be nil.")
+        table_insert(self.ok, v1)
+      else
+        local r, err = _range(v1, v2, self.strict)
+        if not r then
+          return nil, err
+        end
+        table_insert(self.ok, r)
+      end
+      return self
+    end,
+    --- Adds a DISALLOWED range to the set.
+    -- @function set:disallowed
+    -- @param v1 Version or range, if version, the FROM version in either string or `version` object format
+    -- @param v2 Version (optional), TO version in either string or `version` object format
+    -- @return The `set` object, to easy chain multiple allowed/disallowed ranges, or `nil+err`
+    disallowed = function(self, v1, v2)
+      if getmetatable(v1) == mt_range then
+        assert(v2 == nil, "First parameter was a range, second must be nil.")
+        table_insert(self.nok, v1)
+      else
+        local r, err = _range(v1, v2, self.strict)
+        if not r then
+          return nil, err
+        end
+        table_insert(self.nok, r)
+      end
+      return self
+    end,
+
+    --- Matches a version against the set of allowed and disallowed versions.
+    --
+    -- NOTE: `disallowed` has a higher precedence, so a version that matches the `allowed` set,
+    -- but also the `disallowed` set, will return `false`.
+    -- @function set:matches
+    -- @param v1 Version to match (either string or `version` object).
+    -- @return `true` or `false` whether the version matches the set, or `nil+err`
+    matches = function(self, v)
+      if getmetatable(v) ~= mt_version then
+        local parsed, err = _new(v, self.strict)
+        if not parsed then
+          return nil, err
+        end
+        v = parsed
+      end
+
+      local success
+      for _, range in pairs(self.ok) do
+        if range:matches(v) then
+          success = true
+          break
+        end
+      end
+      if not success then
+        return false
+      end
+      for _, range in pairs(self.nok) do
+        if range:matches(v) then
+          return false
+        end
+      end
+      return true
+    end,
+  },
+  __tostring = function(self)
+    local ok, nok
+    if #self.ok == 1 then
+      ok = tostring(self.ok[1])
+    elseif #self.ok > 1 then
+      ok = tostring(self.ok[1])
+      for i = 2, #self.ok - 1 do
+        ok = ok .. ", " .. tostring(self.ok[i])
+      end
+      ok = ok .. ", and " .. tostring(self.ok[#self.ok])
+    end
+    if #self.nok == 1 then
+      nok = tostring(self.nok[1])
+    elseif #self.nok > 1 then
+      nok = tostring(self.nok[1])
+      for i = 2, #self.nok - 1 do
+        nok = nok .. ", " .. tostring(self.nok[i])
+      end
+      nok = nok .. ", and " .. tostring(self.nok[#self.nok])
+    end
+    if ok and nok then
+      return ok .. ", but not " .. nok
+    else
+      return ok
+    end
+  end,
+}
+
+_new = function(v, strict)
+  v = tostring(v)
+  if strict then
+    -- edge case: do not allow trailing dot
+    if v:sub(-1, -1) == "." then
+      return nil, "Not a valid version element: '" .. tostring(v) .. "'"
+    end
+  else
+    local m = v:match("(%d[%d%.]*)")
+    if not m then
+      return nil, "Not a valid version element: '" .. tostring(v) .. "'"
+    end
+    v = m
+  end
+  local t = split(v, "%.")
+  for i, s in ipairs(t) do
+    local n = tonumber(s)
+    if not n then
+      return nil, "Not a valid version element: '" .. tostring(v) .. "'"
+    end
+    t[i] = n
+  end
+  t.strict = strict
+  return setmetatable(t, mt_version)
+end
+
+_range = function(v1, v2, strict)
+  local err
+  assert(v1 or v2, "At least one parameter is required")
+  v1 = v1 or "0"
+  v2 = v2 or v1
+  if getmetatable(v1) ~= mt_version then
+    v1, err = _new(v1, strict)
+    if not v1 then
+      return nil, err
+    end
+  end
+  if getmetatable(v2) ~= mt_version then
+    v2, err = _new(v2, strict)
+    if not v2 then
+      return nil, err
+    end
+  end
+  if v1 > v2 then
+    return nil, "FROM version must be less than or equal to the TO version"
+  end
+
+  return setmetatable({
+    from = v1,
+    to = v2,
+    strict = strict,
+  }, mt_range)
+end
+
+_set = function(v1, v2, strict)
+  return setmetatable({
+    ok = {},
+    nok = {},
+    strict = strict,
+  }, mt_set):allowed(v1, v2)
+end
+
+local make_module = function(strict)
+  return setmetatable({
+    --- Creates a new version object from a string.
+    -- The returned table will have
+    -- comparison operators, eg. LT, EQ, GT. For all comparisons, any missing numbers
+    -- will be assumed to be "0" on the least significant side of the version string.
+    --
+    -- Calling on the module table is a shortcut to `new`.
+    -- @param v String formatted as numbers separated by dots (no limit on number of elements).
+    -- @return `version` object, or `nil+err`
+    -- @usage local v = version.new("0.1")
+    -- -- is identical to
+    -- local v = version("0.1")
+    --
+    -- print(v)     --> "0.1"
+    -- print(v[1])  --> 0
+    -- print(v[2])  --> 1
+    new = function(v)
+      return _new(v, strict)
+    end,
+
+    --- Creates a version range.  A `range` object represents a range of versions.
+    -- @param v1 The FROM version of the range (string or `version` object). If `nil`, assumed to be 0.
+    -- @param v2 (optional) The TO version of the range (string or `version` object). Defaults to `v1`.
+    -- @return range object with `from` and `to` fields and `set:matches` method, or `nil+err`.
+    -- @usage local r = version.range("0.1"," 2.4")
+    --
+    -- print(v.from)     --> "0.1"
+    -- print(v.to[1])    --> 2
+    -- print(v.to[2])    --> 4
+    range = function(v1, v2)
+      return _range(v1, v2, strict)
+    end,
+
+    --- Creates a version set.
+    -- A `set` is an object that contains a number of allowed and disallowed version `range` objects.
+    -- @param v1 initial version/range to allow, see `set:allowed` for parameter descriptions
+    -- @param v2 initial version/range to allow, see `set:allowed` for parameter descriptions
+    -- @return a `set` object, with `ok` and `nok` lists and a `set:matches` method, or `nil+err`
+    set = function(v1, v2)
+      return _set(v1, v2, strict)
+    end,
+  }, {
+    __call = function(self, ...)
+      return self.new(...)
+    end,
+  })
+end
+
+local _M = make_module(false)
+--- Similar module, but with stricter parsing rules.
+-- `version.strict` is identical to the `version` module itself, but it requires
+-- exact version strings, where as the regular parser will simply grab the
+-- first sequence of numbers and dots from the string.
+-- @field strict same module, but for stricter parsing.
+_M.strict = make_module(true)
+
+version_lib = _M
+end
+-- ===== END BUNDLED vendor/version.lua =====
+
+-- ===== BUNDLED FROM vendor/lib_helpers.lua =====
+do
+-- Helper functions extracted from the control4-driver-template's
+-- src/lib/utils.lua and vendor/drivers-common-public/global/lib.lua. Only the
+-- helpers actually referenced by github-updater.lua + http.lua + version.lua
+-- (transitively) live here, hand-trimmed to avoid pulling in the full
+-- ~1,500-line drivers-common-public/global/lib.lua plus its url/handlers
+-- cascade.
+--
+-- Sources (template paths, copied/adapted verbatim where possible):
+--   - utils.lua: IsEmpty, Select (utils.lua uses lib.lua's), TableReverse,
+--                TableKeys, InRange, toboolean, reject, resolve
+--   - lib.lua:   Select, XMLEncode, XMLTag (simplified), FileRead, FileWrite
+--
+-- Returned via the bundler as a sentinel table (`lib_helpers`); the file
+-- assigns its functions as Lua GLOBALS so callers (github-updater.lua, etc.)
+-- can reference them without aliasing.
+
+--------------------------------------------------------------------------------
+-- Selection / nil-safety
+--------------------------------------------------------------------------------
+
+function Select(data, ...)
+    if type(data) ~= "table" then return nil end
+    local args = { ... }
+    local n = select("#", ...)
+    local ret = data
+    local i = 1
+    while ret ~= nil and i <= n do
+        if args[i] == nil then return nil end
+        ret = ret[args[i]]
+        i = i + 1
+    end
+    return ret
+end
+
+function IsEmpty(value)
+    if value == nil then return true end
+    local t = type(value)
+    if t == "string" then return value == "" end
+    if t == "table" then return next(value) == nil end
+    if t == "number" then return value == 0 end
+    if t == "boolean" then return not value end
+    return false
+end
+
+--------------------------------------------------------------------------------
+-- Table helpers
+--------------------------------------------------------------------------------
+
+function TableKeys(t)
+    if type(t) ~= "table" then return {} end
+    local keys = {}
+    for k, _ in pairs(t) do table.insert(keys, k) end
+    return keys
+end
+
+function TableReverse(t)
+    local r = {}
+    for k, v in pairs(t) do r[v] = k end
+    return r
+end
+
+--------------------------------------------------------------------------------
+-- Coercions
+--------------------------------------------------------------------------------
+
+function toboolean(val)
+    if type(val) == "string" then
+        local lv = string.lower(val)
+        return lv == "true" or lv == "yes" or val == "1" or lv == "on"
+    elseif type(val) == "number" then
+        return val ~= 0
+    elseif type(val) == "boolean" then
+        return val
+    end
+    return false
+end
+
+function InRange(n, min, max)
+    if n == nil then return nil end
+    if min ~= nil then n = math.max(min, n) end
+    if max ~= nil then n = math.min(max, n) end
+    return n
+end
+
+--------------------------------------------------------------------------------
+-- Deferred convenience constructors. Require the `deferred` global to be in
+-- scope already (bundle.sh splices vendor/deferred.lua before lib_helpers).
+--------------------------------------------------------------------------------
+
+function reject(err)
+    return deferred.new():reject(err)
+end
+
+function resolve(value)
+    return deferred.new():resolve(value)
+end
+
+--------------------------------------------------------------------------------
+-- File ops (wraps the C4 file API the github-updater uses for writing the
+-- downloaded .c4z payload). Lifted from drivers-common-public/global/lib.lua.
+--------------------------------------------------------------------------------
+
+function FileRead(filename)
+    local content = ""
+    if C4:FileExists(filename) then
+        local file = C4:FileOpen(filename)
+        local length = C4:FileGetSize(file)
+        C4:FileSetPos(file, 0)
+        content = C4:FileRead(file, length)
+        C4:FileClose(file)
+    end
+    return content
+end
+
+function FileWrite(filename, content, overwrite)
+    content = tostring(content) or ""
+    local pos = 0
+    if overwrite and C4:FileExists(filename) then
+        C4:FileDelete(filename)
+    end
+    local file = C4:FileOpen(filename)
+    if not overwrite then
+        pos = C4:FileGetSize(file)
+    end
+    C4:FileSetPos(file, pos)
+    C4:FileWrite(file, content:len(), content)
+    C4:FileClose(file)
+end
+
+--------------------------------------------------------------------------------
+-- Driver-version lookup. The template's GetDriverVersion(filename) parses the
+-- target driver's XML via xml2lua. We have a single driver and the value is
+-- already in DRIVER_VERSION, so this short-circuits to that.
+--------------------------------------------------------------------------------
+
+function GetDriverVersion(filename)
+    return DRIVER_VERSION
+end
+
+--------------------------------------------------------------------------------
+-- XML helpers — just enough to build the c4soap UpdateProjectC4i SOAP packet
+-- the updater sends to Composer (127.0.0.1:5020).
+--------------------------------------------------------------------------------
+
+function XMLEncode(value)
+    if value == nil then return "" end
+    value = tostring(value)
+    value = value:gsub("&", "&amp;")
+    value = value:gsub("<", "&lt;")
+    value = value:gsub(">", "&gt;")
+    value = value:gsub('"', "&quot;")
+    value = value:gsub("'", "&apos;")
+    return value
+end
+
+-- Trimmed XMLTag: handles the github-updater's exact call shape. Supports
+-- string content + attribute table. Falls back to template behavior for the
+-- nested call.
+--
+-- Call shapes the updater uses:
+--   XMLTag("param", "filename.c4i", nil, nil, { name = "name", type = "string" })
+--     -> <param name="name" type="string">filename.c4i</param>
+--   XMLTag("c4soap", "<param.../>", false, false, { name="UpdateProjectC4i", ... })
+--     -> <c4soap name="UpdateProjectC4i" ...><param.../></c4soap>
+function XMLTag(strName, content, tagSubTables, xmlEncodeElements, tAttribs)
+    local parts = { "<", strName }
+    if type(tAttribs) == "table" then
+        local keys = TableKeys(tAttribs)
+        table.sort(keys)
+        for _, k in ipairs(keys) do
+            table.insert(parts, " ")
+            table.insert(parts, tostring(k))
+            table.insert(parts, '="')
+            table.insert(parts, XMLEncode(tostring(tAttribs[k])))
+            table.insert(parts, '"')
+        end
+    end
+    table.insert(parts, ">")
+    if type(content) == "string" then
+        if xmlEncodeElements == false then
+            table.insert(parts, content)
+        else
+            table.insert(parts, XMLEncode(content))
+        end
+    end
+    table.insert(parts, "</")
+    table.insert(parts, strName)
+    table.insert(parts, ">")
+    return table.concat(parts)
+end
+
+-- C4Z_ROOT is the symbolic directory name passed to C4:FileSetDir. The
+-- template defines it as a literal string; replicate that.
+C4Z_ROOT = C4Z_ROOT or "C4Z_ROOT"
+
+-- The bundler expects the file to end with a `return` statement and an
+-- assignment global. We don't have a singleton to return; provide an empty
+-- marker table so the bundler succeeds.
+lib_helpers = {}
+end
+-- ===== END BUNDLED vendor/lib_helpers.lua =====
+
+-- ===== BUNDLED FROM vendor/http.lua =====
+do
+-- Slim HTTP client wrapping C4:urlGet/urlPost/urlPut/urlDelete with deferred
+-- promises. Replaces the template's lib/http.lua (which depends on the much
+-- larger drivers-common-public/global/url.lua) for the narrow set of calls
+-- github-updater.lua makes.
+--
+-- Async wiring: C4:urlGet(url, headers, encrypted, callback, flags) returns a
+-- ticket; the global ReceivedAsync(ticket, body, code, headers, err) handler
+-- delivers the response. We register a per-ticket callback in a module-local
+-- table so concurrent in-flight requests dispatch correctly. The top-level
+-- ReceivedAsync dispatcher in src/driver.lua calls our
+-- handleAsyncResponse(ticket, ...) for each incoming response.
+--
+-- Returned via the bundler as the global `http_client`.
+
+local Http = {}
+Http.__index = Http
+
+local _pending = {}
+
+function Http:new()
+    return setmetatable({}, self)
+end
+
+--- Dispatch table entry for an async response. Returns true if the ticket
+--- belongs to us and was handled; false otherwise (so the dispatcher can try
+--- other consumers).
+function Http.handleAsyncResponse(ticket, body, responseCode, headers, err)
     local entry = _pending[ticket]
     if not entry then return false end
     _pending[ticket] = nil
-    if entry.watchdog and C4 and C4.KillTimer and entry.watchdog ~= nil then
-        pcall(C4.KillTimer, C4, entry.watchdog)
-    end
-    local ok, callErr = pcall(entry.cb, body, responseCode, err)
-    if not ok then
-        if dbg_err then dbg_err("github_updater callback error: " .. tostring(callErr)) end
+    local ok, callErr = pcall(entry.cb, body, responseCode, headers, err)
+    if not ok and dbg_err then
+        dbg_err("http_client callback error: " .. tostring(callErr))
     end
     return true
 end
 
---- Number of seconds to wait for a response before garbage-collecting a
---- ticket whose callback never fired. Bounds memory growth across many
---- driver restarts where C4:urlGet hands out a ticket but the network
---- request never completes.
-local TICKET_WATCHDOG_SEC = 60
-
---- Fetch the latest release tag from GitHub and invoke `callback` with one of:
----   { available = true,  current = "X", latest = "Y" }   -- newer version found
----   { available = false, current = "X", latest = "Y" }   -- already up-to-date
----   { available = false, err = "..." }                    -- fetch/parse failure
-function Updater:check(callback)
-    if type(callback) ~= "function" then return end
-    if self.repo == "" then
-        callback({ available = false, err = "no repo configured" })
-        return
-    end
-    if not C4 or type(C4.urlGet) ~= "function" then
-        callback({ available = false, err = "C4:urlGet not available" })
-        return
-    end
-
-    local url = "https://api.github.com/repos/" .. self.repo .. "/releases/latest"
-    local headers = {
-        Accept = "application/vnd.github.v3+json",
-        ["User-Agent"] = "proflame_c4",
-    }
-
-    local current = DRIVER_VERSION or ""
-
-    local ok, ticket = pcall(function()
-        return C4:urlGet(url, headers)
-    end)
-    if not ok or ticket == nil then
-        callback({ available = false, err = "urlGet failed: " .. tostring(ticket) })
-        return
-    end
-
-    local cb = function(body, responseCode, err)
-        if err and err ~= "" then
-            callback({ available = false, err = "http error: " .. tostring(err) })
-            return
-        end
-        if responseCode and tonumber(responseCode) and tonumber(responseCode) >= 400 then
-            local snippet = (body and tostring(body):sub(1, 200)) or ""
-            callback({ available = false, err = "http " .. tostring(responseCode) .. ": " .. snippet })
-            return
-        end
-        if not body or body == "" then
-            callback({ available = false, err = "empty response (code=" .. tostring(responseCode) .. ")" })
-            return
-        end
-        local decodeOk, data = pcall(JSON.decode, JSON, body)
-        if not decodeOk or type(data) ~= "table" or type(data.tag_name) ~= "string" then
-            callback({ available = false, err = "invalid JSON response" })
-            return
-        end
-        -- Tag scheme: v2026053101 -> 2026053101. Strip optional leading 'v'.
-        local latest = data.tag_name:gsub("^v", "")
-        -- DRIVER_VERSION is a date-stamp like "2026060103"; lexicographic
-        -- ordering matches chronological ordering for fixed-width date stamps,
-        -- so string comparison is correct here.
-        local available = latest > current
-        callback({ available = available, current = current, latest = latest })
-    end
-
-    -- Schedule a watchdog so a ticket that never receives a ReceivedAsync
-    -- response gets cleared from _pending after TICKET_WATCHDOG_SEC. Uses
-    -- C4:SetTimer if available; falls back to no-cleanup (memory leak is
-    -- bounded by driver-load cadence, which is infrequent).
-    local watchdog
-    if C4 and type(C4.SetTimer) == "function" then
-        local ok, t = pcall(C4.SetTimer, C4, TICKET_WATCHDOG_SEC * 1000, function()
-            local stale = _pending[ticket]
-            if stale then
-                _pending[ticket] = nil
-                pcall(stale.cb, nil, 0, "watchdog: no response after " .. TICKET_WATCHDOG_SEC .. "s")
-            end
-        end, false)
-        if ok then watchdog = t end
-    end
-
-    _pending[ticket] = { cb = cb, watchdog = watchdog }
+local function build_result(url, code, body, headers)
+    return { url = url, code = code, body = body, headers = headers or {} }
 end
 
-github_updater = Updater:new("psaab/proflame_c4")
+function Http:request(method, url, data, headers, options)
+    local d = deferred.new()
+    headers = headers or {}
+    options = options or {}
+
+    if not C4 or type(C4.urlGet) ~= "function" then
+        d:reject({ error = "C4 url* APIs not available", url = url })
+        return d
+    end
+
+    local cb = function(body, responseCode, respHeaders, err)
+        local code = tonumber(responseCode) or 0
+        -- Match the template's behavior: when the body parses as JSON,
+        -- surface the decoded value rather than the raw string. Callers
+        -- (e.g. github-updater) iterate response.body with pairs() and
+        -- expect a table for JSON endpoints.
+        local decoded_body = body
+        if type(body) == "string" and body ~= "" then
+            local ok, parsed = pcall(JSON.decode, JSON, body)
+            if ok and type(parsed) == "table" then
+                decoded_body = parsed
+            end
+        end
+        local result = build_result(url, code, decoded_body, respHeaders)
+        if err and err ~= "" then
+            result.error = string.format("HTTP %s %s failed: %s", method, url, tostring(err))
+            d:reject(result)
+        elseif code < 200 or code >= 300 then
+            result.error = string.format("HTTP %s %s status %d", method, url, code)
+            d:reject(result)
+        else
+            d:resolve(result)
+        end
+    end
+
+    local ok, ticket = pcall(function()
+        if method == "GET" then
+            return C4:urlGet(url, headers, false, ReceivedAsync, {})
+        elseif method == "POST" then
+            return C4:urlPost(url, data or "", headers, false, ReceivedAsync, {})
+        elseif method == "PUT" then
+            return C4:urlPut(url, data or "", headers, false, ReceivedAsync, {})
+        elseif method == "DELETE" then
+            return C4:urlDelete(url, headers, false, ReceivedAsync, {})
+        else
+            error("unsupported HTTP method: " .. tostring(method))
+        end
+    end)
+
+    if not ok or ticket == nil then
+        d:reject({ error = "url request failed: " .. tostring(ticket), url = url })
+        return d
+    end
+
+    _pending[ticket] = { cb = cb }
+    return d
+end
+
+function Http:get(url, headers, options)
+    return self:request("GET", url, nil, headers, options)
+end
+
+function Http:post(url, data, headers, options)
+    return self:request("POST", url, data, headers, options)
+end
+
+function Http:put(url, data, headers, options)
+    return self:request("PUT", url, data, headers, options)
+end
+
+function Http:delete(url, headers, options)
+    return self:request("DELETE", url, headers, options)
+end
+
+http_client = Http:new()
+end
+-- ===== END BUNDLED vendor/http.lua =====
+
+-- ===== BUNDLED FROM vendor/github_updater.lua =====
+do
+--- A utility module for updating drivers from GitHub releases.
+--- This module provides functionality to check for, download, and install driver updates from GitHub repositories.
+
+-- Adapted from upstream control4-driver-template: the bundler hands us
+-- globals named http_client / log / deferred / version_lib instead of Lua
+-- require()s. Alias them to the names the original module body expects.
+local http = http_client
+local log = log
+local deferred = deferred
+local version = version_lib
+
+--- Utility class for updating drivers from GitHub releases.
+--- @class GitHubUpdater
+local GitHubUpdater = {}
+GitHubUpdater.__index = GitHubUpdater
+
+--- Default headers for all HTTP requests to GitHub.
+--- @type table<string, string>
+local DEFAULT_HEADERS = {
+  ["User-Agent"] = "curl/8.1.2",
+  Accept = "*/*",
+}
+
+--- Create a new instance of GitHubUpdater.
+--- @return GitHubUpdater updater A new GitHubUpdater instance.
+function GitHubUpdater:new()
+  local instance = setmetatable({}, self)
+  return instance
+end
+
+--- Retrieve the latest release from a GitHub repository.
+--- @param repo string The GitHub repository, in the format "owner/repo".
+--- @param includePrereleases? boolean If true, includes pre-releases (optional).
+--- @return Deferred<table|nil, string> latestRelease Deferred resolving to the latest release table, or rejected with an error message.
+--- @diagnostic disable-next-line: unused
+function GitHubUpdater:getLatestRelease(repo, includePrereleases)
+  log:trace("GitHubUpdater:getLatestRelease(%s, %s)", repo, includePrereleases)
+  if IsEmpty(repo) then
+    return reject("repo name is required")
+  end
+  return http:get("https://api.github.com/repos/" .. repo .. "/releases", DEFAULT_HEADERS):next(function(response)
+    for _, release in pairs(response.body or {}) do
+      local releaseVersion, err = version(release.tag_name)
+      if IsEmpty(err) then
+        if not release.draft and (toboolean(includePrereleases) or not release.prerelease) then
+          release.version = releaseVersion
+          return release
+        end
+      else
+        log:warn("repo %s release '%s' has an invalid tag version '%s'", repo, release.name, release.tag_name)
+      end
+    end
+    return reject(string.format("repo %s does not have any valid releases", repo))
+  end, function(response)
+    return reject(response.error)
+  end)
+end
+
+--- Identify assets for driver files that are outdated compared to the latest GitHub release.
+--- @param repo string The GitHub repository, in the format "owner/repo".
+--- @param driverFilenames string[] List of driver filenames to check.
+--- @param includePrereleases? boolean If true, includes pre-releases (optional).
+--- @param forceUpdate? boolean If true, all assets will be treated as outdated regardless of version (optional).
+--- @return Deferred<table[], string> outdatedAssets Deferred resolving to a list of assets to be updated, or rejected with an error message.
+function GitHubUpdater:getOutdatedDriverAssets(repo, driverFilenames, includePrereleases, forceUpdate)
+  log:trace(
+    "GitHubUpdater:getOutdatedDriverAssets(%s, %s, %s, %s)",
+    repo,
+    driverFilenames,
+    includePrereleases,
+    forceUpdate
+  )
+  if IsEmpty(driverFilenames) then
+    return reject(string.format("at least one driver filename is required to check for updates"))
+  end
+  -- Determine the minimum driver version from the provided filenames; this determines if an update is needed.
+  local minDriverVersion
+  for _, driverFilename in pairs(driverFilenames) do
+    local driverVersion, err = version(GetDriverVersion(driverFilename))
+    if not IsEmpty(err) then
+      return reject(string.format("failed to determine the current %s driver version", driverFilename))
+    elseif minDriverVersion == nil or minDriverVersion > driverVersion then
+      minDriverVersion = driverVersion
+    end
+  end
+
+  return self:getLatestRelease(repo, includePrereleases):next(function(latestRelease)
+    if not forceUpdate and latestRelease.version <= minDriverVersion then
+      return {}
+    end
+    --- @type table[]
+    local assets = {}
+    local driverFilenamesMap = TableReverse(driverFilenames)
+    for _, asset in pairs(Select(latestRelease, "assets") or {}) do
+      local assetName = Select(asset, "name")
+      if driverFilenamesMap[assetName] ~= nil then
+        driverFilenamesMap[assetName] = nil
+        table.insert(assets, asset)
+      end
+    end
+    if not IsEmpty(driverFilenamesMap) then
+      return reject(
+        string.format(
+          "repo %s latest release does not have the following asset(s): %s",
+          repo,
+          table.concat(TableKeys(driverFilenamesMap), ", ")
+        )
+      )
+    end
+    return assets
+  end)
+end
+
+--- Download outdated driver assets from GitHub and write them to the specified directory.
+--- @param dir string Target directory to save downloaded driver assets.
+--- @param repo string The GitHub repository, in the format "owner/repo".
+--- @param driverFilenames string[] List of driver filenames to update.
+--- @param includePrereleases? boolean If true, includes pre-releases (optional).
+--- @param forceUpdate? boolean Optional. If true, downloads all drivers regardless of version (optional).
+--- @return Deferred<string[], table<number, string>> outdatedDrivers Deferred resolving to a list of successfully downloaded driver filenames, or rejected with a table of error messages indexed by number.
+function GitHubUpdater:downloadOutdatedDrivers(dir, repo, driverFilenames, includePrereleases, forceUpdate)
+  log:trace(
+    "GitHubUpdater:downloadOutdatedDrivers(%s, %s, %s, %s, %s)",
+    dir,
+    repo,
+    driverFilenames,
+    includePrereleases,
+    forceUpdate
+  )
+  return self:getOutdatedDriverAssets(repo, driverFilenames, includePrereleases, forceUpdate):next(function(assets)
+    --- @type Deferred<string, string>[]
+    local downloads = {}
+    for _, asset in pairs(assets) do
+      if IsEmpty(asset.browser_download_url) then
+        return reject(string.format("repo %s latest release asset %s download is unavailable", repo, asset.name))
+      end
+
+      --- @type Deferred<string, string>
+      local download = http:get(asset.browser_download_url, DEFAULT_HEADERS):next(function(response)
+        local downloadSize = string.len(response.body)
+        if downloadSize < 1 then
+          return reject(string.format("asset %s download is empty", asset.name))
+        end
+        C4:FileSetDir(dir)
+        local currentContents = C4:FileExists(asset.name) and FileRead(asset.name) or nil
+        if FileWrite(asset.name, response.body, true) == -1 then
+          -- Restore the previous contents if the write failed
+          if currentContents ~= nil then
+            FileWrite(asset.name, currentContents, true)
+          end
+          return reject(string.format("failed to download asset %s", asset.name))
+        end
+        log:info("Downloaded asset %s (%d bytes)", asset.name, downloadSize)
+        return asset.name
+      end, function(response)
+        return reject(response.error)
+      end)
+
+      table.insert(downloads, download)
+    end
+    return deferred.all(downloads)
+  end)
+end
+
+--- Update all given drivers to the latest release from GitHub.
+--- Downloads new drivers, writes them, and sends them for update over TCP to the local system.
+--- @param repo string The GitHub repository, in the format "owner/repo".
+--- @param driverFilenames string[] List of driver filenames to update.
+--- @param includePrereleases? boolean If true, includes pre-releases (optional).
+--- @param forceUpdate? boolean If true, runs update even if drivers are up to date (optional).
+--- @return Deferred<string[], table<number, string>> updatedDrivers Deferred resolving to a list of updated driver filenames, or rejected with an error table.
+function GitHubUpdater:updateAll(repo, driverFilenames, includePrereleases, forceUpdate)
+  log:trace("GitHubUpdater:updateAll(%s, %s, %s, %s)", repo, driverFilenames, includePrereleases, forceUpdate)
+  -- Only update drivers that are already installed.
+  local installedDriverFilenames = {}
+  for _, driverFilename in pairs(driverFilenames) do
+    if not IsEmpty(C4:GetDevicesByC4iName(driverFilename) or {}) then
+      table.insert(installedDriverFilenames, driverFilename)
+    end
+  end
+
+  return self
+    :downloadOutdatedDrivers("C4Z_ROOT", repo, installedDriverFilenames, includePrereleases, forceUpdate)
+    :next(function(downloadedDriverFilenames)
+      --- @type Deferred<string[], table<number, string>>
+      local d = deferred.new()
+      if IsEmpty(downloadedDriverFilenames) then
+        return d:resolve(downloadedDriverFilenames)
+      end
+
+      C4:CreateTCPClient()
+        :OnConnect(function(client)
+          for _, driverFilename in pairs(downloadedDriverFilenames) do
+            local c4soap = XMLTag(
+              "c4soap",
+              XMLTag("param", driverFilename, nil, nil, {
+                name = "name",
+                type = "string",
+              }),
+              false,
+              false,
+              {
+                name = "UpdateProjectC4i",
+                session = "0",
+                operation = "RWX",
+                category = "composer",
+                async = "0",
+              }
+            ) .. "\0"
+            client:Write(c4soap)
+          end
+          client:Close()
+          d:resolve(downloadedDriverFilenames)
+        end)
+        :OnError(function(client, errCode, errMsg)
+          client:Close()
+          d:reject("Error " .. errCode .. ": " .. errMsg)
+        end)
+        :Connect("127.0.0.1", 5020)
+      return d
+    end)
+end
+
+github_updater = GitHubUpdater:new()
 end
 -- ===== END BUNDLED vendor/github_updater.lua =====
 
@@ -4415,6 +5816,9 @@ function ExecuteCommand(strCommand, tParams)
         return CommandSetTimerMinutes(minutes)
     elseif strCommand == "Cancel Timer" then
         return CommandCancelTimer()
+    elseif strCommand == "Install Latest Release" then
+        InstallLatestReleaseNow()
+        return true
     end
 
     dbg_err("Unhandled ExecuteCommand: " .. tostring(strCommand))
@@ -4682,45 +6086,57 @@ function LogDriverVersionTransition()
     persist:set(PERSIST_KEY_LAST_VERSION, DRIVER_VERSION)
 end
 
--- Persistence key for the timestamp (os.time()) of the last successful update
--- check. CheckForUpdatesIfDue() skips a fresh check when the last one was
--- within UPDATE_CHECK_INTERVAL_SEC.
-PERSIST_KEY_LAST_UPDATE_CHECK = "proflame.last_update_check_at"
-UPDATE_CHECK_INTERVAL_SEC = 86400 -- 24h
+-- Repo + filename used by the full github-updater. Single-driver setup, so
+-- we hard-code the filename of our .c4z install.
+GITHUB_UPDATER_REPO = "psaab/proflame_c4"
+GITHUB_UPDATER_FILENAMES = { "proflame_wifi_connect.c4z" }
 
-function CheckForUpdatesIfDue()
-    local now = os.time()
-    local last = persist:get(PERSIST_KEY_LAST_UPDATE_CHECK, 0)
-    if type(last) == "number" and (now - last) < UPDATE_CHECK_INTERVAL_SEC then
+-- Tracks an in-flight Install Latest Release attempt so the Composer property
+-- can show progress.
+gUpdateInProgress = false
+
+function UpdateUpdateStatusProperty(text)
+    pcall(C4.UpdateProperty, C4, "Update Status", tostring(text or ""))
+end
+
+-- Trigger the full template github_updater. Downloads any .c4z whose
+-- DRIVER_VERSION is older than the latest release tag, writes it to
+-- C4Z_ROOT, then drives Composer's local SOAP endpoint to install it.
+-- Status updates surface in the "Update Status" property.
+function InstallLatestReleaseNow()
+    if gUpdateInProgress then
+        dbg_err("Install Latest Release ignored: an install is already running")
+        UpdateUpdateStatusProperty("Install already running")
         return
     end
-    persist:set(PERSIST_KEY_LAST_UPDATE_CHECK, now)
-    github_updater:check(function(result)
-        if result.err then
-            dbg_all("Update check failed: " .. tostring(result.err))
-            return
-        end
-        if result.available then
-            dbg_err(
-                "Update available: " .. tostring(result.latest)
-                    .. " (current: " .. tostring(result.current) .. "). "
-                    .. "Download .c4z from https://github.com/psaab/proflame_c4/releases"
-            )
+    gUpdateInProgress = true
+    UpdateUpdateStatusProperty("Checking GitHub for the latest release...")
+    dbg_err("InstallLatestReleaseNow: starting")
+
+    local d = github_updater:updateAll(GITHUB_UPDATER_REPO, GITHUB_UPDATER_FILENAMES, false, false)
+    d:next(function(updated)
+        gUpdateInProgress = false
+        if not updated or #updated == 0 then
+            UpdateUpdateStatusProperty("Already up to date (" .. DRIVER_VERSION .. ")")
+            dbg_err("InstallLatestReleaseNow: no update needed")
         else
-            dbg_all(
-                "Driver up to date: current " .. tostring(result.current)
-                    .. " == latest " .. tostring(result.latest)
-            )
+            UpdateUpdateStatusProperty("Installed: " .. table.concat(updated, ", ") .. " (controller may reload driver)")
+            dbg_err("InstallLatestReleaseNow: triggered Composer install of " .. table.concat(updated, ", "))
         end
+    end, function(err)
+        gUpdateInProgress = false
+        local msg = type(err) == "string" and err or (err and err.error) or "unknown error"
+        UpdateUpdateStatusProperty("Failed: " .. tostring(msg))
+        dbg_err("InstallLatestReleaseNow: failed - " .. tostring(msg))
     end)
 end
 
--- Top-level async response dispatcher. C4 invokes this for every C4:urlGet
--- ticket the driver has in flight; route to the github_updater module which
--- maintains its own ticket -> callback table. If a future feature uses
--- C4:urlGet for a different purpose, add an `elseif` branch here.
+-- Top-level async response dispatcher. C4 invokes this for every urlGet/Post
+-- ticket the driver has in flight; route to http_client which maintains its
+-- own ticket -> callback table. Future C4:urlGet consumers add their own
+-- `elseif` branch here.
 function ReceivedAsync(ticket, body, responseCode, headers, err)
-    if github_updater.handleAsyncResponse(ticket, body, responseCode, headers, err) then
+    if http_client.handleAsyncResponse(ticket, body, responseCode, headers, err) then
         return
     end
     dbg_all("ReceivedAsync ticket " .. tostring(ticket) .. " had no registered handler")
@@ -4734,12 +6150,9 @@ function OnDriverLateInit()
     -- Surface upgrades/downgrades + first-install in the log.
     pcall(LogDriverVersionTransition)
 
-    -- Once-per-day check against GitHub Releases for newer driver versions.
-    -- Log-only; never auto-installs. Delay 30s after init so the connection
-    -- to the fireplace gets priority on the boot path.
-    pcall(function()
-        C4:SetTimer(30 * 1000, function() pcall(CheckForUpdatesIfDue) end, false)
-    end)
+    -- Update checking is now manual-trigger only via the "Install Latest
+    -- Release" Composer command (see ExecuteCommand). No periodic polling
+    -- happens during driver load.
 
     dbg_err("OnDriverLateInit - Build: " .. BUILD_TIMESTAMP)
     local success, err = pcall(function()
