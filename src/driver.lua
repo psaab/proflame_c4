@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026060105"
+DRIVER_VERSION = "2026060106"
 DRIVER_DATE = "2026-06-01"
 
 NETWORK_BINDING_ID = 6001
@@ -114,7 +114,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260601-000005"
+BUILD_TIMESTAMP = "20260601-000006"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -242,10 +242,6 @@ gState = {
 
 function Log(msg, level)
     log:log(level or log.LogLevel.INFO, "%s", tostring(msg))
-end
-
-function dbg(msg)
-    log:error("%s", tostring(msg))
 end
 
 function dbg_err(msg)
@@ -2453,8 +2449,21 @@ function InstallLatestReleaseNow()
     d:next(function(updated)
         gUpdateInProgress = false
         if not updated or #updated == 0 then
-            UpdateUpdateStatusProperty("Already up to date (" .. DRIVER_VERSION .. ")")
-            dbg_err("InstallLatestReleaseNow: no update needed")
+            -- updateAll resolves with an empty list in three cases:
+            --   (a) DRIVER_VERSION already equals the latest release tag
+            --   (b) the latest release has no asset whose name matches
+            --       GITHUB_UPDATER_FILENAMES
+            --   (c) C4:GetDevicesByC4iName returned no installed driver, so
+            --       the filter dropped every entry before download
+            -- We can't disambiguate from the resolve value alone, but the
+            -- common case is (a). Surface a message that doesn't claim a
+            -- specific cause when none is provable.
+            UpdateUpdateStatusProperty(
+                "No install applied (current: " .. DRIVER_VERSION
+                    .. "). If a release exists with a newer tag, verify its asset is named "
+                    .. table.concat(GITHUB_UPDATER_FILENAMES, ", ")
+            )
+            dbg_err("InstallLatestReleaseNow: no update applied (current=" .. DRIVER_VERSION .. ")")
         else
             UpdateUpdateStatusProperty("Installed: " .. table.concat(updated, ", ") .. " (controller may reload driver)")
             dbg_err("InstallLatestReleaseNow: triggered Composer install of " .. table.concat(updated, ", "))

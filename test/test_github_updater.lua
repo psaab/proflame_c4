@@ -73,7 +73,8 @@ ReceivedAsync(releases_ticket, JsonEncode({
     { tag_name = DRIVER_VERSION, draft = false, prerelease = false, assets = {} }
 }), 200, {}, nil)
 
-Test.assertEqual(install_result_property, "Already up to date (" .. DRIVER_VERSION .. ")", "up-to-date status surfaced")
+Test.assert(install_result_property:find("No install applied"), "up-to-date resolves to 'No install applied' message")
+Test.assert(install_result_property:find(DRIVER_VERSION), "message includes current version")
 Test.assertEqual(gUpdateInProgress, false, "gUpdateInProgress cleared after success")
 
 --------------------------------------------------------------------------------
@@ -85,6 +86,64 @@ InstallLatestReleaseNow()
 Test.assertEqual(install_result_property, "Install already running", "second trigger ignored with explanation")
 gUpdateInProgress = false
 
+UpdateUpdateStatusProperty = original_UpdateUpdateStatusProperty
+
+--------------------------------------------------------------------------------
+-- 6. http_client watchdog regression guard. After T2d+ replaced the slim
+--    updater with vendor/http.lua, the 60s ticket-watchdog was lost; the
+--    review-cleanup PR restored it. Verify a SetTimer fires for each
+--    outstanding ticket so a stuck request can self-recover.
+--------------------------------------------------------------------------------
+local _timers = {}
+local original_SetTimer = C4.SetTimer
+function C4:SetTimer(delay_ms, fn, repeating)
+    table.insert(_timers, { delay_ms = delay_ms, fn = fn })
+    return #_timers
+end
+
+local watchdog_test_resolved
+local d_wd = http_client:get("https://example.com/will-time-out")
+d_wd:next(
+    function(r) watchdog_test_resolved = { ok = true, body = r.body } end,
+    function(e) watchdog_test_resolved = { ok = false, error = e.error or "(no err)" } end
+)
+Test.assert(#_timers >= 1, "watchdog SetTimer scheduled for outstanding ticket")
+Test.assertEqual(_timers[#_timers].delay_ms, 60000, "watchdog scheduled for 60s")
+
+-- Fire the watchdog without first delivering a real response. This simulates
+-- C4:urlGet handing out a ticket but ReceivedAsync never arriving.
+_timers[#_timers].fn()
+Test.assertEqual(watchdog_test_resolved.ok, false, "watchdog rejects the deferred")
+Test.assert(watchdog_test_resolved.error:find("watchdog"), "watchdog err mentions watchdog")
+
+C4.SetTimer = original_SetTimer
+
+--------------------------------------------------------------------------------
+-- 7. The empty-resolve path now surfaces a useful message rather than
+--    the misleading "Already up to date". P0 fix from the review-cleanup PR.
+--------------------------------------------------------------------------------
+gUpdateInProgress = false
+install_result_property = nil
+UpdateUpdateStatusProperty = function(text) install_result_property = text end
+
+-- Fake updateAll that resolves with an empty list (simulating any of: same
+-- version, no matching asset, no installed driver).
+local original_updateAll = github_updater.updateAll
+github_updater.updateAll = function(self) return deferred.new():resolve({}) end
+InstallLatestReleaseNow()
+Test.assert(
+    install_result_property:find("No install applied"),
+    "empty-resolve produces 'No install applied' not 'Already up to date'"
+)
+Test.assert(
+    install_result_property:find(DRIVER_VERSION),
+    "empty-resolve message includes the current driver version"
+)
+Test.assert(
+    install_result_property:find("proflame_wifi_connect.c4z"),
+    "empty-resolve message names the expected asset filename"
+)
+github_updater.updateAll = original_updateAll
 UpdateUpdateStatusProperty = original_UpdateUpdateStatusProperty
 
 print("test_github_updater OK")
