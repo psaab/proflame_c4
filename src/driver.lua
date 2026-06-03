@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026060201"
+DRIVER_VERSION = "2026060202"
 DRIVER_DATE = "2026-06-03"
 
 NETWORK_BINDING_ID = 6001
@@ -165,8 +165,22 @@ gState = {
 gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
+-- Firmware sub-version accumulator. Populated by ProcessStatusUpdate's
+-- fw_* carve-out (see HANDLED_STATUS_KEYS / KNOWN_IGNORED_STATUS_KEYS
+-- comments). Composed into the read-only "Firmware Versions" Composer
+-- property whenever any of the 5 sub-fields changes. Field-name keys
+-- match the device's wire-format names; presentation order is fixed in
+-- FormatFirmwareVersions().
+gFirmwareVersions = {
+    fw_revision = "",
+    fw_ble = "",
+    fw_ifc_c = "",
+    fw_ifc_s = "",
+    fw_rc = "",
+}
+
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260603-000002"
+BUILD_TIMESTAMP = "20260603-000003"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -282,6 +296,13 @@ gState = {
     timer_status = "0",
     timer_set = "0",
     timer_count = "0"
+}
+gFirmwareVersions = {
+    fw_revision = "",
+    fw_ble = "",
+    fw_ifc_c = "",
+    fw_ifc_s = "",
+    fw_rc = "",
 }
 
 -- =============================================================================
@@ -1481,6 +1502,44 @@ function ScheduleExtrasRefresh(reason, timerOnly)
     end
 end
 
+-- Composes the 5 fw_* sub-fields into a single human-readable string for the
+-- "Firmware Versions" Composer property. Empty sub-fields are omitted so the
+-- display starts populated as the device pushes each one. Presentation order
+-- is fixed (revision first, then BLE/IFC/RC) regardless of which order the
+-- device emits them in.
+function FormatFirmwareVersions()
+    local parts = {}
+    local labels = {
+        { key = "fw_revision", label = "Main" },
+        { key = "fw_ble",      label = "BLE" },
+        { key = "fw_ifc_c",    label = "IFC-C" },
+        { key = "fw_ifc_s",    label = "IFC-S" },
+        { key = "fw_rc",       label = "RC" },
+    }
+    for _, entry in ipairs(labels) do
+        local v = gFirmwareVersions[entry.key]
+        if v and v ~= "" then
+            table.insert(parts, entry.label .. "=" .. tostring(v))
+        end
+    end
+    if #parts == 0 then return "" end
+    return table.concat(parts, ", ")
+end
+
+-- Captures a single firmware sub-field into gFirmwareVersions and re-emits
+-- the composed property. No-op if the value is unchanged (avoids redundant
+-- C4:UpdateProperty calls during the device's initial dump where the same
+-- value may appear multiple times across frames).
+function CaptureFirmwareVersion(key, value)
+    local strValue = tostring(value or "")
+    if gFirmwareVersions[key] == strValue then return end
+    gFirmwareVersions[key] = strValue
+    local formatted = FormatFirmwareVersions()
+    pcall(C4.UpdateProperty, C4, "Firmware Versions", formatted)
+    dbg_info("Firmware " .. tostring(key) .. " = " .. strValue
+        .. " (composed: " .. formatted .. ")")
+end
+
 function ProcessStatusUpdate(status, value)
     if not status or not value then return end
 
@@ -1489,11 +1548,14 @@ function ProcessStatusUpdate(status, value)
     -- guards every reconnect produces ~85 debug log lines; the noise buries
     -- the actually-useful messages.
     if KNOWN_IGNORED_STATUS_KEYS[status] then
-        -- Preserve operator-visible firmware identification until B1 promotes
-        -- the fw_* fields into a dedicated Composer property. Logged at INFO
-        -- so it appears regardless of debug-level configuration.
-        if status == "fw_revision" then
-            dbg_info("Firmware revision reported by device: " .. tostring(value))
+        -- Carve-out: the 5 fw_* sub-fields are KNOWN_IGNORED for the regular
+        -- dispatch path but DO get captured into gFirmwareVersions and
+        -- composed into the "Firmware Versions" Composer property. This keeps
+        -- the firmware-identity surface visible to operators (B1) without
+        -- routing the values through ApplyDeviceStatus / UpdatePropertiesForStatus
+        -- which only know about gState fields.
+        if gFirmwareVersions[status] ~= nil then
+            CaptureFirmwareVersion(status, value)
         end
         return
     end
@@ -2473,7 +2535,14 @@ function ResetDriverState()
         timer_set = "0",
         timer_count = "0"
     }
-    
+    gFirmwareVersions = {
+        fw_revision = "",
+        fw_ble = "",
+        fw_ifc_c = "",
+        fw_ifc_s = "",
+        fw_rc = "",
+    }
+
     dbg_info("Driver state reset")
 end
 

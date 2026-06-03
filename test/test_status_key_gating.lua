@@ -79,19 +79,66 @@ for _, ignored in ipairs({ "en_fan", "rgb_0_intensity",
 end
 
 --------------------------------------------------------------------------------
--- 2b. fw_revision is the carve-out: it's in KNOWN_IGNORED (so the dispatch
---     pipeline is skipped) but produces an INFO log so the firmware version
---     stays operator-visible until B1 promotes it to a Composer property.
+-- 2b. fw_* sub-fields are the B1 carve-out: in KNOWN_IGNORED (the regular
+--     ApplyDeviceStatus dispatch pipeline is skipped) but captured into
+--     gFirmwareVersions and composed into the "Firmware Versions" Composer
+--     property, plus an INFO log per field with the running composition.
 --------------------------------------------------------------------------------
-reset_capture()
-ProcessStatusUpdate("fw_revision", "FW: 625.04.673")
+-- Stub C4:UpdateProperty so we can capture the composed value.
+local _prop_updates = {}
+function C4:UpdateProperty(name, value)
+    _prop_updates[name] = value
+end
+
+local function fw_dispatch(field, value)
+    reset_capture()
+    _prop_updates["Firmware Versions"] = nil
+    ProcessStatusUpdate(field, value)
+end
+
+-- Clear any state from previous test cases (handled-key dispatches earlier
+-- in this file may have touched the firmware accumulator).
+gFirmwareVersions = {
+    fw_revision = "", fw_ble = "", fw_ifc_c = "", fw_ifc_s = "", fw_rc = "",
+}
+
+fw_dispatch("fw_revision", "FW: 625.04.673")
+Test.assertEqual(
+    _prop_updates["Firmware Versions"],
+    "Main=FW: 625.04.673",
+    "fw_revision composes as 'Main=...' in the property"
+)
 Test.assert(
-    any_print_matches("Firmware revision reported by device: FW: 625.04.673"),
-    "fw_revision produces an INFO log even though it's in KNOWN_IGNORED"
+    any_print_matches("Firmware fw_revision = FW: 625.04.673"),
+    "fw_revision dispatch logs at INFO with the composed value"
 )
 Test.assert(
     not any_print_matches("ProcessStatusUpdate:"),
-    "fw_revision INFO does NOT also produce the debug-dispatch log"
+    "fw_revision does NOT route through the normal debug-dispatch log"
+)
+
+fw_dispatch("fw_ble", "1.2.3")
+Test.assertEqual(
+    _prop_updates["Firmware Versions"],
+    "Main=FW: 625.04.673, BLE=1.2.3",
+    "fw_ble appended after Main"
+)
+
+fw_dispatch("fw_ifc_c", "0.0.0")
+fw_dispatch("fw_ifc_s", "ifc-s")
+fw_dispatch("fw_rc", "rc-build")
+Test.assertEqual(
+    _prop_updates["Firmware Versions"],
+    "Main=FW: 625.04.673, BLE=1.2.3, IFC-C=0.0.0, IFC-S=ifc-s, RC=rc-build",
+    "all 5 fw_* fields compose in presentation order regardless of arrival order"
+)
+
+-- Duplicate value should not re-fire UpdateProperty
+fw_dispatch("fw_revision", "FW: 625.04.673")
+Test.assertEqual(
+    _prop_updates["Firmware Versions"],
+    nil,
+    "duplicate fw_* value does NOT re-fire UpdateProperty"
 )
 
 --------------------------------------------------------------------------------
