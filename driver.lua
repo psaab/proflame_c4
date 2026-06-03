@@ -12,7 +12,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026060204"
+DRIVER_VERSION = "2026060301"
 DRIVER_DATE = "2026-06-03"
 
 NETWORK_BINDING_ID = 6001
@@ -4281,6 +4281,3604 @@ end
 github_updater = GitHubUpdater:new()
 end
 -- ===== END BUNDLED vendor/github_updater.lua =====
+
+-- =============================================================================
+-- VENDORED: Snap One drivers-common-public (WebSocket module + deps)
+--
+-- C1 Phase 1 vendors the upstream Snap One WebSocket helper and its full
+-- transitive Lua dependency tree. The five files below are byte-identical to
+-- snap-one/drivers-common-public master and live under
+-- vendor/drivers-common-public/ preserving the upstream directory layout. The
+-- bundle order below is load-bearing: lib registers Select/CopyTable/JSON
+-- helpers; timer registers SetTimer/CancelTimer; metrics returns the Metrics
+-- factory; handlers reads Metrics/lib at top-level and registers
+-- OCS/RFN/OPC/etc. dispatch tables plus framework handler functions; websocket
+-- reads handlers/timer/Metrics globals and returns the WebSocket factory.
+--
+-- Phase 1 is INERT for our hot paths: nothing in this driver calls
+-- WebSocket:new() yet, and the five framework handlers our driver overrides
+-- (OnConnectionStatusChanged, OnPropertyChanged, ReceivedFromNetwork,
+-- ExecuteCommand, ReceivedFromProxy) defined inside handlers.lua are
+-- immediately shadowed by our hand-rolled versions further down this file.
+--
+-- Caveat (Codex review of #67): handlers.lua additionally defines top-level
+-- OnBindingChanged, OnDeviceEvent, OnSystemEvent, OnVariableChanged,
+-- OnWatchedVariableChanged, TestCondition, and UIRequest. Our driver does NOT
+-- define these, so the vendored versions are now live. Each dispatches
+-- through an empty registry table (OBC, ODE, OSE, OVC, OWVC, etc.) — with
+-- nothing registered against those tables, every call is a no-op that returns
+-- nil. Phase 1 makes these reachable; Phase 2 will either register against
+-- them (the framework-native path) or continue ignoring them.
+
+--
+-- The vendored files require()-import each other (e.g. handlers.lua does
+-- `require('drivers-common-public.global.lib')`). The shim below makes those
+-- requires no-ops that return the appropriate already-bundled global so the
+-- top-level executable code in each vendor file works under the bundled
+-- single-file deployment model that Control4 uses. require() for any string
+-- not in this map falls through to the original loader (nil under DriverWorks,
+-- the real Lua loader under our test harness).
+-- =============================================================================
+
+do  -- Snap One require shim
+    local _vendored_modules = {
+        -- handlers.lua and (transitively) lib.lua both require this. Our own
+        -- vendor/JSON.lua is already bundled above as the global `JSON`, so
+        -- return that — preserves the encoder we already use everywhere else.
+        ['drivers-common-public.module.json']     = function() return JSON end,
+        -- The remaining four are bundled inline below. By the time any
+        -- require() for them executes, the corresponding bundled block has
+        -- already run and registered its globals (Metrics / WebSocket /
+        -- top-level functions). Returning the published global is the closest
+        -- analogue to what the real Lua loader would hand back.
+        ['drivers-common-public.global.lib']      = function() return nil end,
+        ['drivers-common-public.global.timer']    = function() return nil end,
+        ['drivers-common-public.global.handlers'] = function() return nil end,
+        ['drivers-common-public.module.metrics']  = function() return Metrics end,
+        ['drivers-common-public.module.websocket']= function() return WebSocket end,
+    }
+    local _original_require = require
+    -- luacheck: globals require
+    require = function(modname)
+        local entry = _vendored_modules[modname]
+        if entry then return entry() end
+        if _original_require then return _original_require(modname) end
+        error('require not available for module: ' .. tostring(modname))
+    end
+end
+
+-- ===== BUNDLED FROM vendor/drivers-common-public/global/lib.lua =====
+do
+-- Copyright 2026 Snap One, LLC. All rights reserved.
+
+COMMON_LIB_VER = 58
+
+JSON = require ('drivers-common-public.module.json')
+
+do -- set AES and SHA defaults
+	AES_DEC_DEFAULTS = {
+		return_encoding = 'NONE',
+		key_encoding = 'NONE',
+		iv_encoding = 'NONE',
+		data_encoding = 'BASE64',
+		padding = true,
+	}
+
+	AES_ENC_DEFAULTS = {
+		return_encoding = 'BASE64',
+		key_encoding = 'NONE',
+		iv_encoding = 'NONE',
+		data_encoding = 'NONE',
+		padding = true,
+	}
+
+	SHA_ENC_DEFAULTS = {
+		return_encoding = 'NONE',
+		data_encoding = 'NONE',
+	}
+end
+
+do -- Set common var IDs
+	ROOM_VARS = {
+		['CURRENT_SELECTED_DEVICE']    = 1000,
+		['CURRENT_AUDIO_DEVICE']       = 1001,
+		['CURRENT_VIDEO_DEVICE']       = 1002,
+		['AUDIO_VOLUME_DEVICE']        = 1003,
+		['VIDEO_VOLUME_DEVICE']        = 1004,
+		['CURRENT_MEDIA']              = 1005,
+		['CURRENT_AUDIO_PATH']         = 1007,
+		['CURRENT_VIDEO_PATH']         = 1008,
+		['CURRENT_VIDEO_AUDIO_PATH']   = 1009,
+		['POWER_STATE']                = 1010,
+		['CURRENT_VOLUME']             = 1011,
+		['TEMPERATURE_ID']             = 1012,
+		['TEMPERATURE_CONTROL_ID']     = 1013,
+		['SECURITY_SYSTEM_ID']         = 1014,
+		['CURRENT_VOLUME_DEVICE_ID']   = 1015,
+		['HAS_DISCRETE_VOLUME']        = 1016,
+		['HAS_DISCRETE_MUTE']          = 1017,
+		['IS_MUTED']                   = 1018,
+		['IN_NAVIGATION	']             = 1019,
+		['USE_DEFAULT_VOLUMES']        = 1020,
+		['DEFAULT_AUDIO_VOLUME']       = 1021,
+		['VOLUME_IS_LINKED']           = 1023,
+		['DEFAULT_VIDEO_VOLUME']       = 1022,
+		['LINKED_ROOM_LIST']           = 1024,
+		['MUTE_IS_LINKED']             = 1025,
+		['ROOMOFF_IS_LINKED']          = 1026,
+		['SELECTIONS_LINKED']          = 1027,
+		['CURRENT_LINKED_MEDIA_SCENE'] = 1028,
+		['ROOM_HIDDEN']                = 1029,
+		['MEDIA_SCENE_ACTIVE']         = 1030,
+		['CURRENT MEDIA INFO']         = 1031,
+		['LAST_DEVICE_GROUP']          = 1032,
+		['AVAILABLE_CAMERAS']          = 1033,
+		['POOLS']                      = 1034,
+		['SCENE_IS_DISCRETE_VOLUME']   = 1035,
+		['PLAYING_AUDIO_DEVICE']       = 1036,
+		['ANNOUNCEMENT_DISABLED']      = 1037,
+	}
+
+	DIGITAL_AUDIO_VARS = {
+		['ROOM_HISTORY']          = 1002,
+		['ROOM_QUEUE_SETTINGS']   = 1003,
+		['QUEUE_STATUS']          = 1004,
+		['QUEUE_INFO']            = 1005,
+		['QUEUE_STATUS_V2']       = 1006,
+		['QUEUE_INFO_V2']         = 1007,
+		['PLAY_PREFERENCE']       = 1008,
+		['ROOM_MAP_INFO']         = 1009,
+		['AUDIO LATENCY PROFILE'] = 1010,
+		['MAX_AUDIO_QUALITY']     = 1011,
+		['AUDIO_MODE_VER']        = 1012,
+		['AUDIO_FORCED_ADV']      = 2000,
+	}
+
+	PROJECT_VARS = {
+		['ZIPCODE'] = 1000,
+		['LATITUDE'] = 1001,
+		['LONGITUDE'] = 1002,
+	}
+
+	PROJECT_ITEM_TYPES = {
+		ROOT = 1,
+		SITE = 2,
+		BUILDING = 3,
+		FLOOR = 4,
+		ROOM = 5,
+		DEVICE = 6,
+		PROXY = 7,
+		ROOM_DEVICE = 8,
+		AGENT = 9,
+	}
+end
+
+do -- LOCALE FIXING FOR tostring AND tonumber
+	---@diagnostic disable: lowercase-global
+	if (not tostring_native) then
+		tostring_native = tostring
+	end
+	if (not tonumber_native) then
+		tonumber_native = tonumber
+	end
+
+	LOCALE_USES_COMMA_DECIMAL_SEPARATORS = (tonumber ('0.5') == nil)
+
+	function tostring_return_comma (v)
+		local ret = tostring_native (v)
+		if (type (v) == 'number') then
+			ret = string.gsub (ret, '%.', '%,')
+		end
+		return (ret)
+	end
+
+	function tostring_return_period (v)
+		local ret = tostring_native (v)
+		if (type (v) == 'number') then
+			ret = string.gsub (ret, '%,', '%.')
+		end
+		return (ret)
+	end
+
+	function tonumber_expect_comma (e, base)
+		local ret = tonumber_native (e, base)
+		if (ret == nil) then
+			if (type (e) == 'string') then
+				e = string.gsub (e, '%.', '%,')
+				ret = tonumber_native (e, base)
+			end
+		end
+		return (ret)
+	end
+
+	function tonumber_expect_period (e, base)
+		local ret = tonumber_native (e, base)
+		if (ret == nil) then
+			if (type (e) == 'string') then
+				e = string.gsub (e, '%,', '%.')
+				ret = tonumber_native (e, base)
+			end
+		end
+		return (ret)
+	end
+
+	if (LOCALE_USES_COMMA_DECIMAL_SEPARATORS) then
+		tonumber = tonumber_expect_comma
+	end
+	---@diagnostic enable: lowercase-global
+end
+
+---@diagnostic disable-next-line: lowercase-global
+function dbg (strDebugText, ...)
+	if (DEBUGPRINT) then
+		local t, ms
+		if (C4.GetTime) then
+			t = C4:GetTime ()
+			ms = '.' .. tostring (t % 1000)
+			t = math.floor (t / 1000)
+		else
+			t = os.time ()
+			ms = ''
+		end
+		local s = string.format ("%-21s : ", os.date ('%x %X') .. ms)
+
+		print (s .. (strDebugText or ''), ...)
+		C4:DebugLog (strDebugText)
+	end
+end
+
+---@diagnostic disable-next-line: lowercase-global
+function dbgdump (strDebugText, ...)
+	if (DEBUGPRINT) then
+		hexdump (strDebugText or '')
+		print (...)
+	end
+end
+
+---@diagnostic disable-next-line: lowercase-global
+function gettext (text)
+	return (text)
+end
+
+---@diagnostic disable-next-line: lowercase-global
+function getvartext (str, vars)
+	local escape = function (s)
+		s = tostring (s)
+		local ret = s:gsub ('\\', '\\\\'):gsub ('"', '\\"')
+		return ret
+	end
+
+	local ret = {
+		'#!"',
+		escape (str),
+		'"',
+	}
+	if (type (vars) == 'table') then
+		for var, value in pairs (vars) do
+			table.insert (ret, ';')
+			table.insert (ret, var)
+			table.insert (ret, '="')
+			table.insert (ret, escape (value))
+			table.insert (ret, '"')
+		end
+	end
+	return table.concat (ret)
+end
+
+function Print (data)
+	if (type (data) == 'table') then
+		for k, v in pairs (data) do print (k, v) end
+	elseif (type (data) ~= 'nil') then
+		print (type (data), data)
+	else
+		print ('nil value')
+	end
+end
+
+function CopyTable (t, shallowCopy)
+	if (type (t) ~= 'table') then
+		return nil
+	end
+
+	local seenTables = {}
+
+	local r = {}
+	for k, v in pairs (t) do
+		if (type (v) == 'number' or type (v) == 'string' or type (v) == 'boolean') then
+			r [k] = v
+		elseif (type (v) == 'table') then
+			if (shallowCopy ~= true) then
+				if (seenTables [v]) then
+					r [k] = seenTables [v]
+				else
+					r [k] = CopyTable (v)
+					seenTables [v] = r [k]
+				end
+			end
+		end
+	end
+	return (r)
+end
+
+function VersionCheck (requires_version)
+	local curver = {}
+	curver [1], curver [2], curver [3], curver [4] = string.match (C4:GetVersionInfo ().version,
+		'^(%d*)%.?(%d*)%.?(%d*)%.?(%d*)')
+	local reqver = {}
+	reqver [1], reqver [2], reqver [3], reqver [4] = string.match (requires_version, '^(%d*)%.?(%d*)%.?(%d*)%.?(%d*)')
+
+	for i = 1, 4 do
+		local cur = tonumber (curver [i]) or 0
+		local req = tonumber (reqver [i]) or 0
+		if (cur > req) then
+			return true
+		end
+		if (cur < req) then
+			return false
+		end
+	end
+	return true
+end
+
+function GetLocationInfo ()
+	local proj = XMLDecode (C4:GetProjectItems ('LOCATIONS', 'LIMIT_DEVICE_DATA', 'NO_ROOT_TAGS'))
+
+	local lat = XMLCapture (proj, 'latitude>')
+	local long = XMLCapture (proj, 'longitude>')
+	local cc = XMLCapture (proj, 'country_code')
+	local zip = XMLCapture (proj, 'zipcode')
+	local city = XMLCapture (proj, 'city_name')
+	local timezone = XMLCapture (proj, 'timezone')
+
+	if (lat == '') then lat = nil end
+	if (long == '') then long = nil end
+	if (cc == '') then cc = nil end
+	if (zip == '') then zip = nil end
+	if (city == '') then city = nil end
+	if (timezone == '') then timezone = nil end
+
+	return lat, long, cc, zip, city, timezone
+end
+
+function GetTimeString (data, forceHours)
+	-- Converts an integer number of seconds to a string of [HH:]MM:SS. If HH is zero, it is omitted unless forceHours is true
+
+	if (type (data) == 'number') then
+		local strTime = ''
+		local strHours, strMinutes, strSeconds
+
+		local seconds = data % 60
+		local minutes = math.floor (data / 60) % 60
+		local hours = math.floor (data / 3600)
+
+		strHours = string.format ('%d', hours)
+
+		if (hours ~= 0 or forceHours) then
+			strTime = strHours .. ':'
+			strMinutes = string.format ('%02d', minutes)
+		else
+			strMinutes = string.format ('%d', minutes)
+		end
+
+		strSeconds = string.format ('%02d', seconds)
+
+		strTime = strTime .. strMinutes .. ':' .. strSeconds
+		return strTime
+	elseif (type (data) == 'string') then
+		return data
+	else
+		return 0
+	end
+end
+
+function GetTimeNumber (data)
+	-- Converts a string of [HH:]MM:SS to an integer representing the number of seconds
+	if (type (data) == 'string') then
+		local hours, minutes, seconds = string.match (data, '^(%d-):(%d-):?(%d-)$')
+		if (hours == '') then hours = nil end
+		if (minutes == '') then minutes = nil end
+		if (seconds == '') then seconds = nil end
+
+		if (hours and not minutes) then
+			minutes = hours
+			hours = 0
+		elseif (minutes and not hours) then
+			hours = 0
+		elseif (not minutes and not hours) then
+			minutes = 0
+			hours = 0
+			seconds = seconds or 0
+		end
+
+		hours, minutes, seconds = tonumber (hours), tonumber (minutes), tonumber (seconds)
+		return ((hours * 3600) + (minutes * 60) + seconds)
+	elseif (type (data) == 'number') then
+		return data
+	else
+		return 0
+	end
+end
+
+function ConvertTime (data, forceHours)
+	if (type (data) == 'number') then
+		return (GetTimeString (data, forceHours))
+	elseif (type (data) == 'string') then
+		return (GetTimeNumber (data))
+	else
+		return 0
+	end
+end
+
+function RelativeTime (timeNow, timeThen, prefix)
+	-- TODO : implement this with gettext for internationalization
+
+	local diff = math.abs (timeNow - timeThen)
+	local past = timeNow > timeThen
+	local future = timeThen > timeNow
+
+	local ret
+
+	local words = {
+		{ name = 'second', duration = 1, },
+		{ name = 'minute', duration = 60, },
+		{ name = 'hour',   duration = 60 * 60, },
+		{ name = 'day',    duration = 24 * 60 * 60, },
+		{ name = 'week',   duration = 7 * 24 * 60 * 60, },
+		{ name = 'month',  duration = 30 * 24 * 60 * 60, },
+		{ name = 'year',   duration = 365 * 24 * 60 * 60, },
+	}
+
+	if (diff == 0) then
+		ret = 'now'
+	else
+		for i, word in ipairs (words) do
+			if (diff < word.duration) then
+				ret = tostring (math.floor (diff / words [i - 1].duration)) .. ' ' .. words [i - 1].name .. 's'
+				break
+			elseif (diff < word.duration * 2) then
+				if (word.name == 'hour') then
+					ret = 'an hour'
+				else
+					ret = 'a ' .. word.name
+				end
+				break
+			elseif (diff < word.duration * 5) then
+				ret = 'a few ' .. word.name .. 's'
+				break
+			end
+		end
+	end
+
+	if (ret == nil) then
+		ret = 'a long time'
+	end
+
+	if (past) then
+		ret = ret .. ' ago'
+	elseif (future) then
+		ret = ret .. ' from now'
+	end
+
+	if (type (prefix) == 'string') then
+		ret = prefix .. ret
+	end
+
+	return ret
+end
+
+function XMLDecode (s)
+	if (type (s) ~= 'string') then
+		return (s)
+	end
+
+	s = string.gsub (s, '%<%!%[CDATA%[(.-)%]%]%>', function (a) return (a) end)
+
+	s = string.gsub (s, '&quot;', '"')
+	s = string.gsub (s, '&lt;', '<')
+	s = string.gsub (s, '&gt;', '>')
+	s = string.gsub (s, '&apos;', '\'')
+	s = string.gsub (s, '&#x(.-);', function (a) return string.char (tonumber (a, 16) % 256) end)
+	s = string.gsub (s, '&#(.-);', function (a) return string.char (tonumber (a) % 256) end)
+	s = string.gsub (s, '&amp;', '&')
+
+	return s
+end
+
+function XMLEncode (s)
+	if (type (s) ~= 'string') then
+		return (s)
+	end
+
+	s = string.gsub (s, '&', '&amp;')
+	s = string.gsub (s, '"', '&quot;')
+	s = string.gsub (s, '<', '&lt;')
+	s = string.gsub (s, '>', '&gt;')
+	s = string.gsub (s, '\'', '&apos;')
+	return s
+end
+
+function XMLTag (strName, tParams, tagSubTables, xmlEncodeElements, tAttribs, arrayTag)
+	local retXML = {}
+
+	local addTag = function (tagName, closeTag)
+		if (tagName == nil) then return end
+
+		if (closeTag) then
+			tagName = string.match (tostring (tagName), '^(%S+)')
+		end
+
+		if (tagName and tagName ~= '') then
+			table.insert (retXML, '<')
+			if (closeTag) then
+				table.insert (retXML, '/')
+			end
+			table.insert (retXML, tostring (tagName))
+			table.insert (retXML, '>')
+		end
+	end
+
+	if (type (strName) == 'table' and tParams == nil) then
+		tParams = strName
+		strName = nil
+	end
+
+	if (strName and tAttribs and type (tAttribs) == 'table') then
+		local attribs = {
+			strName,
+		}
+		for k, v in pairs (tAttribs) do
+			local a = {
+				tostring (k),
+				'=',
+				'"',
+				XMLEncode (tostring (v)),
+				'"',
+			}
+			local a = table.concat (a)
+			table.insert (attribs, a)
+		end
+		strName = table.concat (attribs, ' ')
+	end
+
+	addTag (strName)
+
+	if (type (tParams) == 'table') then
+		local arraySize = #tParams
+		local tableSize = 0
+		for _, _ in pairs (tParams) do
+			tableSize = tableSize + 1
+		end
+		if (arraySize == tableSize) then
+			for index, subItem in ipairs (tParams) do
+				local subItemTag = index
+				if (type (arrayTag) == 'boolean' and arrayTag == false) then
+					subItemTag = nil
+				elseif (type (arrayTag) == 'string' and #arrayTag > 0) then
+					subItemTag = arrayTag
+				end
+				table.insert (retXML, XMLTag (subItemTag, subItem, tagSubTables, xmlEncodeElements, nil, arrayTag))
+			end
+		else
+			for k, v in pairs (tParams) do
+				if (v == nil) then v = '' end
+				if (type (v) == 'table') then
+					if (k == 'image_list') then
+						for _, image_list in pairs (v) do
+							table.insert (retXML, image_list)
+						end
+					elseif (tagSubTables == true) then
+						table.insert (retXML, XMLTag (k, v, tagSubTables, xmlEncodeElements, nil, arrayTag))
+					end
+				else
+					if (v == nil) then v = '' end
+
+					addTag (k)
+
+					if (xmlEncodeElements ~= false) then
+						table.insert (retXML, XMLEncode (tostring (v)))
+					else
+						table.insert (retXML, tostring (v))
+					end
+
+					addTag (k, true)
+				end
+			end
+		end
+	elseif (tParams ~= nil) then
+		if (xmlEncodeElements ~= false) then
+			table.insert (retXML, XMLEncode (tostring (tParams)))
+		else
+			table.insert (retXML, tostring (tParams))
+		end
+	end
+
+	addTag (strName, true)
+
+	return (table.concat (retXML))
+end
+
+--Create XML from Lua table formatted like the result of C4:ParseXml
+function CreateXML (item, xml)
+	if (type (item) ~= 'table') then
+		print ('Cannot CreateXML on non-table')
+		return nil
+	end
+
+	local isRoot
+	if (type (xml) ~= 'table') then
+		isRoot = true
+		xml = {}
+	end
+
+	if (type (item.Name) == 'string') then
+		item.Name = string.match (item.Name, '^(%S+)')
+	end
+	local hasTag = (type (item.Name) == 'string' and #item.Name > 0)
+	local hasAttributes = (type (item.Attributes) == 'table' and next (item.Attributes) ~= nil)
+	local hasChildren = (type (item.ChildNodes) == 'table' and next (item.ChildNodes) ~= nil)
+	local hasValue = (type (item.Value) ~= 'nil' and (type (item.Value) ~= 'table'))
+	local isEmptyElement = not (hasChildren or hasValue)
+
+	if (hasTag) then
+		table.insert (xml, '<')
+		table.insert (xml, item.Name)
+		if (hasAttributes) then
+			table.insert (xml, ' ')
+			for k, v in pairs (item.Attributes) do
+				table.insert (xml, tostring (k))
+				table.insert (xml, '=')
+				table.insert (xml, '"')
+				table.insert (xml, XMLEncode (tostring (v)))
+				table.insert (xml, '"')
+				table.insert (xml, ' ')
+			end
+			table.remove (xml, #xml) -- strip last space
+		end
+		if (isEmptyElement) then
+			table.insert (xml, ' />')
+			return
+		else
+			table.insert (xml, '>')
+		end
+	end
+	if (hasValue) then
+		table.insert (xml, XMLEncode (tostring (item.Value)))
+	end
+	if (hasChildren) then
+		for _, child in ipairs (item.ChildNodes) do
+			CreateXML (child, xml)
+		end
+	end
+	if (hasTag) then
+		table.insert (xml, '<')
+		table.insert (xml, '/')
+		table.insert (xml, item.Name)
+		table.insert (xml, '>')
+	end
+
+	if (isRoot) then
+		return table.concat (xml)
+	end
+end
+
+--[=[ Tests for XMLCapture
+	local tests = {
+		[[<a>b</a><tag>test string</tag><a>b</a>]], -- 'test string', nil
+		[[<a>b</a><tag testattrib="testval" testattrib2='test val 2'>test</tag><a>b</a>]], -- test, {testattrib = 'testval', testattrib2 = 'test val 2'}
+		[[<a>b</a><ta g>test string</tag><a>b</a>]], -- nil, nil
+		[[<a>b</a><tagattrib>asdf</tagattrib>]], -- nil, nil
+		[[<a>b</a><tag/><a>b</a>]], -- '', nil
+		[[<a>b</a><tag /><a>b</a>]], -- '', nil
+		[[<a>b</a><tag testattrib="testval" testattrib2="test val 2"/><a>b</a>]], -- '', , {testattrib = 'testval', testattrib2 = 'test val 2'}
+		[[<a>b</a><tag testattrib="testval" testattrib2="test val 2" /><a>b</a>]], -- '', , {testattrib = 'testval', testattrib2 = 'test val 2'}
+		[[<tag ia="inner'apos" iq='inner"quote'   emptyA='' emptyQ="" >test</tag>]], -- test, {ia = 'inner\'apos' iq = 'inner"quote' emptyA = '' emptyQ = '' }
+	}
+
+	for i, testString in ipairs (tests) do
+		local content, attributes = XMLCapture (testString, 'tag')
+		print ('--')
+		print (i)
+		print ('--')
+		print (content)
+		print ('--')
+		Print (attributes)
+		print ('--')
+		print ('--')
+	end
+
+--]=]
+
+function XMLCapture (xmlString, tag, init)
+	if (type (xmlString) ~= 'string') then
+		print ('XMLCapture error: xmlString not string:', tostring (xmlString))
+		return nil, nil, nil, nil
+	end
+	if (type (tag) ~= 'string') then
+		print ('XMLCapture error: tag not string:', tostring (tag))
+		return nil, nil, nil, nil
+	end
+	if (type (init) ~= 'number') then
+		init = nil
+	end
+
+	local function parseAttributes (attributes)
+		local ret = {}
+		while (#attributes > 0) do
+			if (string.match (attributes, '^%s-%/?%>$')) then
+				break
+			end
+			local _, e, key, quoteChar = string.find (attributes, '^%s*(%S*)=(.)')
+			if (not (key and quoteChar)) then
+				error ('No valid attribute key found: ' .. attributes)
+			end
+			local pattern = '=' .. quoteChar .. '([^' .. quoteChar .. ']-)' .. quoteChar .. '[%s%/%>]'
+			local _, e, value = string.find (attributes, pattern, e - 2)
+			if (not value) then
+				error ('No valid quoted attribute value found: ' .. attributes)
+			end
+			ret [key] = value
+			attributes = string.sub (attributes, e)
+		end
+		return ret
+	end
+
+	-- plain tag
+	local s, e, tagContents = string.find (xmlString, '<' .. tag .. '>(.-)</' .. tag .. '>', init)
+	if (tagContents) then
+		return tagContents, nil, s, e
+	end
+
+	-- tag with attributes
+	local s, e, attributes, tagContents = string.find (xmlString, '<' .. tag .. '(%s+%S.->)(.-)</' .. tag .. '>', init)
+	if (attributes and tagContents) then
+		local success, ret = pcall (parseAttributes, attributes)
+		if (success) then
+			return tagContents, ret, s, e
+		else
+			print ('XMLCapture failed to parse attributes:', xmlString, ret)
+			return tagContents, attributes, s, e
+		end
+	end
+
+	-- self closing tag
+	local s, e = string.find (xmlString, '<' .. tag .. '%s-/>', init)
+	if (s and e) then
+		return '', nil, s, e
+	end
+
+	-- self closing tag with attributes
+	local s, e, attributes = string.find (xmlString, '<' .. tag .. '(%s+%S.-%s-/>)', init)
+	if (s and e and attributes) then
+		local success, ret = pcall (parseAttributes, attributes)
+		if (success) then
+			return '', ret, s, e
+		else
+			print ('XMLCapture failed to parse attributes:', xmlString, ret)
+			return '', attributes, s, e
+		end
+	end
+	return nil, nil, nil, nil
+end
+
+function XMLgCapture (xmlString, tag)
+	local init = 0
+	return function ()
+		local tagContents, attributes, s, e = XMLCapture (xmlString, tag, init)
+		if (e) then
+			init = e
+		end
+		return tagContents, attributes, s, e
+	end
+end
+
+function ConstructJWT (payload, secret, alg)
+	if (type (payload) ~= 'table') then
+		print ('ConstructJWT payload must be a table')
+	end
+
+	local token
+
+	local allowedAlgs = {
+		['HS256'] = 'SHA256',
+		['HS384'] = 'SHA384',
+		['HS512'] = 'SHA512',
+	}
+
+	if (alg == nil or not allowedAlgs [alg]) then
+		alg = 'HS256'
+	end
+
+	local header = {
+		alg = alg,
+		typ = 'JWT',
+	}
+
+	local data = Serialize (header) .. '.' .. Serialize (payload)
+	data = data:gsub ('%+', '-'):gsub ('%/', '_'):gsub ('%=', '')
+
+	local digest = allowedAlgs [alg]
+
+	local signature
+
+	if (string.sub (alg, 1, 2) == 'HS') then
+		local options = {
+			return_encoding = 'BASE64',
+			key_encoding = 'NONE',
+			data_encoding = 'NONE',
+		}
+		signature = C4:HMAC (digest, secret, data, options)
+		if (signature) then
+			signature = signature:gsub ('%+', '-'):gsub ('%/', '_'):gsub ('%=', '')
+		else
+			signature = ''
+		end
+	end
+
+	data = data .. '.' .. signature
+
+	return (data)
+end
+
+function RefreshNavs ()
+	local onConnect = function (client)
+		client:Write ('<c4soap name="PIP" async="1"></c4soap>\0')
+		client:Close ()
+	end
+	local onError = function (client)
+		client:Close ()
+	end
+	local cli = C4:CreateTCPClient ()
+		:OnConnect (onConnect)
+		:OnError (onError)
+
+	cli:Connect ('127.0.0.1', 5020)
+end
+
+function HideProxyInAllRooms (idBinding)
+	idBinding = idBinding or 0
+	if (idBinding == 0) then return end -- silently fail if no binding passed in.
+
+	-- Get Bound Proxy's Device ID / Name.
+	local id, name = next (C4:GetBoundConsumerDevices (C4:GetDeviceID (), idBinding))
+
+	-- Send hide command to all rooms, for 'ALL' Navigator groups.
+	for roomid, roomname in pairs (C4:GetDevicesByC4iName ('roomdevice.c4i') or {}) do
+		dbg ('Hiding device:"' .. name .. '" in room "' .. roomname .. '"')
+		C4:SendToDevice (roomid, 'SET_DEVICE_HIDDEN_STATE', { PROXY_GROUP = 'ALL', DEVICE_ID = id, IS_HIDDEN = true, })
+	end
+end
+
+function GetFileName (deviceId)
+	if (deviceId == nil) then
+		deviceId = C4:GetDeviceID ()
+	end
+
+	local params = {
+		DeviceIds = tostring (deviceId),
+	}
+
+	local info = C4:GetDevices (params)
+
+	local protocol = Select (info, deviceId, 'protocol')
+
+	if (protocol) then
+		info = protocol
+	end
+
+	local _, data = next (info)
+
+	local driverFileName = Select (data, 'driverFileName')
+
+	return driverFileName
+end
+
+function F2C (f)
+	if (type (f) ~= 'number') then
+		return
+	end
+	local c = (f - 32) * (5 / 9)
+	c = math.floor ((c * 2) + 0.5) / 2
+	return (c)
+end
+
+function C2F (c)
+	if (type (c) ~= 'number') then
+		return
+	end
+	local f = (c * (9 / 5)) + 32
+	f = math.floor (f + 0.5)
+	return (f)
+end
+
+function Serialize (d)
+	if (type (d) == 'table') then
+		local j = JSON:encode (d)
+		if (j) then
+			local b64 = C4:Base64Encode (j)
+			if (b64) then
+				return (b64)
+			end
+		end
+	end
+	return (d)
+end
+
+function Deserialize (b64)
+	if (type (b64) == 'string') then
+		local j = C4:Base64Decode (b64)
+		if (j) then
+			local d = JSON:decode (j)
+			if (d) then
+				return (d)
+			end
+		end
+	end
+	return (b64)
+end
+
+function SaltedEncrypt (key, plaintext)
+	local cipher = 'AES-256-CBC'
+	local options = AES_ENC_DEFAULTS
+
+	local prepend_random = {}
+	for i = 1, 16 do
+		local randomChar = string.char (math.random (0, 255))
+		table.insert (prepend_random, randomChar)
+	end
+	local prepend_random = table.concat (prepend_random)
+
+	local data = prepend_random .. plaintext
+
+	if (string.len (key) ~= 32) then
+		key = C4:Hash ('SHA256', key, SHA_ENC_DEFAULTS)
+	end
+
+	local result, errString = C4:Encrypt (cipher, key, nil, data, options)
+	return result, errString
+end
+
+function SaltedDecrypt (key, ciphertext)
+	local cipher = 'AES-256-CBC'
+	local options = AES_DEC_DEFAULTS
+
+	local data = ciphertext
+
+	if (string.len (key) ~= 32) then
+		key = C4:Hash ('SHA256', key, SHA_ENC_DEFAULTS)
+	end
+
+	local result, error = C4:Decrypt (cipher, key, nil, data, options)
+
+	if (result) then
+		result = string.sub (result, 17, -1)
+	end
+	return result, error
+end
+
+function EscapeForLuaPattern (s)
+	if (type (s) ~= 'string') then
+		return
+	end
+	local matches = {
+		['%'] = '%%',
+		['^'] = '%^',
+		['$'] = '%$',
+		['('] = '%(',
+		[')'] = '%)',
+		['.'] = '%.',
+		['['] = '%[',
+		[']'] = '%]',
+		['*'] = '%*',
+		['+'] = '%+',
+		['-'] = '%-',
+		['?'] = '%?',
+	}
+	return string.gsub (s, '.', matches)
+end
+
+function ShowPopupEverywhere (message, ok, delay, imgUrl)
+	local params = {
+		VAR_DEVICE_ID = 0,
+		SIZE = 100,
+		MESSAGE = (message or ''),
+		SHOWOK = (ok and 'True') or 'False',
+		DELAY = (delay or 0),
+		IMGURL = (imgUrl or ''),
+		VAR_VARIABLE_ID = 0,
+	}
+
+	local uiDevices = C4:GetProxyDevicesByName ('uidevice')
+
+	for deviceId, _ in pairs (uiDevices or {}) do
+		C4:SendToDevice (deviceId, 'SHOW_POPUP', params, true)
+	end
+end
+
+function HideCurrentPopupEverywhere ()
+	local uiDevices = C4:GetProxyDevicesByName ('uidevice')
+
+	for deviceId, _ in pairs (uiDevices or {}) do
+		C4:SendToDevice (deviceId, 'HIDE_POPUP', {}, true)
+	end
+end
+
+function GetProject ()
+	local h = C4:GetProjectItems ('DEVICES', 'PROXIES', 'LOCATIONS', 'NO_ROOT_TAGS', 'LIMIT_DEVICE_DATA')
+	h = string.gsub (h, '<state>.-</state>', '')
+	h = string.gsub (h, '<itemdata>.-</itemdata>', '')
+	h = string.gsub (h, '<created_datetime>.-</created_datetime>', '')
+	h = string.gsub (h, '<%w+/>', '')
+	h = string.gsub (h, '>%s+<', '><')
+	h = string.gsub (h, '><', '>\r\n<')
+	h = h .. '\r\n'
+
+	local p = { '{"project" : ', }
+
+	local c
+
+	local item = 0
+	local subitem = 0
+	for line in string.gmatch (h, '(.-)\r\n') do
+		if (string.find (line, '^<item')) then
+			table.insert (p, '{')
+			item = item + 1
+		elseif (string.find (line, '^</item>')) then
+			table.insert (p, '},')
+			item = item - 1
+		elseif (string.find (line, '^<subitems>')) then
+			table.insert (p, '"subItems" : [')
+			subitem = subitem + 1
+		elseif (string.find (line, '^</subitems>')) then
+			table.insert (p, '],')
+			subitem = subitem - 1
+		elseif (string.find (line, '^<id>')) then
+			local id = XMLCapture (line, 'id')
+			if (id) then
+				table.insert (p, '"id" : ' .. id .. ',')
+			end
+		elseif (string.find (line, '^<c4i>')) then
+			local c4i = XMLCapture (line, 'c4i')
+			if (c4i) then
+				table.insert (p, '"c4i" : "' .. c4i .. '",')
+			end
+		elseif (string.find (line, '^<type>')) then
+			local deviceType = XMLCapture (line, 'type')
+			if (deviceType) then
+				table.insert (p, '"deviceType" : ' .. deviceType .. ',')
+			end
+
+			--[[
+			1 = ROOT
+			2 = SITE
+			3 = BUILDING
+			4 = FLOOR
+			5 = ROOM
+			6 = DEVICE
+			7 = PROXY
+			8 = ROOM_DEVICE
+			9 = AGENT
+		]]
+		elseif (string.find (line, '^<name>')) then
+			local name = XMLCapture (line, 'name')
+			if (name) then
+				table.insert (p, '"name" : ' .. JSON:encode (name) .. ',')
+			end
+		end
+	end
+
+	table.insert (p, '}')
+
+	local p = table.concat (p, '\r\n')
+
+	p = string.gsub (p, ',%s+%]', '\r\n%]')
+	p = string.gsub (p, ',%s+%}', '\r\n%}')
+
+	local j
+
+	local f = function ()
+		j = JSON:decode (p)
+	end
+
+	local success, err = pcall (f)
+
+	return (j)
+end
+
+function GetPathToDevice (deviceId, project)
+	if (type (project ~= 'table')) then
+		project = GetProject ()
+	end
+
+	if (project and project.project) then
+		project = project.project
+	else
+		return
+	end
+
+	deviceId = tonumber (deviceId)
+
+	if (deviceId == nil) then
+		return
+	end
+
+	local path = {}
+
+	local drill
+	drill = function (item)
+		local id = item.id
+		local thisItem = {
+			id = item.id,
+			name = item.name,
+			c4i = item.c4i,
+			deviceType = item.deviceType,
+		}
+		if (id == deviceId) then
+			table.insert (path, thisItem)
+			return (true)
+		elseif (item.subItems) then
+			for _, subItemTable in ipairs (item.subItems) do
+				local found = drill (subItemTable)
+				if (found) then
+					table.insert (path, thisItem)
+					return (true)
+				end
+			end
+		end
+	end
+
+	drill (project)
+
+	return (path)
+end
+
+function BuildRoomHierarchy ()
+	local projectInfo = C4:GetProjectItems ('LOCATIONS', 'NO_ROOT_TAGS', 'LIMIT_DEVICE_DATA')
+
+	local sites = {}
+	local buildings = {}
+	local floors = {}
+	local rooms = {}
+
+	local sitesById = {}
+	local buildingsById = {}
+	local floorsById = {}
+	local roomsById = {}
+
+	local lastSiteId, lastSiteName, lastBuildingId, lastBuildingName, lastFloorId, lastFloorName
+	for item in string.gmatch (projectInfo, '<item>.-</type>') do
+		local id, name, itemType = string.match (item, '<id>(.-)</id><name>(.-)</name><type>(.-)</type>')
+		id = tonumber (id)
+		itemType = tonumber (itemType)
+		if (id) then
+			if (itemType == PROJECT_ITEM_TYPES.SITE) then
+				lastSiteId = id
+				lastSiteName = name
+				local siteInfo = {
+					id = id,
+					name = name,
+					siteId = id,
+					siteName = name,
+				}
+				table.insert (sites, siteInfo)
+				siteInfo.index = #sites
+				sitesById [id] = siteInfo
+			elseif (itemType == PROJECT_ITEM_TYPES.BUILDING) then
+				lastBuildingId = id
+				lastBuildingName = name
+				local buildingInfo = {
+					id = id,
+					name = name,
+					buildingId = id,
+					buildingName = name,
+					siteId = lastSiteId,
+					siteName = lastSiteName,
+					siteData = sitesById [lastSiteId],
+				}
+				table.insert (buildings, buildingInfo)
+				buildingInfo.index = #buildings
+				buildingsById [id] = buildingInfo
+			elseif (itemType == PROJECT_ITEM_TYPES.FLOOR) then
+				lastFloorId = id
+				lastFloorName = name
+				local floorInfo = {
+					id = id,
+					name = name,
+					floorId = id,
+					floorName = name,
+					buildingId = lastBuildingId,
+					buildingName = lastBuildingName,
+					buildingData = buildingsById [lastBuildingId],
+					siteId = lastSiteId,
+					siteName = lastSiteName,
+					siteData = sitesById [lastSiteId],
+				}
+				table.insert (floors, floorInfo)
+				floorInfo.index = #floors
+				floorsById [id] = floorInfo
+			elseif (itemType == PROJECT_ITEM_TYPES.ROOM_DEVICE) then
+				local roomInfo = {
+					id = id,
+					name = name,
+					roomId = id,
+					roomName = name,
+					floorId = lastFloorId,
+					floorName = lastFloorName,
+					floorData = floorsById [lastFloorId],
+					buildingId = lastBuildingId,
+					buildingName = lastBuildingName,
+					buildingData = buildingsById [lastBuildingId],
+					siteId = lastSiteId,
+					siteName = lastSiteName,
+					siteData = sitesById [lastSiteId],
+				}
+				table.insert (rooms, roomInfo)
+				roomInfo.index = #rooms
+				roomsById [id] = roomInfo
+			end
+		end
+	end
+
+	ProjectLayout = {
+		sites = sites,
+		buildings = buildings,
+		floors = floors,
+		rooms = rooms,
+		sitesById = sitesById,
+		buildingsById = buildingsById,
+		floorsById = floorsById,
+		roomsById = roomsById,
+	}
+end
+
+function GetLocals (depth)
+	local vars = {}
+	local i = 1
+	depth = depth or 2
+
+	while (true) do
+		local name, value = debug.getlocal (depth, i)
+		if (name ~= nil) then
+			vars [name] = value
+		else
+			break
+		end
+		i = i + 1
+	end
+
+	return vars
+end
+
+function GetRandomString (length, alphaFirst)
+	if (type (length) ~= 'number') then
+		length = 10
+	end
+	if (length < 1) then
+		length = 1
+	end
+	if (type (alphaFirst) ~= 'boolean') then
+		alphaFirst = false
+	end
+
+	local s = {}
+	local allowed = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+	while (#s < length) do
+		local max = string.len (allowed)
+		if (#s == 0 and alphaFirst) then
+			max = max - 10
+		end
+		local random = math.random (1, max)
+		local char = string.sub (allowed, random, random)
+		table.insert (s, char)
+	end
+	local s = table.concat (s)
+	return s
+end
+
+function FileRead (filename)
+	local content = ''
+	if (C4:FileExists (filename)) then
+		local file = C4:FileOpen (filename)
+		local length = C4:FileGetSize (file)
+		C4:FileSetPos (file, 0)
+		content = C4:FileRead (file, length)
+		C4:FileClose (file)
+	end
+	return (content)
+end
+
+function FileWrite (filename, content, overwrite)
+	content = tostring (content) or ''
+	local pos = 0
+	if (overwrite and C4:FileExists (filename)) then
+		C4:FileDelete (filename)
+	end
+	local file = C4:FileOpen (filename)
+	if (not overwrite) then
+		pos = C4:FileGetSize (file)
+	end
+	C4:FileSetPos (file, pos)
+	local result = C4:FileWrite (file, content:len (), content)
+	C4:FileClose (file)
+end
+
+function PersistSetValue (key, value, encrypted)
+	if (encrypted == nil) then
+		encrypted = false
+	end
+
+	if (C4.PersistSetValue) then
+		C4:PersistSetValue (key, value, encrypted)
+	else
+		PersistData = PersistData or {}
+		PersistData.LibValueStore = PersistData.LibValueStore or {}
+		PersistData.LibValueStore [key] = value
+	end
+end
+
+function PersistGetValue (key, encrypted)
+	if (encrypted == nil) then
+		encrypted = false
+	end
+
+	local value
+
+	if (C4.PersistGetValue) then
+		value = C4:PersistGetValue (key, encrypted)
+		if (value == nil and encrypted == true) then
+			value = C4:PersistGetValue (key, false)
+			if (value ~= nil) then
+				PersistSetValue (key, value, encrypted)
+			end
+		end
+		if (value == nil) then
+			if (PersistData and PersistData.LibValueStore and PersistData.LibValueStore [key]) then
+				value = PersistData.LibValueStore [key]
+				PersistSetValue (key, value, encrypted)
+				PersistData.LibValueStore [key] = nil
+				if (next (PersistData.LibValueStore) == nil) then
+					PersistData.LibValueStore = nil
+				end
+			end
+		end
+	elseif (PersistData and PersistData.LibValueStore and PersistData.LibValueStore [key]) then
+		value = PersistData.LibValueStore [key]
+	end
+	return value
+end
+
+function PersistDeleteValue (key)
+	if (C4.PersistDeleteValue) then
+		C4:PersistDeleteValue (key)
+	else
+		if (PersistData and PersistData.LibValueStore) then
+			PersistData.LibValueStore [key] = nil
+			if (next (PersistData.LibValueStore) == nil) then
+				PersistData.LibValueStore = nil
+			end
+		end
+	end
+end
+
+function Select (data, ...)
+	if (type (data) ~= 'table') then
+		return nil
+	end
+
+	local tablePack = function (...)
+		return {
+			n = select ('#', ...), ...,
+		}
+	end
+
+	local args = tablePack (...)
+
+	local ret = data
+
+	for i = 1, args.n do
+		local index = args [i]
+		if (index == next) then
+			local _
+			_, ret = next (ret)
+		elseif (index == nil or ret [index] == nil) then
+			return nil
+		else
+			ret = ret [index]
+		end
+	end
+	return ret
+end
+
+function GetConnections ()
+	local connectionsXML = C4:GetDriverConfigInfo ('connections')
+
+	local connections = {}
+	for connection in XMLgCapture (connectionsXML, 'connection') do
+		local id = tonumber (XMLCapture (connection, 'id'))
+		if (id) then
+			local classesXML = XMLCapture (connection, 'classes') or ''
+
+			local classes = {}
+
+			for class in XMLgCapture (classesXML, 'class') do
+				table.insert (classes, {
+					classname = XMLCapture (class, 'classname'),
+					autobind = (XMLCapture (class, 'autobind') == 'True'),
+				})
+			end
+
+			connections [id] = {
+				id = id,
+				type = tonumber (XMLCapture (connection, 'type')),
+				connectionname = XMLCapture (connection, 'name'),
+				consumer = (XMLCapture (connection, 'consumer') == 'True'),
+				linelevel = (XMLCapture (connection, 'linelevel') == 'True'),
+				idautobind = XMLCapture (connection, 'idautobind'),
+				classes = classes,
+			}
+		end
+	end
+	return connections
+end
+
+function GetTableSize (t)
+	if (type (t) ~= 'table') then
+		return 0
+	end
+
+	local size = 0
+	for _, _ in pairs (t) do
+		size = size + 1
+	end
+	return size
+end
+
+---@diagnostic disable-next-line: lowercase-global
+function uint16To2Bytes (uint16, isLittleEndian)
+	local b1, b2
+
+	b1 = bit.rshift (bit.band (uint16, 0xFF00), 8)
+	b2 = bit.rshift (bit.band (uint16, 0x00FF), 0)
+
+	if (isLittleEndian) then
+		return string.char (b2, b1)
+	else
+		return string.char (b1, b2)
+	end
+end
+
+---@diagnostic disable-next-line: lowercase-global
+function uint32To4Bytes (uint32, isLittleEndian)
+	local b1, b2, b3, b4
+
+	b1 = bit.rshift (bit.band (uint32, 0xFF000000), 24)
+	b2 = bit.rshift (bit.band (uint32, 0x00FF0000), 16)
+	b3 = bit.rshift (bit.band (uint32, 0x0000FF00), 8)
+	b4 = bit.rshift (bit.band (uint32, 0x000000FF), 0)
+
+	if (isLittleEndian) then
+		return string.char (b4, b3, b2, b1)
+	else
+		return string.char (b1, b2, b3, b4)
+	end
+end
+
+function IsFirstInstanceOfDriver ()
+	local filename = C4:GetDriverFileName ()
+	local deviceIds = C4:GetDevicesByC4iName (filename) or {}
+
+	local lowestDeviceId = math.huge
+	for id, _ in pairs (deviceIds) do
+		if (id < lowestDeviceId) then
+			lowestDeviceId = id
+		end
+	end
+
+	local isFirstInstance = (lowestDeviceId == C4:GetDeviceID ())
+
+	return isFirstInstance, lowestDeviceId
+end
+
+function GetTruthy (value, emptyValueIsTrue)
+	if (type (emptyValueIsTrue) ~= 'boolean') then
+		emptyValueIsTrue = false
+	end
+
+	local ret = true
+	if (type (value) == 'string') then
+		if (string.lower (value) == 'false') then
+			ret = false
+		elseif (string.lower (value) == 'f') then
+			ret = false
+		elseif (value == '0') then
+			ret = false
+		elseif (not emptyValueIsTrue and value == '') then
+			ret = false
+		end
+	elseif (type (value) == 'number') then
+		if (value == 0) then
+			ret = false
+		end
+	elseif (type (value) == 'boolean') then
+		if (value == false) then
+			ret = false
+		end
+	elseif (type (value) == 'table') then
+		if (not emptyValueIsTrue and next (value) == 'nil') then
+			ret = false
+		end
+	elseif (type (value) == 'nil') then
+		ret = false
+	end
+
+	return ret
+end
+
+function RenameDevice (deviceId, newName)
+	deviceId = tonumber (deviceId)
+	if (type (deviceId) ~= 'number') then
+		return
+	end
+
+	if (type (newName) ~= 'string') then
+		return
+	end
+
+	if (#newName == 0) then
+		return
+	end
+
+	local currentName = C4:GetDeviceDisplayName (deviceId)
+	if (currentName == newName) then
+		return
+	end
+
+	C4:RenameDevice (deviceId, newName)
+end
+
+function GetNextSchedulerOccurrence (timerId)
+	local entryInfo = Select (C4Scheduler:GetEntry (timerId), 'xml')
+	local nextInfo = XMLCapture (entryInfo, 'next_occurrence')
+
+	local year = XMLCapture (nextInfo, 'year')
+	local month = XMLCapture (nextInfo, 'month')
+	local day = XMLCapture (nextInfo, 'day')
+	local hour = XMLCapture (nextInfo, 'hour')
+	local min = XMLCapture (nextInfo, 'min')
+
+	if (not (year and month and day and hour and min)) then
+		return
+	end
+
+	local date = {
+		year = year,
+		month = month,
+		day = day,
+		hour = hour,
+		min = min,
+		sec = 0,
+	}
+
+	local timestamp = os.time (date)
+	return timestamp
+end
+
+function GenerateTagChars ()
+	TagCharsByAscii = {}
+	AsciiCharsByTag = {}
+
+	for i = 0x20, 0x3F do
+		local asciiChar = string.char (i)
+		local tagByte = i + 0x80
+		local tagChar = '\xF3\xA0\x80' .. string.char (tagByte)
+		TagCharsByAscii [asciiChar] = tagChar
+		AsciiCharsByTag [tagChar] = asciiChar
+	end
+
+	for i = 0x40, 0x7E do
+		local asciiChar = string.char (i)
+		local tagByte = i + 0x40
+		local tagChar = '\xF3\xA0\x81' .. string.char (tagByte)
+		TagCharsByAscii [asciiChar] = tagChar
+		AsciiCharsByTag [tagChar] = asciiChar
+	end
+end
+
+function MakeTagged (asciiString)
+	if (not TagCharsByAscii) then
+		GenerateTagChars ()
+	end
+	local subFun = function (char)
+		if (TagCharsByAscii [char]) then
+			return TagCharsByAscii [char]
+		else
+			return char
+		end
+	end
+	local taggedString = string.gsub (asciiString, '([%z\1-\127\194-\244][\128-\191]*)', subFun)
+	return taggedString
+end
+
+function MakeAscii (taggedString)
+	if (not AsciiCharsByTag) then
+		GenerateTagChars ()
+	end
+	local subFun = function (char)
+		if (AsciiCharsByTag [char]) then
+			return AsciiCharsByTag [char]
+		else
+			return char
+		end
+	end
+	local asciiString = string.gsub (taggedString, '([%z\1-\127\194-\244][\128-\191]*)', subFun)
+	return asciiString
+end
+
+function IsDayTime ()
+	local currentHour = os.date ('*t').hour
+	local currentMinute = os.date ('*t').min
+
+	local currentDay = os.date ('*t').day
+	local currentMonth = os.date ('*t').month
+	local currentYear = os.date ('*t').year
+
+	local params = {
+		day = currentDay,
+		month = currentMonth,
+		year = currentYear,
+	}
+
+	local schedulerAgent = next (C4:GetDevicesByC4iName ('control4_agent_scheduler.c4i')) -- 100100
+	if (schedulerAgent) then
+		local sunInfo = C4:SendUIRequest (schedulerAgent, 'GET_SUNRISE_SUNSET', params)
+		if (sunInfo) then
+			local sunsetInfo = XMLCapture (sunInfo, 'sunset')
+			local sunriseInfo = XMLCapture (sunInfo, 'sunrise')
+			local sunriseHour = tonumber (XMLCapture (sunriseInfo, 'hour'))
+			local sunriseMinute = tonumber (XMLCapture (sunriseInfo, 'minute'))
+			local sunsetHour = tonumber (XMLCapture (sunsetInfo, 'hour'))
+			local sunsetMinute = tonumber (XMLCapture (sunsetInfo, 'minute'))
+
+			if (currentHour < sunriseHour or (currentHour == sunriseHour and currentMinute < sunriseMinute)) then
+				return false
+			elseif (currentHour > sunsetHour or (currentHour == sunsetHour and currentMinute >= sunsetMinute)) then
+				return false
+			else
+				return true
+			end
+		end
+	end
+end
+end
+-- ===== END BUNDLED vendor/drivers-common-public/global/lib.lua =====
+
+-- ===== BUNDLED FROM vendor/drivers-common-public/global/timer.lua =====
+do
+-- Copyright 2026 Snap One, LLC. All rights reserved.
+
+COMMON_TIMER_VER = 13
+
+do --Globals
+	Timer = Timer or {}
+	TimerFunctions = TimerFunctions or {}
+
+	DEBUG_TIMER = false
+end
+
+do -- Define intervals as ms
+	ONE_SECOND = 1000
+	ONE_MINUTE = 60 * ONE_SECOND
+	ONE_HOUR = 60 * ONE_MINUTE
+	ONE_DAY = 24 * ONE_HOUR
+end
+
+function KillAllTimers ()
+	for name, _ in pairs (Timer) do
+		CancelTimer (name)
+	end
+
+	for _, thisQ in pairs (SongQs or {}) do
+		thisQ.ProgressTimer = CancelTimer (thisQ.ProgressTimer)
+	end
+end
+
+function CancelTimer (timerId)
+	local timer
+	if (type (timerId) == 'string') then
+		timer = Timer [timerId]
+	elseif (type (timerId) == 'userdata') then
+		timer = timerId
+	end
+
+	if (timer) then
+		if (DEBUG_TIMER) then
+			print ('Timer cancelled: ' .. tostring (timerId))
+		end
+
+		if (timer.Cancel) then
+			Timer [timerId] = timer:Cancel ()
+			for k, v in pairs (Timer) do
+				if (v == timer) then
+					Timer [k] = nil
+				end
+			end
+		else
+			Timer [timerId] = nil
+		end
+		TimerFunctions [timer] = nil
+	end
+	return nil
+end
+
+function SetTimer (timerId, delay, timerFunction, repeating)
+	CancelTimer (timerId)
+
+	if (type (timerId) == 'nil') then
+		local output = {
+			'SetTimer anonymous timerId',
+			tostring (debug.getinfo(2, 'n').name),
+		}
+		dbg (table.concat (output, ' : '))
+	end
+
+	if (type (timerFunction) ~= 'function') then
+		timerFunction = nil
+	end
+
+	if (delay > ((2 ^ 31) - 1)) then
+		print ('Timer not created: ' .. tostring (timerId), 'delay exceeded max value (2^31 - 1)')
+		return
+	end
+
+	if (timerFunction == nil) then
+		if (type (_G [timerId]) == 'function') then
+			timerFunction = function (timer, skips)
+				_G [timerId] ()
+			end
+		else
+			timerFunction = function (timer, skips)
+			end
+		end
+	end
+
+	local _timer = function (timer, skips)
+		if (TimerFunctions [timer]) then
+			local success, ret = pcall (TimerFunctions [timer], timer, skips)
+			if (success == true) then
+				if (DEBUG_TIMER) then
+					print ('Timer completed: ', timerId, ret)
+				end
+			elseif (success == false) then
+				if (DEBUG_TIMER) then
+					print ('Timer Regular Expire Lua error: ', timerId, ret)
+				end
+			end
+		end
+		if (repeating ~= true) then
+			CancelTimer (timer)
+			if (Timer [timerId] == timer) then
+				CancelTimer (timerId)
+			end
+		end
+	end
+
+	if (DEBUG_TIMER) then
+		print ('Timer created: ' .. tostring (timerId))
+	end
+
+	local timer
+
+	local success, ret = pcall (C4.SetTimer, C4, delay, _timer, (repeating == true))
+	if (success) then
+		timer = ret
+	else
+		print ('Timer creation Lua error: ', timerId, ret)
+		return
+	end
+
+	if (timer) then
+		TimerFunctions [timer] = timerFunction
+
+		if (type (timerId) == 'string') then
+			Timer [timerId] = timer
+		else
+			Timer [timer] = timer
+		end
+	end
+	return timer
+end
+
+function ChangeTimer (timerId, delay, timerFunction, repeating)
+	local timer
+	if (type (timerId) == 'string') then
+		timer = Timer [timerId]
+	elseif (type (timerId) == 'userdata') then
+		timer = timerId
+	end
+
+	if (TimerFunctions [timer] == nil) then
+		return nil
+	end
+
+	if (type (timerFunction) ~= 'function') then
+		timerFunction = TimerFunctions [timer]
+	end
+
+	if (delay == nil) then
+		TimerFunctions [timer] = timerFunction
+		return timer
+	else
+		return (SetTimer (timerId, delay, timerFunction, repeating))
+	end
+end
+
+function ExpireTimer (timerId, keepAlive)
+	local timer
+	if (type (timerId) == 'string') then
+		timer = Timer [timerId]
+	elseif (type (timerId) == 'userdata') then
+		timer = timerId
+	end
+
+	if (TimerFunctions [timer]) then
+		local skips = 0
+		local success, ret = pcall (TimerFunctions [timer], timer, skips)
+		if (success == true) then
+			return (ret)
+		elseif (success == false) then
+			print ('Timer Force Expire Lua error: ', timerId, ret)
+		end
+	end
+
+	if (keepAlive ~= true) then
+		CancelTimer (timerId)
+	end
+end
+end
+-- ===== END BUNDLED vendor/drivers-common-public/global/timer.lua =====
+
+-- ===== BUNDLED FROM vendor/drivers-common-public/module/metrics.lua =====
+do
+-- Copyright 2025 Snap One, LLC. All rights reserved.
+
+COMMON_METRICS_VER = 9
+
+local metricsObject = {}
+
+do -- define globals
+	DEBUG_METRICS = DEBUG_METRICS or false
+end
+
+function metricsObject:new (group, version, identifier)
+	if (group == nil) then
+		group = tostring (C4:GetDriverConfigInfo ('name'))
+		version = tostring (C4:GetDriverConfigInfo ('version'))
+	elseif (type (group) == 'string') then
+		if (type (version) == 'number') then
+			version = tostring (version)
+		end
+		if (type (version) ~= 'string') then
+			error ('metricsObject:new - version is required when specifying a metric group', 2)
+		end
+	else
+		error ('metricsObject:new - group must be a string or nil', 2)
+		return
+	end
+
+	if (type (identifier) ~= 'string') then
+		identifier = ''
+	end
+
+	local driverName = C4:GetDriverConfigInfo ('name')
+	local driverId = tostring (C4:GetDeviceID ())
+
+	group = self:GetSafeString (group)
+	version = self:GetSafeString (version)
+	identifier = self:GetSafeString (identifier, true)
+	driverName = self:GetSafeString (driverName)
+	driverId = self:GetSafeString (driverId)
+
+	local namespace = {
+		'drivers',
+		group,
+		version,
+		identifier,
+		driverName,
+		driverId,
+	}
+
+	if (not (IN_PRODUCTION)) then
+		table.insert (namespace, 1, 'sandbox')
+	end
+
+	local namespace = table.concat (namespace, '.')
+
+	if (self.NameSpaces and self.NameSpaces [namespace]) then
+		local metric = self.NameSpaces [namespace]
+		return metric
+	end
+
+	local metric = {
+		namespace = namespace,
+	}
+
+	setmetatable (metric, self)
+	self.__index = self
+
+	self.NameSpaces = self.NameSpaces or {}
+	self.NameSpaces [namespace] = metric
+
+	return metric
+end
+
+function metricsObject:SetCounter (key, value, sampleRate)
+	---@diagnostic disable-next-line: undefined-field
+	if (not C4.StatsdCounter) then
+		return
+	end
+
+	if (type (key) ~= 'string') then
+		error ('metricsObject:SetCounter - key must be a string', 2)
+	end
+
+	if (value == nil) then
+		value = 1
+	end
+
+	if (type (value) ~= 'number') then
+		error ('metricsObject:SetCounter - Cannot set counter ' .. tostring (key) .. ' to non-number value', 2)
+	end
+
+	key = self:GetSafeString (key)
+
+	C4:StatsdCounter (self.namespace, key, value, (sampleRate or 0))
+	if (DEBUG_METRICS) then
+		print ('metricsObject:SetCounter:', self.namespace, key, tostring (value))
+	end
+end
+
+function metricsObject:SetGauge (key, value)
+	---@diagnostic disable-next-line: undefined-field
+	if (not C4.StatsdGauge) then
+		return
+	end
+
+	if (type (key) ~= 'string') then
+		error ('metricsObject:SetGauge - Metric key must be a string', 2)
+	end
+
+	if (type (value) ~= 'number') then
+		error ('metricsObject:SetGauge - Cannot set stats gauge ' .. tostring (key) .. ' to non-number value', 2)
+	end
+
+	key = self:GetSafeString (key)
+
+	C4:StatsdGauge (self.namespace, key, value)
+	if (DEBUG_METRICS) then
+		print ('metricsObject:SetGauge:', self.namespace, key, tostring (value))
+	end
+end
+
+function metricsObject:AdjustGauge (key, value)
+	---@diagnostic disable-next-line: undefined-field
+	if (not C4.StatsdAdjustGauge) then
+		return
+	end
+
+	if (type (key) ~= 'string') then
+		error ('metricsObject:AdjustGauge - Metric key must be a string', 2)
+	end
+
+	if (type (value) ~= 'number') then
+		error ('metricsObject:AdjustGauge - Trying to adjust stats gauge ' .. tostring (key) .. ' by non-number value', 2)
+	end
+
+	key = self:GetSafeString (key)
+
+	C4:StatsdAdjustGauge (self.namespace, key, value)
+	if (DEBUG_METRICS) then
+		print ('metricsObject:AdjustGauge:', self.namespace, key, tostring (value))
+	end
+end
+
+function metricsObject:SetTimer (key, value)
+	---@diagnostic disable-next-line: undefined-field
+	if (not C4.StatsdTimer) then
+		return
+	end
+
+	if (type (key) ~= 'string') then
+		error ('metricsObject:SetTimer - Metric key must be a string', 2)
+	end
+
+	if (type (value) ~= 'number') then
+		error ('metricsObject:SetTimer - Cannot set stats timer ' .. tostring (key) .. ' to non-number value', 2)
+	end
+
+	key = self:GetSafeString (key)
+
+	C4:StatsdTimer (self.namespace, key, value)
+	if (DEBUG_METRICS) then
+		print ('metricsObject:SetTimer:', self.namespace, key, tostring (value))
+	end
+end
+
+function metricsObject:SetString (key, value)
+	---@diagnostic disable-next-line: undefined-field
+	if (not C4.StatsdString) then
+		return
+	end
+
+	if (type (key) ~= 'string') then
+		error ('metricsObject:SetString - Metric key must be a string', 2)
+	end
+
+	if (type (value) ~= 'string') then
+		error ('metricsObject:SetString - Cannot set stats string ' .. tostring (key) .. ' to non-string value', 2)
+	end
+
+	key = self:GetSafeString (key)
+
+	value = string.gsub (value, '[\r\n]+', '    ')
+
+	C4:StatsdString (self.namespace, key, value)
+	if (DEBUG_METRICS) then
+		print ('metricsObject:SetString:', self.namespace, key, tostring (value))
+	end
+end
+
+function metricsObject:SetJSON (key, value)
+	---@diagnostic disable-next-line: undefined-field
+	if (not C4.StatsdJSONObject) then
+		return
+	end
+
+	if (type (key) ~= 'string') then
+		error ('metricsObject:SetJSON - Metric key must be a string', 2)
+	end
+
+	if (type (value) ~= 'string') then
+		error ('metricsObject:SetJSON - Cannot set stats JSONObject ' .. tostring (key) .. ' to non-string value', 2)
+	end
+
+	key = self:GetSafeString (key)
+
+	value = string.gsub (value, '[\r\n]+', '    ')
+
+	C4:StatsdJSONObject (self.namespace, key, value)
+	if (DEBUG_METRICS) then
+		print ('metricsObject:SetJSON:', self.namespace, key, tostring (value))
+	end
+end
+
+function metricsObject:SetIncrementingMeter (key, value)
+	---@diagnostic disable-next-line: undefined-field
+	if (not C4.StatsdIncrementMeter) then
+		return
+	end
+
+	if (type (key) ~= 'string') then
+		error ('metricsObject:SetIncrementingMeter - Metric key must be a string', 2)
+	end
+
+	if (type (value) ~= 'number') then
+		error ('metricsObject:SetIncrementingMeter - Cannot set incremeting meter ' .. tostring (key) .. ' to non-number value', 2)
+		return
+	end
+
+	key = self:GetSafeString (key)
+
+	C4:StatsdIncrementMeter (self.namespace, key, value)
+	if (DEBUG_METRICS) then
+		print ('metricsObject:SetIncrementMeter:', self.namespace, key, tostring (value))
+	end
+end
+
+function metricsObject:GetSafeString (s, ignoreUselessStrings)
+	if (s == nil) then
+		return
+	end
+
+	s = tostring (s)
+	local p = '[^%w%-%_]+'
+	local safe = string.gsub (s, p, '_')
+
+	if (ignoreUselessStrings ~= true and string.gsub (safe, '_', '') == '') then
+		error ('metricsObject:GetSafeString - generated a non-useful string', 3)
+	end
+
+	return safe
+end
+
+Metrics = metricsObject
+end
+-- ===== END BUNDLED vendor/drivers-common-public/module/metrics.lua =====
+
+-- ===== BUNDLED FROM vendor/drivers-common-public/global/handlers.lua =====
+do
+-- Copyright 2026 Snap One, LLC. All rights reserved.
+
+Metrics = require ('drivers-common-public.module.metrics')
+require ('drivers-common-public.global.lib')
+
+COMMON_HANDLERS_VER = 34
+
+do -- define globals
+	DEBUG_RFN = false
+	SSDP = SSDP
+	WebSocket = WebSocket
+end
+
+--[[ Inbound Driver Functions:
+
+		-- ExecuteCommand (strCommand, tParams)
+		FinishedWithNotificationAttachment ()
+		GetNotificationAttachmentURL ()
+		GetNotificationAttachmentFile ()
+		GetNotificationAttachmentBytes ()
+		GetPrivateKeyPassword (idBinding, nPort)
+		ListEvent (strEvent, param1, param2)
+		ListMIBReceived (strCommand, nCount, tParams)
+		ListNewControl (strContainer, strNavID, idDevice, tParams)
+		ListNewList (nListID, nItemCount, strName, nIndex, strContainer, strCategory, strNavID)
+		--OnBindingChanged (idBinding, strClass, bIsBound, otherDeviceID, otherBindngID)
+		--OnConnectionStatusChanged (idBinding, nPort, strStatus)
+		OnDriverDestroyed () -- in MSP
+		OnDriverInit ()		 -- in MSP
+		OnDriverLateInit ()	 -- in MSP
+		OnDriverRemovedFromProject ()
+		--OnDeviceEvent (firingDeviceId, eventId)
+		OnNetworkBindingChanged (idBinding, bIsBound)
+		OnPoll (idBinding, bIsBound)
+		-- OnPropertyChanged (strProperty)
+		OnReflashLockGranted ()
+		OnReflashLockRevoked ()
+		OnServerConnectionStatusChanged (nHandle, nPort, strStatus)
+		OnServerDataIn (nHandle, strData, strclientAddress, strPort)
+		OnServerStatusChanged (nPort, strStatus)
+		-- OnSystemEvent (event)
+		OnTimerExpired (idTimer)
+		-- OnVariableChanged (strVariable)
+		-- OnWatchedVariableChanged (idDevice, idVariable, strValue)
+		OnZigbeeOnlineStatusChanged (strStatus, strVersion, strSkew)
+		OnZigbeePacketIn (strPacket, nProfileID, nClusterID, nGroupID, nSourceEndpoint, nDestinationEndpoint)
+		OnZigbeePacketFailed (strPacket, nProfileID, nClusterID, nGroupID, nSourceEndpoint, nDestinationEndpoint)
+		OnZigbeePacketSuccess (strPacket, nProfileID, nClusterID, nGroupID, nSourceEndpoint, nDestinationEndpoint)
+		-- ReceivedAsync (ticketId, strData, responseCode, tHeaders, strError)
+		-- ReceivedFromNetwork (idBinding, nPort, strData)
+		-- ReceivedFromProxy (idBinding, strCommand, tParams)
+		ReceivedFromSerial (idBinding, strData)
+		--TestCondition (strConditionName, tParams)
+		--UIRequest (strCommand, tParams)
+
+
+		DoPersistSave ()
+		SetProperty ()
+		SetGlobal ()
+
+		OnBindingValidate (idBinding, strClass)
+
+		OnUsbSerialDeviceOnline (idDevice, strManufacturer, strProduct, strSerialNum, strHostname, nFirstPort, nNumPorts)
+		OnUsbSerialDeviceOffline ()
+
+		Attach ()
+		OnEndDebugSession ()
+
+]]
+
+--[[ C4 System Events (from C4SystemEvents global) - valid values for OSE keys
+	1	OnAll
+	2	OnAlive
+	3	OnProjectChanged
+	4	OnProjectNew
+	5	OnProjectLoaded
+	6	OnPIP
+	7	OnItemAdded
+	8	OnItemNameChanged
+	9	OnItemDataChanged
+	10	OnDeviceDataChanged
+	11	OnItemRemoved
+	12	OnItemMoved
+	13	OnDriverAdded
+	14	OnDeviceIdentified
+	15	OnBindingAdded
+	16	OnBindingRemoved
+	17	OnNetworkBindingAdded
+	18	OnNetworkBindingRemoved
+	19	OnNetworkBindingRegistered
+	20	OnNetworkBindingUnregistered
+	21	OnCodeItemAdded
+	22	OnCodeItemRemoved
+	23	OnCodeItemMoved
+	24	OnMediaInfoAdded
+	25	OnMediaInfoModified
+	26	OnMediaRemovedFromDevice
+	27	OnMediaDataRemoved
+	28	OnSongAddedToPlaylist
+	29	OnSongRemovedFromPlaylist
+	30	OnPhysicalDeviceAdded
+	31	OnPhysicalDeviceRemoved
+	32	OnDataToUI
+	33	OnAccessModeChanged
+	34	OnVariableAdded
+	35	OnUserVariableAdded
+	36	OnVariableRemoved
+	37	OnVariableRenamed
+	38	OnVariableChanged
+	39	OnVariableBindingAdded
+	40	OnVariableBindingRemoved
+	41	OnVariableBindingRenamed
+	42	OnVariableAddedToBinding
+	43	OnVariableRemovedFromBinding
+	44	OnMediaDeviceAdded
+	45	OnMediaDeviceRemoved
+	46	OnProjectLocked
+	47	OnProjectLeaveLock
+	48	OnDeviceOnline
+	49	OnDeviceOffline
+	50	OnSearchTypeFound
+	51	OnNetworkBindingStatusChanged
+	52	OnZipcodeChanged
+	53	OnLatitudeChanged
+	54	OnLongitudeChanged
+	55	OnDeviceAlreadyIdentified
+	56	OnControllerDisabled
+	57	OnDeviceFirmwareChanged
+	58	OnLocaleChanged
+	59	OnZigbeeNodesChanged
+	60	OnZigbeeZapsChanged
+	61	OnZigbeeMeshChanged
+	62	OnZigbeeZserverChanged
+	63	OnSysmanResponse
+	64	OnTimezoneChanged
+	65	OnMediaSessionAdded
+	66	OnMediaSessionRemoved
+	67	OnMediaSessionChanged
+	68	OnMediaDeviceChanged
+	69	OnProjectEnterLock
+	70	OnDeviceIdentifiedNoLicense
+	71	OnZigBeeStickPresent
+	72	OnZigBeeStickRemoved
+	73	OnZigbeeNodeUpdateStatus
+	74	OnZigbeeNodeUpdateSucceeded
+	75	OnZigbeeNodeUpdateFailed
+	76	OnZigbeeNodeOnline
+	77	OnZigbeeNodeOffline
+	78	OnSDDPDeviceStatus
+	79	OnSDDPDeviceDiscover
+	80	OnAccountInfoUpdated
+	81	OnAccountInfoUpdating
+	82	OnBindingEntryAdded
+	83	OnBindingEntryRemoved
+	84	OnProjectClear
+	85	OnSystemShutDown
+	86	OnSystemUpdateStarted
+	87	OnDevicePreIdentify
+	88	OnDeviceIdentifying
+	89	OnDeviceCancelIdentify
+	90	OnDirectorIPAddressChanged
+	91	OnDeviceDiscovered
+	92	OnDeviceUserInitiatedRemove
+	93	OnDriverDisabled
+	94	OnDiscoveredDeviceAdded
+	95	OnDiscoveredDeviceRemoved
+	96	OnDiscoveredDeviceChanged
+	97	OnDeviceIPAddressChanged
+	98	OnCIDRRulesChanged
+	99	OnBindingEntryRenamed
+	100	OnCodeItemEnabled
+	101	OnCodeItemCommandUpdated
+	102	OnSystemUpdateFinished
+	103	OnTimeChanged
+	104	OnMediaSessionDiscreteMuteChanged
+	105	OnMediaSessionMuteStateChanged
+	106	OnMediaSessionDiscreteVolumeChanged
+	107	OnMediaSessionVolumeLevelChanged
+	108	OnMediaSessionMediaInfoChanged
+	109	OnMediaSessionVolumeSliderStateChanged
+	110	OnScheduledEvent
+	111	OnMediaSessionSliderTargetVolumeReached
+	112	OnCodeItemAddedToExpression
+	113	OnProjectPropertyChanged
+	114	OnEventAdded
+	115	OnEventModified
+	116	OnEventRemoved
+	117	OnZigbeeNetworkHealth
+	118	OnZigbeeDuplicateMesh
+	119	OnConnectionAuthorized
+	120	OnAuthorizedConnectionDisconnected
+	121	OnNetworkBindingAddressChanged
+	122	OnProjectLoading
+	123	OnProjectRestored
+	124	OnZigbeeNetworkBusy
+]]
+
+do --Globals
+	EC = EC or { suppressDebug = {}, }
+	OBC = OBC or { suppressDebug = {}, }
+	ODE = ODE or { suppressDebug = {}, }
+	OCS = OCS or { suppressDebug = {}, }
+	OPC = OPC or { suppressDebug = {}, }
+	OSE = OSE or { suppressDebug = {}, }
+	OVC = OVC or { suppressDebug = {}, }
+	OWVC = OWVC or { suppressDebug = {}, }
+	RFN = RFN or { suppressDebug = {}, }
+	RFP = RFP or { suppressDebug = {}, }
+	TC = TC or { suppressDebug = {}, }
+	UIR = UIR or { suppressDebug = {}, }
+
+	ValidVarTypes = {
+		BOOL = true,
+		DEVICE = true,
+		FLOAT = true,
+		INT = true,
+		MEDIA = true,
+		NUMBER = true,
+		ROOM = true,
+		STRING = true,
+		STATE = true,
+		TIME = true,
+		ULONG = true,
+		XML = true,
+		LEVEL = true,
+		LIST = true,
+	}
+end
+
+do --Setup Metrics
+	MetricsHandler = Metrics:new ('dcp_handler', COMMON_HANDLERS_VER)
+end
+
+function HandlerDebug (init, tParams, args)
+	if (not DEBUGPRINT) then
+		return
+	end
+
+	if (type (init) ~= 'table') then
+		return
+	end
+
+	local output = init
+	for k, v in pairs (output) do output [k] = "  " .. v end
+
+	if (type (tParams) == 'table' and next (tParams) ~= nil) then
+		table.insert (output, '        ----PARAMS----')
+		for k, v in pairs (tParams) do
+			local line = string.format ("  %-20s = %s", tostring (k), tostring (v))
+			table.insert (output, line)
+		end
+	end
+
+	if (type (args) == 'table' and next (args) ~= nil) then
+		table.insert (output, '        ----ARGS----')
+		for k, v in pairs (args) do
+			local line = string.format ("  %-20s = %s", tostring (k), tostring (v))
+			table.insert (output, line)
+		end
+	end
+
+	local t, ms
+	if (C4.GetTime) then
+		t = C4:GetTime ()
+		ms = '.' .. tostring (t % 1000)
+		t = math.floor (t / 1000)
+	else
+		t = os.time ()
+		ms = ''
+	end
+	local s = string.format ("%-21s : ", os.date ('%x %X') .. ms)
+
+	table.insert (output, 1, s)
+	table.insert (output, 1, '-->')
+	table.insert (output, '<--')
+	output = table.concat (output, '\r\n')
+	print (output)
+	C4:DebugLog (output)
+end
+
+function ExecuteCommand (strCommand, tParams)
+	tParams = tParams or {}
+
+	local suppressDebug = Select (EC, 'suppressDebug', strCommand)
+
+	if (not suppressDebug) then
+		local init = {
+			'ExecuteCommand: ' .. strCommand,
+		}
+		HandlerDebug (init, tParams)
+	end
+
+	if (strCommand == 'LUA_ACTION') then
+		if (tParams.ACTION) then
+			strCommand = tParams.ACTION
+			tParams.ACTION = nil
+		end
+	end
+
+	strCommand = string.gsub (strCommand, '%s+', '_')
+
+	local success, ret
+
+	local ecFunction = Select (EC, strCommand)
+
+	if (type (ecFunction) == 'function') then
+		success, ret = pcall (ecFunction, tParams)
+	end
+
+	if (success == true) then
+		return (ret)
+	elseif (success == false) then
+		MetricsHandler:SetCounter ('Error_ExecuteCommand')
+		print ('ExecuteCommand error: ', ret, strCommand)
+	elseif (DEBUGPRINT) then
+		print ('Unhandled ExecuteCommand')
+	end
+end
+
+function OnBindingChanged (idBinding, strClass, bIsBound, otherDeviceId, otherBindingId)
+	local suppressDebug = Select (OBC, 'suppressDebug', idBinding)
+
+	if (not suppressDebug) then
+		local init = {
+			'OnBindingChanged: ' .. idBinding,
+		}
+		local tParams = {
+			strClass = strClass,
+			bIsBound = tostring (bIsBound),
+			otherDeviceId = otherDeviceId,
+			otherBindingId = otherBindingId,
+		}
+		HandlerDebug (init, tParams)
+	end
+
+	local success, ret
+
+	local obcFunction = Select (OBC, idBinding)
+
+	if (type (obcFunction) == 'function') then
+		success, ret = pcall (obcFunction, idBinding, strClass, bIsBound, otherDeviceId, otherBindingId)
+	end
+
+	if (success == true) then
+		return (ret)
+	elseif (success == false) then
+		MetricsHandler:SetCounter ('Error_OnBindingChanged')
+		print ('OnBindingChanged error: ', ret, idBinding, strClass, bIsBound, otherDeviceId, otherBindingId)
+	elseif (DEBUGPRINT) then
+		print ('Unhandled OnBindingChanged')
+	end
+end
+
+function OnConnectionStatusChanged (idBinding, nPort, strStatus)
+	local suppressDebug = Select (OCS, 'suppressDebug', idBinding)
+
+	if (not suppressDebug) then
+		local init = {
+			'OnConnectionStatusChanged: ' .. idBinding,
+		}
+		local tParams = {
+			nPort = nPort,
+			strStatus = strStatus,
+		}
+		HandlerDebug (init, tParams)
+	end
+
+	local success, ret
+
+	local ocsFunction = Select (OCS, idBinding)
+
+	if (type (ocsFunction) == 'function') then
+		success, ret = pcall (ocsFunction, idBinding, nPort, strStatus)
+	end
+
+	if (success == true) then
+		return (ret)
+	elseif (success == false) then
+		MetricsHandler:SetCounter ('Error_OnConnectionStatusChanged')
+		print ('OnConnectionStatusChanged error: ', ret, idBinding, nPort, strStatus)
+	elseif (DEBUGPRINT) then
+		print ('Unhandled OnConnectionStatusChanged')
+	end
+end
+
+function RegisterDeviceEvent (firingDeviceId, eventId, callback)
+	if (type (firingDeviceId) ~= 'number') then
+		firingDeviceId = tonumber (firingDeviceId)
+	end
+	if (type (eventId) ~= 'number') then
+		eventId = tonumber (eventId)
+	end
+	if (firingDeviceId == nil or eventId == nil) then
+		MetricsHandler:SetCounter ('Error_RegisterDeviceEvent')
+		print ('RegisterDeviceEvent error (Invalid idDevice / idVariable): ', tostring (firingDeviceId),
+			tostring (eventId), tostring (callback))
+		return
+	end
+
+	C4:UnregisterDeviceEvent (firingDeviceId, eventId)
+
+	ODE [firingDeviceId] = ODE [firingDeviceId] or {}
+
+	if (type (callback) == 'function') then
+		ODE [firingDeviceId] [eventId] = callback
+		C4:RegisterDeviceEvent (firingDeviceId, eventId)
+	else
+		MetricsHandler:SetCounter ('Error_RegisterDeviceEvent')
+		print ('RegisterDeviceEvent error (callback not a function): ', firingDeviceId, eventId, callback)
+	end
+end
+
+function UnregisterDeviceEvent (firingDeviceId, eventId)
+	if (type (firingDeviceId) ~= 'number') then
+		firingDeviceId = tonumber (firingDeviceId)
+	end
+	if (type (eventId) ~= 'number') then
+		eventId = tonumber (eventId)
+	end
+	if (firingDeviceId == nil or eventId == nil) then
+		MetricsHandler:SetCounter ('Error_UnregisterDeviceEvent')
+		print ('UnregisterDeviceEvent error (Invalid idDevice / idVariable): ', tostring (firingDeviceId),
+			tostring (eventId))
+		return
+	end
+
+	C4:UnregisterDeviceEvent (firingDeviceId, eventId)
+
+	if (ODE and ODE [firingDeviceId]) then
+		ODE [firingDeviceId] [eventId] = nil
+	end
+
+	if (ODE [firingDeviceId] and not next (ODE [firingDeviceId])) then
+		ODE [firingDeviceId] = nil
+	end
+end
+
+function OnDeviceEvent (firingDeviceId, eventId)
+	local suppressDebug = Select (ODE, 'suppressDebug', firingDeviceId, eventId)
+
+	if (not suppressDebug) then
+		local init = {
+			'OnDeviceEvent: ' .. C4:GetDeviceDisplayName (firingDeviceId) .. ' [' .. firingDeviceId .. ']',
+			eventId,
+		}
+		HandlerDebug (init)
+	end
+
+	local success, ret
+
+	local odeFunction = Select (ODE, firingDeviceId, eventId)
+
+	if (type (odeFunction) == 'function') then
+		success, ret = pcall (odeFunction, firingDeviceId, eventId)
+	end
+
+	if (success == true) then
+		return (ret)
+	elseif (success == false) then
+		MetricsHandler:SetCounter ('Error_OnDeviceEvent')
+		print ('OnDeviceEvent error: ', ret, firingDeviceId, eventId)
+	elseif (DEBUGPRINT) then
+		print ('Unhandled OnDeviceEvent')
+	end
+end
+
+function UpdateProperty (strProperty, strValue, notifyChange)
+	if (type (strProperty) ~= 'string') then
+		MetricsHandler:SetCounter ('Error_UpdateProperty')
+		print ('UpdateProperty error (strProperty not string): ', tostring (strProperty), tostring (strValue))
+		return
+	end
+
+	if (Properties [strProperty] == nil) then
+		MetricsHandler:SetCounter ('Error_UpdateProperty')
+		print ('UpdateProperty error (Property not present in Properties table): ', tostring (strProperty),
+			tostring (strValue))
+		return
+	end
+
+	if (strValue == nil) then
+		strValue = ''
+	elseif (type (strValue) ~= 'string') then
+		strValue = tostring (strValue)
+	end
+
+	if (Properties [strProperty] ~= strValue) then
+		C4:UpdateProperty (strProperty, strValue)
+	end
+	if (notifyChange == true) then
+		OnPropertyChanged (strProperty)
+	end
+end
+
+function OnPropertyChanged (strProperty)
+	local value = Properties [strProperty]
+	if (type (value) ~= 'string') then
+		value = ''
+	end
+
+	local suppressDebug = Select (OPC, 'suppressDebug', strProperty)
+
+	if (not suppressDebug) then
+		local init = {
+			'OnPropertyChanged: ' .. strProperty,
+			value,
+		}
+		HandlerDebug (init)
+	end
+
+	strProperty = string.gsub (strProperty, '%s+', '_')
+
+	local success, ret
+
+	local opcFunction = Select (OPC, strProperty)
+
+	if (type (opcFunction) == 'function') then
+		success, ret = pcall (opcFunction, value)
+	end
+
+	if (success == true) then
+		return (ret)
+	elseif (success == false) then
+		MetricsHandler:SetCounter ('Error_OnPropertyChanged')
+		print ('OnPropertyChanged error: ', ret, strProperty, value)
+	elseif (DEBUGPRINT) then
+		print ('Unhandled OnPropertyChanged')
+	end
+end
+
+function OnSystemEvent (event)
+	local eventName = string.match (event, '.-name="(.-)"')
+
+	if (eventName == 'OnDataToUI') then
+		local luaOutputString = '<devicecommand><command>LUA_OUTPUT</command>'
+		local isLuaOutput = string.match (event, luaOutputString)
+		if (isLuaOutput) then
+			return
+		end
+	end
+
+	local suppressDebug = Select (OSE, 'suppressDebug', eventName)
+
+	if (not suppressDebug) then
+		local init = {
+			'OnSystemEvent: ' .. eventName,
+			event,
+		}
+		HandlerDebug (init)
+	end
+
+	local success, ret
+
+	local safeEventName = string.gsub (eventName, '%s+', '_')
+	local oseFunction = Select (OSE, safeEventName)
+
+	if (type (oseFunction) == 'function') then
+		success, ret = pcall (oseFunction, event)
+	end
+
+	if (success == true) then
+		return (ret)
+	elseif (success == false) then
+		MetricsHandler:SetCounter ('Error_OnSystemEvent')
+		print ('OnSystemEvent error: ', ret, eventName, event)
+	elseif (DEBUGPRINT) then
+		print ('Unhandled OnSystemEvent')
+	end
+end
+
+function AddVariable (strVariable, strValue, varType, readOnly, hidden)
+	if (type (strVariable) ~= 'string') then
+		MetricsHandler:SetCounter ('Error_AddVariable')
+		print ('AddVariable error (Invalid strVariable): ', tostring (strVariable), type (strVariable))
+		return
+	end
+
+	if (type (varType) ~= 'string') then
+		MetricsHandler:SetCounter ('Error_AddVariable')
+		print ('AddVariable error (varType not string): ', tostring (varType), type (varType))
+		return
+	end
+
+	if (not (ValidVarTypes [varType])) then
+		MetricsHandler:SetCounter ('Error_AddVariable')
+		print ('AddVariable error (Invalid varType): ', tostring (varType))
+		return
+	end
+
+	if (type (strValue) == 'boolean') then
+		strValue = (strValue and '1') or '0'
+	elseif (type (strValue) ~= 'string') then
+		strValue = tostring (strValue)
+	end
+
+	if (Variables [strVariable]) then
+		SetVariable (strVariable, strValue)
+		return
+	end
+
+	if (readOnly ~= true) then
+		readOnly = false
+	end
+
+	if (hidden ~= true) then
+		hidden = false
+	end
+
+	C4:AddVariable (strVariable, strValue, varType, readOnly, hidden)
+end
+
+function SetVariable (strVariable, strValue, notifyChange)
+	if (type (strVariable) ~= 'string') then
+		MetricsHandler:SetCounter ('Error_SetVariable')
+		print ('AddVariable error (Invalid strVariable): ', tostring (strVariable), type (strVariable))
+		return
+	end
+
+	if (strValue == nil) then
+		MetricsHandler:SetCounter ('Error_SetVariable')
+		print ('SetVariable error (Invalid strValue): nil')
+		return
+	end
+
+	if (type (strValue) == 'boolean') then
+		strValue = (strValue and '1') or '0'
+	elseif (type (strValue) ~= 'string') then
+		strValue = tostring (strValue)
+	end
+
+	if (Variables [strVariable] ~= strValue) then
+		C4:SetVariable (strVariable, strValue)
+	end
+	if (notifyChange == true) then
+		OnVariableChanged (strVariable)
+	end
+end
+
+function OnVariableChanged (strVariable, variableId)
+	local value = Variables [strVariable]
+	if (value == nil) then
+		value = ''
+	end
+
+	local suppressDebug = Select (OVC, 'suppressDebug', strVariable) or
+		Select (OVC, 'suppressDebug', variableId)
+
+	if (not suppressDebug) then
+		local init = {
+			'OnVariableChanged: ' .. strVariable .. ' [' .. tostring (variableId) .. ']',
+			value,
+		}
+		HandlerDebug (init)
+	end
+
+	strVariable = string.gsub (strVariable, '%s+', '_')
+
+	local success, ret
+
+	local ovcStrVarFunction = Select (OVC, strVariable)
+	local ovcVarIdFunction = Select (OVC, variableId)
+
+	if (type (ovcStrVarFunction) == 'function') then
+		success, ret = pcall (ovcStrVarFunction, value)
+	elseif (type (ovcVarIdFunction) == 'function') then
+		success, ret = pcall (ovcVarIdFunction, value)
+	end
+
+	if (success == true) then
+		return (ret)
+	elseif (success == false) then
+		MetricsHandler:SetCounter ('Error_OnVariableChanged')
+		print ('OnVariableChanged error: ', ret, strVariable, value)
+	elseif (DEBUGPRINT) then
+		print ('Unhandled OnVariableChanged')
+	end
+end
+
+function RegisterVariableListener (idDevice, idVariable, callback)
+	if (idDevice == nil or idVariable == nil) then
+		MetricsHandler:SetCounter ('Error_RegisterVariableListener')
+		print ('RegisterVariableListener error (Invalid idDevice / idVariable): ', tostring (idDevice),
+			tostring (idVariable), tostring (callback))
+		return
+	end
+
+	C4:UnregisterVariableListener (idDevice, idVariable)
+
+	OWVC [idDevice] = OWVC [idDevice] or {}
+
+	if (type (callback) == 'function') then
+		OWVC [idDevice] [idVariable] = callback
+		C4:RegisterVariableListener (idDevice, idVariable)
+	else
+		MetricsHandler:SetCounter ('Error_RegisterVariableListener')
+		print ('RegisterVariableListener error (callback not a function): ', idDevice, idVariable, callback)
+	end
+end
+
+function UnregisterVariableListener (idDevice, idVariable)
+	if (idDevice == nil or idVariable == nil) then
+		MetricsHandler:SetCounter ('Error_UnregisterVariableListener')
+		print ('UnregisterVariableListener error (Invalid idDevice / idVariable): ', tostring (idDevice),
+			tostring (idVariable))
+		return
+	end
+
+	C4:UnregisterVariableListener (idDevice, idVariable)
+
+	if (OWVC and OWVC [idDevice]) then
+		OWVC [idDevice] [idVariable] = nil
+	end
+
+	if (OWVC [idDevice] and not next (OWVC [idDevice])) then
+		OWVC [idDevice] = nil
+	end
+end
+
+function OnWatchedVariableChanged (idDevice, idVariable, strValue)
+	local suppressDebug = Select (OWVC, 'suppressDebug', idDevice, idVariable)
+
+	if (not suppressDebug) then
+		local init = {
+			'OnWatchedVariableChanged: ' .. C4:GetDeviceDisplayName (idDevice) .. ' [' .. idDevice .. ']',
+		}
+		local varName = Select (C4:GetDeviceVariables (idDevice), tostring (idVariable), 'name') or ''
+		varName = varName .. ' [' .. idVariable .. ']'
+
+		local tParams = {
+			[varName] = strValue,
+		}
+		HandlerDebug (init, tParams)
+	end
+
+	local success, ret
+
+	if (OWVC and
+			OWVC [idDevice] and
+			OWVC [idDevice] [idVariable] and
+			type (OWVC [idDevice] [idVariable]) == 'function') then
+		success, ret = pcall (OWVC [idDevice] [idVariable], idDevice, idVariable, strValue)
+	else
+		success = false
+		ret = 'Callback not available for registered variable'
+	end
+
+	if (success == true) then
+		return (ret)
+	elseif (success == false) then
+		MetricsHandler:SetCounter ('Error_OnWatchedVariableChanged')
+		print ('OnWatchedVariableChanged error: ', ret, idDevice, idVariable, strValue)
+	elseif (DEBUGPRINT) then
+		print ('Unhandled OnWatchedVariableChanged')
+	end
+end
+
+function ReceivedFromNetwork (idBinding, nPort, strData)
+	local suppressDebug = Select (RFN, 'suppressDebug', idBinding) or
+		Select (SSDP, 'SearchTargets', idBinding) or
+		(Select (WebSocket, 'Sockets', idBinding) and not DEBUG_WEBSOCKET)
+
+	suppressDebug = suppressDebug and (not DEBUG_RFN)
+
+	if (not suppressDebug) then
+		local init = {
+			'ReceivedFromNetwork: ' .. idBinding,
+		}
+		local tParams = {
+			nPort = nPort,
+			dataLen = #strData,
+			data = (DEBUG_RFN and strData) or nil,
+		}
+		HandlerDebug (init, tParams)
+	end
+
+	local success, ret
+
+	local rfnFunction = Select (RFN, idBinding)
+
+	if (type (rfnFunction) == 'function') then
+		success, ret = pcall (rfnFunction, idBinding, nPort, strData)
+	end
+
+	if (success == true) then
+		return (ret)
+	elseif (success == false) then
+		MetricsHandler:SetCounter ('Error_ReceivedFromNetwork')
+		print ('ReceivedFromNetwork error: ', ret, idBinding, nPort, strData)
+	elseif (DEBUGPRINT) then
+		print ('Unhandled ReceivedFromNetwork')
+	end
+end
+
+function ReceivedFromProxy (idBinding, strCommand, tParams)
+	strCommand = strCommand or ''
+	tParams = tParams or {}
+	local args = {}
+	if (tParams.ARGS) then
+		local parsedArgs = C4:ParseXml (tParams.ARGS)
+		for _, v in pairs (parsedArgs.ChildNodes) do
+			args [v.Attributes.name] = v.Value
+		end
+		tParams.ARGS = nil
+	end
+
+	local suppressDebug = Select (RFP, 'suppressDebug', idBinding, strCommand)
+
+	if (not suppressDebug) then
+		local init = {
+			'ReceivedFromProxy: ' .. idBinding,
+			strCommand,
+		}
+		HandlerDebug (init, tParams, args)
+	end
+
+	local success, ret
+
+	local rfpCommandFunction = Select (RFP, strCommand)
+	local rfpBindingFunction = Select (RFP, idBinding)
+
+	if (type (rfpCommandFunction) == 'function') then
+		success, ret = pcall (rfpCommandFunction, idBinding, strCommand, tParams, args)
+	elseif (type (rfpBindingFunction) == 'function') then
+		success, ret = pcall (rfpBindingFunction, idBinding, strCommand, tParams, args)
+	end
+
+	if (success == true) then
+		return (ret)
+	elseif (success == false) then
+		MetricsHandler:SetCounter ('Error_ReceivedFromProxy')
+		print ('ReceivedFromProxy error: ', ret, idBinding, strCommand)
+	elseif (DEBUGPRINT) then
+		print ('Unhandled ReceivedFromProxy')
+	end
+end
+
+function TestCondition (strConditionName, tParams)
+	strConditionName = strConditionName or ''
+	tParams = tParams or {}
+
+	local suppressDebug = Select (TC, 'suppressDebug', strConditionName)
+
+	if (not suppressDebug) then
+		local init = {
+			'TestCondition: ' .. strConditionName,
+		}
+		HandlerDebug (init, tParams)
+	end
+
+	local success, ret
+
+	local tcFunction = Select (TC, strConditionName)
+
+	if (type (tcFunction) == 'function') then
+		success, ret = pcall (tcFunction, strConditionName, tParams)
+	end
+
+	if (success == true) then
+		return (ret)
+	elseif (success == false) then
+		MetricsHandler:SetCounter ('Error_TestCondition')
+		print ('TestCondition error: ', ret, strConditionName)
+	elseif (DEBUGPRINT) then
+		print ('Unhandled TestCondition')
+	end
+end
+
+function UIRequest (strCommand, tParams)
+	strCommand = strCommand or ''
+	tParams = tParams or {}
+
+	local suppressDebug = Select (UIR, 'suppressDebug', strCommand)
+
+	if (not suppressDebug) then
+		local init = {
+			'UIRequest: ' .. strCommand,
+		}
+		HandlerDebug (init, tParams)
+	end
+
+	local success, ret
+
+	local uirFunction = Select (UIR, strCommand)
+
+	if (type (uirFunction) == 'function') then
+		success, ret = pcall (uirFunction, tParams)
+	end
+
+	if (success == true) then
+		-- The return value from UIRequest has to be valid XML for it not to trigger
+		-- a potential automatic fallthrough to ExecuteCommand
+		if (type (ret) == 'string') then
+			-- let's hope this this is XML!
+			return ret
+		else
+			return XMLTag ('result', 'success')
+		end
+	elseif (success == false) then
+		print ('UIRequest Lua error: ', strCommand, ret)
+	elseif (DEBUGPRINT) then
+		print ('Unhandled UIRequest')
+	end
+end
+end
+-- ===== END BUNDLED vendor/drivers-common-public/global/handlers.lua =====
+
+-- ===== BUNDLED FROM vendor/drivers-common-public/module/websocket.lua =====
+do
+-- Copyright 2026 Snap One, LLC. All rights reserved.
+
+COMMON_WEBSOCKET_VER = 15
+
+require ('drivers-common-public.global.handlers')
+require ('drivers-common-public.global.timer')
+
+Metrics = require ('drivers-common-public.module.metrics')
+
+local wsObject = {}
+
+do -- define globals
+	DEBUG_WEBSOCKET = DEBUG_WEBSOCKET or false
+end
+
+function wsObject:new (url, additionalHeaders, wssOptions)
+	if (type (additionalHeaders) ~= 'table') then
+		additionalHeaders = nil
+	end
+
+	if (self.Sockets and self.Sockets [url]) then
+		local ws = self.Sockets [url]
+		ws.additionalHeaders = additionalHeaders
+		return ws
+	end
+
+	-- important values to be incorporated into our WebSocket object
+	local protocol, host, port, resource
+
+	-- temporary values for parsing
+	local rest, hostport
+
+	protocol, rest = string.match (url or '', '(wss?)://(.*)')
+
+	hostport, resource = string.match (rest or '', '(.-)(/.*)')
+	if (not (hostport and resource)) then
+		hostport = rest
+		resource = '/'
+	end
+
+	host, port = string.match (hostport or '', '(.-):(.*)')
+
+	if (not (host and port)) then
+		host = hostport
+		if (protocol == 'ws') then
+			port = 80
+		elseif (protocol == 'wss') then
+			port = 443
+		end
+	end
+
+	port = tonumber (port)
+
+	if (type (wssOptions) ~= 'table') then
+		wssOptions = {}
+	end
+
+	if (protocol and host and port and resource) then
+		local ws = {
+			url = url,
+			protocol = protocol,
+			host = host,
+			port = port,
+			resource = resource,
+			buf = '',
+			ping_interval = 30,
+			pong_response_interval = 10,
+			additionalHeaders = additionalHeaders or {},
+			wssOptions = wssOptions,
+		}
+
+		ws.timerPrefix = 'WS_' .. url .. '_Timer_'
+
+		setmetatable (ws, self)
+		self.__index = self
+
+		ws.metrics = Metrics:new ('dcp_websocket', COMMON_WEBSOCKET_VER)
+
+		self.Sockets = self.Sockets or {}
+		self.Sockets [url] = ws
+
+		ws.metrics:SetCounter ('Init')
+		ws:setupC4Connection ()
+
+		return ws
+	else
+		self.metrics:SetCounter ('Error_Init')
+		return nil, 'invalid WebSocket URL provided:' .. (url or '')
+	end
+end
+
+function wsObject:delete ()
+	self.deleteAfterClosing = true
+	self:Close ()
+
+	self.metrics:SetCounter ('Delete')
+	return nil
+end
+
+function wsObject:Start ()
+	print ('Starting Web Socket... Opening net connection to ' .. self.url)
+
+	if (self.netBinding and self.protocol and self.port) then
+		self.metrics:SetCounter ('Start')
+		C4:NetDisconnect (self.netBinding, self.port)
+		C4:NetConnect (self.netBinding, self.port)
+	else
+		self.metrics:SetCounter ('Error_Start')
+		print ('C4 network connection not setup')
+	end
+
+	return self
+end
+
+function wsObject:Close ()
+	self.running = false
+	if (self.connected) then
+		local pkt = string.char (0x88, 0x82, 0x00, 0x00, 0x00, 0x00, 0x03, 0xE8)
+		if (DEBUG_WEBSOCKET) then
+			print ('TX CLOSE REQUEST')
+		end
+		self:sendToNetwork (pkt)
+	end
+
+	local _timer = function (timer)
+		C4:NetDisconnect (self.netBinding, self.port)
+		if (self.deleteAfterClosing) then
+			self.deleteAfterClosing = nil
+
+			if (self.Sockets) then
+				if (self.url) then
+					self.Sockets [self.url] = nil
+				end
+				if (self.netBinding) then
+					OCS [self.netBinding] = nil
+					RFN [self.netBinding] = nil
+					self.Sockets [self.netBinding] = nil
+				end
+			end
+
+			C4:SetBindingAddress (self.netBinding, '')
+		end
+	end
+
+	CancelTimer (self.timerPrefix .. 'Ping')
+	CancelTimer (self.timerPrefix .. 'PongResponse')
+
+	SetTimer (self.timerPrefix .. 'Closing', 3 * ONE_SECOND, _timer)
+
+	return self
+end
+
+function wsObject:Send (s)
+	if (self.connected) then
+		local len = string.len (s)
+		local lenstr
+		if (len <= 125) then
+			lenstr = string.char (0x81, bit.bor (len, 0x80))
+		elseif (len <= 65535) then
+			lenstr = string.char (0x81, bit.bor (126, 0x80)) .. tohex (string.format ('%04X', len))
+		else
+			lenstr = string.char (0x81, bit.bor (127, 0x80)) .. tohex (string.format ('%16X', len))
+		end
+
+		local mask = {
+			math.random (0, 255),
+			math.random (0, 255),
+			math.random (0, 255),
+			math.random (0, 255),
+		}
+
+		local pkt = {
+			lenstr,
+			string.char (mask [1]),
+			string.char (mask [2]),
+			string.char (mask [3]),
+			string.char (mask [4]),
+		}
+
+		table.insert (pkt, self:Mask (s, mask))
+
+		local pkt = table.concat (pkt)
+		if (DEBUG_WEBSOCKET) then
+			local d = { '', 'TX', }
+
+			table.insert (d, '')
+			table.insert (d, s)
+			table.insert (d, '')
+
+			local d = table.concat (d, '\r\n')
+
+			print (d)
+		end
+		self:sendToNetwork (pkt)
+	end
+
+	return self
+end
+
+function wsObject:SetProcessMessageFunction (f)
+	local _f = function (websocket, data)
+		local success, ret = pcall (f, websocket, data)
+		if (success == false) then
+			self.metrics:SetCounter ('Error_ProcessMessageCallback')
+			print ('Websocket callback ProcessMessage error: ', ret, data)
+		end
+	end
+	self.ProcessMessage = _f
+
+	return self
+end
+
+function wsObject:SetClosedByRemoteFunction (f)
+	local _f = function (websocket)
+		local success, ret = pcall (f, websocket)
+		if (success == false) then
+			self.metrics:SetCounter ('Error_ClosedByRemoteCallback')
+			print ('Websocket callback ClosedByRemote error: ', ret)
+		end
+	end
+	self.ClosedByRemote = _f
+
+	return self
+end
+
+function wsObject:SetEstablishedFunction (f)
+	local _f = function (websocket)
+		local success, ret = pcall (f, websocket)
+		if (success == false) then
+			self.metrics:SetCounter ('Error_EstablishedCallback')
+			print ('Websocket callback Established error: ', ret)
+		end
+	end
+	self.Established = _f
+
+	return self
+end
+
+function wsObject:SetOfflineFunction (f)
+	local _f = function (websocket)
+		local success, ret = pcall (f, websocket)
+		if (success == false) then
+			self.metrics:SetCounter ('Error_OfflineCallback')
+			print ('Websocket callback Offline error: ', ret)
+		end
+	end
+	self.Offline = _f
+
+	return self
+end
+
+-- Functions below this line should not be called directly by users of this library
+
+function wsObject:setupC4Connection ()
+	local i = 6100
+	while (not self.netBinding and i < 6200) do
+		local checkAddress = C4:GetBindingAddress (i)
+		if (checkAddress == nil or checkAddress == '') then
+			self.netBinding = i
+		end
+		i = i + 1
+	end
+
+	if (self.netBinding and self.protocol) then
+		self.Sockets = self.Sockets or {}
+		self.Sockets [self.netBinding] = self
+
+		if (self.protocol == 'wss') then
+			C4:CreateNetworkConnection (self.netBinding, self.host, 'SSL')
+			C4:NetPortOptions (self.netBinding, self.port, 'SSL', self.wssOptions)
+		else
+			C4:CreateNetworkConnection (self.netBinding, self.host)
+		end
+
+		OCS = OCS or {}
+		OCS [self.netBinding] = function (idBinding, nPort, strStatus)
+			self:ConnectionChanged (strStatus)
+		end
+
+		RFN = RFN or {}
+		RFN [self.netBinding] = function (idBinding, nPort, strData)
+			self:ParsePacket (strData)
+		end
+	else
+		self.metrics:SetCounter ('Error_NoNetBinding')
+	end
+	return self
+end
+
+function wsObject:MakeHeaders ()
+	self.key = ''
+	for i = 1, 16 do
+		self.key = self.key .. string.char (math.random (33, 125))
+	end
+	self.key = C4:Base64Encode (self.key)
+
+	local headers = {
+		'GET ' .. self.resource .. ' HTTP/1.1',
+		'Host: ' .. self.host .. ':' .. self.port,
+		'Cache-Control: no-cache',
+		'Pragma: no-cache',
+		'Connection: Upgrade',
+		'Upgrade: websocket',
+		'Sec-WebSocket-Key: ' .. self.key,
+		'Sec-WebSocket-Version: 13',
+		'User-Agent: C4WebSocket/' .. COMMON_WEBSOCKET_VER,
+	}
+
+	for _, header in ipairs (self.additionalHeaders or {}) do
+		table.insert (headers, header)
+	end
+
+	table.insert (headers, '\r\n')
+
+	local headers = table.concat (headers, '\r\n')
+
+	return headers
+end
+
+function wsObject:ParsePacket (strData)
+	self.buf = (self.buf or '') .. strData
+
+	if (self.running) then
+		self:parseWSPacket ()
+	else
+		self:parseHTTPPacket ()
+	end
+end
+
+function wsObject:parseWSPacket ()
+	--diagnostic disables are because Driverworks embeds lpack which has different formats to Lua5.3 string.pack/unpack
+	---@diagnostic disable-next-line: deprecated
+	local _, h1, h2, b1, b2, b3, b4, b5, b6, b7, b8 = string.unpack (self.buf, 'bbbbbbbbbb')
+
+	local final = (bit.band (h1, 0x80) == 0x80)
+	local rsv1 = (bit.band (h1, 0x40) == 0x40)
+	local rsv2 = (bit.band (h1, 0x20) == 0x20)
+	local rsv3 = (bit.band (h1, 0x10) == 0x10)
+	local opcode = bit.band (h1, 0x0F)
+
+	---@diagnostic disable-next-line: param-type-mismatch
+	local masked = (bit.band (h2, 0x80) == 0x80)
+	local mask
+	---@diagnostic disable-next-line: param-type-mismatch
+	local len = bit.band (h2, 0x7F)
+
+	local msglen = 0
+	local headerlen = 2
+	if (len <= 125) then
+		-- 1-byte length
+		msglen = len
+	elseif (len == 126) then
+		-- 2-byte length
+		msglen = msglen + b1; msglen = msglen * 0x100
+		msglen = msglen + b2;
+		headerlen = 4
+	elseif (len == 127) then
+		-- 8-byte length
+		msglen = msglen + b1; msglen = msglen * 0x100
+		msglen = msglen + b2; msglen = msglen * 0x100
+		msglen = msglen + b3; msglen = msglen * 0x100
+		msglen = msglen + b4; msglen = msglen * 0x100
+		msglen = msglen + b5; msglen = msglen * 0x100
+		msglen = msglen + b6; msglen = msglen * 0x100
+		msglen = msglen + b7; msglen = msglen * 0x100
+		msglen = msglen + b8;
+		headerlen = 10
+	end
+
+	if (masked) then
+		local maskbytes = string.sub (self.buf, headerlen + 1, headerlen + 5)
+		mask = {}
+		for i = 1, 4 do
+			mask [i] = string.byte (string.sub (maskbytes, i, i))
+		end
+		headerlen = headerlen + 4
+	end
+
+	if (string.len (self.buf) >= headerlen + msglen) then
+		local thisFragment = string.sub (self.buf, headerlen + 1, headerlen + msglen)
+		if (masked) then
+			if (mask) then
+				thisFragment = self:Mask (thisFragment, mask)
+			else
+				self.metrics:SetCounter ('Error_NoMaskReceived')
+				print ('masked bit set but no mask received')
+				self.buf = ''
+				return
+			end
+		end
+		self.buf = string.sub (self.buf, headerlen + msglen + 1)
+
+		if (opcode == 0x08) then
+			self.metrics:SetCounter ('ClosedByRemote')
+			if (DEBUG_WEBSOCKET) then
+				print ('RX CLOSE REQUEST')
+			end
+			if (self.ClosedByRemote) then
+				self:ClosedByRemote ()
+			end
+		elseif (opcode == 0x09) then -- ping control frame
+			if (DEBUG_WEBSOCKET) then
+				print ('RX PING')
+			end
+			self:Pong ()
+		elseif (opcode == 0x0A) then -- pong control frame
+			if (DEBUG_WEBSOCKET) then
+				print ('RX PONG')
+			end
+			CancelTimer (self.timerPrefix .. 'PongResponse')
+		elseif (opcode == 0x00) then -- continuation frame
+			if (not self.fragment) then
+				self.metrics:SetCounter ('Error_FramesOutOfOrder')
+				print ('error: received continuation frame before start frame')
+				self.buf = ''
+				return
+			end
+			self.fragment = self.fragment .. thisFragment
+		elseif (opcode == 0x01 or opcode == 0x02) then -- non-control frame, beginning of fragment
+			self.fragment = thisFragment
+		end
+
+		if (final and opcode < 0x08) then
+			local data = self.fragment
+			self.fragment = nil
+
+			if (DEBUG_WEBSOCKET) then
+				local d = { '', 'RX', }
+
+				table.insert (d, '')
+				table.insert (d, data)
+				table.insert (d, '')
+
+				local d = table.concat (d, '\r\n')
+
+				print (d)
+			end
+
+			if (self.ProcessMessage) then
+				self:ProcessMessage (data)
+			end
+		end
+
+		if (string.len (self.buf) > 0) then
+			self:ParsePacket ('')
+		end
+	end
+end
+
+function wsObject:parseHTTPPacket ()
+	local headers = {}
+	for line in string.gmatch (self.buf, '(.-)\r\n') do
+		local k, v = string.match (line, '%s*(.-)%s*[:/*]%s*(.+)')
+		if (k and v) then
+			k = string.upper (k)
+			headers [k] = v
+		end
+	end
+
+	local EOH = string.find (self.buf, '\r\n\r\n')
+
+	if (EOH and headers ['SEC-WEBSOCKET-ACCEPT']) then
+		self.buf = string.sub (self.buf, EOH + 4)
+		local check = self.key .. '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+		local hash = C4:Hash ('SHA1', check, { ['return_encoding'] = 'BASE64', })
+
+		if (headers ['SEC-WEBSOCKET-ACCEPT'] == hash and
+				string.lower (headers ['UPGRADE']) == 'websocket' and
+				string.lower (headers ['CONNECTION']) == 'upgrade') then
+			print ('WS ' .. self.url .. ' running')
+
+			self.running = true
+			self.metrics:SetCounter ('Running')
+			if (self.Established) then
+				self:Established ()
+			end
+		end
+	end
+end
+
+function wsObject:Ping ()
+	if (self.connected) then
+		-- MASK of 0x00's
+		local pkt = string.char (0x89, 0x80, 0x00, 0x00, 0x00, 0x00)
+		if (DEBUG_WEBSOCKET) then
+			print ('TX PING')
+		end
+
+		local _timer = function (timer)
+			self.metrics:SetCounter ('MissingPong')
+			print ('WS ' .. self.url .. ' appears disconnected - timed out waiting for PONG')
+			self:Close ()
+		end
+		SetTimer (self.timerPrefix .. 'PongResponse', self.pong_response_interval * ONE_SECOND, _timer)
+
+		self:sendToNetwork (pkt)
+	end
+end
+
+function wsObject:Pong ()
+	if (self.connected) then
+		local pkt = string.char (0x8A, 0x80, 0x00, 0x00, 0x00, 0x00)
+		if (DEBUG_WEBSOCKET) then
+			print ('TX PONG')
+		end
+		self:sendToNetwork (pkt)
+	end
+end
+
+function wsObject:ConnectionChanged (strStatus)
+	self.connected = (strStatus == 'ONLINE')
+
+	CancelTimer (self.timerPrefix .. 'Ping')
+	CancelTimer (self.timerPrefix .. 'PongResponse')
+
+	if (self.connected) then
+		local pkt = self:MakeHeaders ()
+		self:sendToNetwork (pkt)
+
+		local _timer = function (timer)
+			self:Ping ()
+		end
+		SetTimer (self.timerPrefix .. 'Ping', self.ping_interval * ONE_SECOND, _timer, true)
+		self.metrics:SetCounter ('Connected')
+		print ('WS ' .. self.url .. ' connected')
+	else
+		if (self.running) then
+			self.metrics:SetCounter ('DisconnectedWhileRunning')
+			print ('WS ' .. self.url .. ' disconnected while running')
+		else
+			self.metrics:SetCounter ('DisconnectedWhileNotRunning')
+			print ('WS ' .. self.url .. ' disconnected while not running')
+		end
+		self.running = false
+		if (self.Offline) then
+			self:Offline ()
+		end
+	end
+end
+
+function wsObject:sendToNetwork (packet)
+	C4:SendToNetwork (self.netBinding, self.port, packet)
+end
+
+function wsObject:Mask (s, mask)
+	if (type (mask) == 'table') then
+	elseif (type (mask) == 'string' and string.len (mask) >= 4) then
+		local m = {}
+		for i = 1, string.len (mask) do
+			table.insert (m, string.byte (mask [i]))
+		end
+		mask = m
+	end
+
+	local slen = string.len (s)
+	local mlen = #mask
+
+	local packet = {}
+
+	for i = 1, slen do
+		local pos = i % mlen
+		if (pos == 0) then pos = mlen end
+		local maskbyte = mask [pos]
+		local sbyte = string.sub (s, i, i)
+		local byte = string.byte (sbyte)
+		local char = string.char (bit.bxor (byte, maskbyte))
+		table.insert (packet, char)
+	end
+
+	local packet = table.concat (packet)
+	return (packet)
+end
+
+WebSocket = wsObject
+end
+-- ===== END BUNDLED vendor/drivers-common-public/module/websocket.lua =====
 
 -- Initial log configuration. ApplyDebugLogSettings() above re-applies these
 -- from Composer Properties in OnDriverLateInit and OnPropertyChanged.
