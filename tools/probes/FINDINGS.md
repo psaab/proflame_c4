@@ -188,3 +188,7 @@ python3 tools/probes/characterize.py 172.16.1.81 88
 Re-run after firmware upgrades to detect behavior changes; diff the JSON
 evidence files in `tools/probes/evidence/` across runs to catch silent
 drift.
+
+## Related research
+
+- `tools/research/capability_matrix.md` — full `driver.xml` `<capabilities>` field-by-field classification (RUNTIME_OK / RUNTIME_AVAILABLE / STATIC_REQUIRED / STATIC_RECOMMENDED) supporting issues #39 (restart investigation) and #41 (static capability reduction). Identifies which fields are safe candidates for runtime-only publishing pending hardware A/B verification.
