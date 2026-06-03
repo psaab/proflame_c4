@@ -116,6 +116,10 @@ if gReconnectTimerId then
     pcall(function() gReconnectTimerId:Cancel() end)
     gReconnectTimerId = nil
 end
+if gStatusRefreshTimerId then
+    pcall(function() gStatusRefreshTimerId:Cancel() end)
+    gStatusRefreshTimerId = nil
+end
 if gTimerModeDelayTimer then
     pcall(function() gTimerModeDelayTimer:Cancel() end)
     gTimerModeDelayTimer = nil
@@ -1847,6 +1851,7 @@ function OnConnectionStatusChanged(idBinding, nPort, strStatus)
         gConnecting = false
         gHandshakeComplete = false
         StopPingTimer()
+        StopStatusRefreshTimer()
         HandleConnectionEvent(false)
         C4:UpdateProperty("Connection Status", "Disconnected")
         ScheduleReconnect()

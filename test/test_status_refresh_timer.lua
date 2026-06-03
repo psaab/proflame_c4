@@ -114,6 +114,38 @@ _timers[1].fn()
 Test.assertEqual(_request_calls, 1, "timer fire when fully connected: one request")
 
 RequestAllStatus = original_RequestAllStatus
+
+--------------------------------------------------------------------------------
+-- 7. OFFLINE network-status branch stops the status-refresh timer alongside
+--    the ping timer. Codex flagged this — without it, a repeating timer
+--    would keep firing through an arbitrarily long outage. The gating in
+--    the fire callback makes it a no-op, but leaving a live timer running
+--    is sloppy and inconsistent with Disconnect()'s behavior.
+--------------------------------------------------------------------------------
+_timers = {}
+Properties["Status Refresh Interval (minutes)"] = "5"
+StartStatusRefreshTimer()
+local offline_handle = gStatusRefreshTimerId
+Test.assert(offline_handle ~= nil, "timer scheduled before OFFLINE")
+
+-- Stub HandleConnectionEvent / C4:UpdateProperty / ScheduleReconnect so the
+-- OFFLINE branch can run without exercising the rest of the connection
+-- lifecycle.
+local original_HandleConnectionEvent = HandleConnectionEvent
+local original_ScheduleReconnect = ScheduleReconnect
+HandleConnectionEvent = function() end
+ScheduleReconnect = function() end
+
+-- OnConnectionStatusChanged signature: (idBinding, nPort, strStatus). The
+-- function ignores binding+port in the OFFLINE branch — only strStatus
+-- routes the if/elseif.
+OnConnectionStatusChanged(NETWORK_BINDING_ID, tonumber(Properties["Port"]) or 88, "OFFLINE")
+
+Test.assert(offline_handle.cancelled, "OFFLINE branch cancelled the status-refresh timer")
+Test.assertEqual(gStatusRefreshTimerId, nil, "OFFLINE branch cleared timer handle")
+
+HandleConnectionEvent = original_HandleConnectionEvent
+ScheduleReconnect = original_ScheduleReconnect
 C4.SetTimer = original_SetTimer
 
 print("test_status_refresh_timer: all assertions passed")
