@@ -162,15 +162,53 @@ if gTimerSafetyCheckTimer then
     gTimerSafetyCheckTimer = nil
 end
 
--- Force disconnect if we were connected. The vendored WebSocket module
--- owns the network binding now, so we close through it. We can't call our
--- own TeardownWebSocket here because the function isn't defined yet at this
--- point in the load (top-level cleanup runs before function definitions);
--- the vendored :Close() schedules a 3s NetDisconnect via the vendored timer
--- module. That's acceptable for reload cleanup because the next Connect()
--- waits for OnDriverLateInit, which runs much later.
-if gConnected and gWebSocket then
-    pcall(function() gWebSocket:Close() end)
+-- Synchronous WebSocket teardown for the reload path. Codex round-2 review
+-- of #68 flagged that just calling gWebSocket:Close() leaves the vendor's
+-- 3-second Closing timer alive — a Phase-2 -> Phase-2 hot reload (driver
+-- update, controller restart) lets that old timer fire NetDisconnect AFTER
+-- the new instance has allocated a binding (potentially the same number, if
+-- our explicit NetDisconnect below frees the old slot first). Same root
+-- bug as the original BLOCKER #2 in Disconnect. We can't call our regular
+-- TeardownWebSocket helper here because it lives much further down the
+-- file and isn't defined yet, so we inline the critical parts: NetDisconnect
+-- the old binding, clear the dispatch registries, bust the vendor's
+-- Sockets caches, and release the binding address. The cleared globals
+-- (OCS/RFN/WebSocket.Sockets) are FROM THE PREVIOUS INSTANCE — they survive
+-- the Lua reload as top-level globals until the new bundled handlers.lua /
+-- websocket.lua blocks run later in this file and reinitialize them.
+if gWebSocket then
+    pcall(function()
+        local ws = gWebSocket
+        local netBinding = ws.netBinding
+        local port = ws.port or (Properties and tonumber(Properties["Port"])) or 88
+        local url = ws.url
+        local timerPrefix = ws.timerPrefix
+        -- Cancel the vendored Ping/PongResponse/Closing timers from the
+        -- previous instance. CancelTimer here is the OLD instance's vendored
+        -- timer module (survives reload as a top-level global until the new
+        -- timer.lua bundle below reinitializes it). C4:SetTimer handles
+        -- survive Lua reloads, so without cancellation here the old Closing
+        -- timer can still fire C4:NetDisconnect on whatever binding the new
+        -- instance has allocated.
+        if timerPrefix and type(CancelTimer) == "function" then
+            pcall(function() CancelTimer(timerPrefix .. 'Ping') end)
+            pcall(function() CancelTimer(timerPrefix .. 'PongResponse') end)
+            pcall(function() CancelTimer(timerPrefix .. 'Closing') end)
+        end
+        if netBinding then
+            pcall(function() C4:NetDisconnect(netBinding, port) end)
+            if OCS then OCS[netBinding] = nil end
+            if RFN then RFN[netBinding] = nil end
+            if WebSocket and WebSocket.Sockets then
+                WebSocket.Sockets[netBinding] = nil
+            end
+            pcall(function() C4:SetBindingAddress(netBinding, '') end)
+        end
+        if WebSocket and WebSocket.Sockets and url then
+            WebSocket.Sockets[url] = nil
+        end
+    end)
+    gWebSocket = nil
 end
 
 -- Log that we're loading
