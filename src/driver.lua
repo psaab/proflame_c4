@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026060108"
+DRIVER_VERSION = "2026060201"
 DRIVER_DATE = "2026-06-03"
 
 NETWORK_BINDING_ID = 6001
@@ -46,6 +46,58 @@ DEBUG_WARN = 2
 DEBUG_INFO = 3
 DEBUG_DEBUG = 4
 DEBUG_TRACE = 5
+
+-- Status-key classification sets used by ProcessStatusUpdate to gate log spam.
+--
+-- HANDLED_STATUS_KEYS lists every key whose value our driver routes to
+-- gState / Composer properties / proxy notifications / events. These produce
+-- a single debug-level log line per status update.
+--
+-- KNOWN_IGNORED_STATUS_KEYS lists keys the device sends in its initial dump
+-- (captured at tools/probes/evidence/characterize-20260603T024355Z.json for
+-- firmware FW: 625.04.673) that we intentionally do NOT handle today. These
+-- produce no log at all — the firmware emits 67 of them on every reconnect,
+-- and logging each one buries genuinely-interesting traffic.
+--
+-- A key in neither set is treated as a firmware addition we haven't seen
+-- before and surfaced at WARN level so future firmware changes are visible.
+HANDLED_STATUS_KEYS = {
+    main_mode = true, flame_control = true, fan_control = true, lamp_control = true,
+    temperature_set = true, room_temperature = true, temperature_read = true,
+    thermo_control = true, pilot_control = true, aux_control = true, split_control = true,
+    timer_set = true, timer_count = true, timer_status = true, timer_read = true,
+    wifi_signal_str = true, rssi = true,
+    burner_status = true,
+}
+
+KNOWN_IGNORED_STATUS_KEYS = {
+    -- Capability/enablement flags (17)
+    en_aux = true, en_bit_csc = true, en_fan = true, en_flame = true, en_lamp = true,
+    en_ls = true, en_ls_oem = true, en_man = true, en_pilot = true, en_room = true,
+    en_scene = true, en_set = true, en_spl = true, en_sth = true, en_th = true,
+    en_timer = true, en_weekly = true,
+    -- Firmware version sub-fields (5; B1 will promote to a single property)
+    fw_revision = true, fw_ble = true, fw_ifc_c = true, fw_ifc_s = true, fw_rc = true,
+    -- LED/RGB controls (13; no ThermostatV2 mapping)
+    led_conf = true, led_main = true, led_p_1 = true, led_p_2 = true, led_p_3 = true,
+    rgb_0_intensity = true, rgb_1_intensity = true, rgb_2_intensity = true, rgb_3_intensity = true,
+    rgbw_0_code = true, rgbw_1_code = true, rgbw_2_code = true, rgbw_3_code = true,
+    -- Weekly schedule (7)
+    p_day_1 = true, p_day_2 = true, p_day_3 = true, p_day_4 = true, p_day_5 = true,
+    p_day_6 = true, p_day_7 = true,
+    -- OTA / system diagnostics (6)
+    ota_dongle = true, ota_touch = true, reset_dongle = true, free_heap = true,
+    min_free_heap = true, modbus_ifc = true,
+    -- Device identity (4)
+    dongle_name = true, dongle_type = true, scenario_name = true, label_aux = true,
+    -- Other firmware-emitted fields with no current driver use (16; B2 may promote
+    -- child_lock / pilot_mode / remote_control / auxiliary_out / split_flow /
+    -- temperature_unit to read-only properties)
+    auxiliary_out = true, child_lock = true, color_period = true, data_to_server = true,
+    idx_room = true, index_aux = true, index_weekly = true, loads_conf = true,
+    not_keep_ls = true, num_cascade = true, pilot_mode = true, remote_control = true,
+    sequence_rgb = true, split_flow = true, temperature_unit = true, true_white = true,
+}
 
 -- =============================================================================
 -- DRIVER LOAD CLEANUP
@@ -114,7 +166,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260603-000001"
+BUILD_TIMESTAMP = "20260603-000002"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -1179,27 +1231,22 @@ function ParseStatusMessage(data)
             i = i + 1
         end
         
-        -- Also handle direct key-value format from device status response
-        -- Map device field names to our internal names
+        -- Direct key-value format from device status response. ProcessStatusUpdate
+        -- handles the HANDLED / KNOWN_IGNORED / unknown classification internally
+        -- so we no longer need a separate "is this known?" guard here. The
+        -- field-name mappings (rssi -> wifi_signal_str, temperature_read ->
+        -- room_temperature, timer_read -> timer_count) translate device-side
+        -- names to the canonical names ProcessStatusUpdate / ApplyDeviceStatus
+        -- expect.
         local fieldMap = {
+            rssi = "wifi_signal_str",
             temperature_read = "room_temperature",
-            timer_read = "timer_count"
+            timer_read = "timer_count",
         }
-        
+
         for key, value in pairs(json) do
-            -- Skip indexed fields we already processed
             if not key:match("^status%d+$") and not key:match("^value%d+$") then
-                -- Map field name if needed
-                local mappedKey = fieldMap[key] or key
-                if gState[mappedKey] ~= nil or key == "temperature_read" or key == "rssi" then
-                    if key == "rssi" then
-                        ProcessStatusUpdate("wifi_signal_str", value)
-                    else
-                        ProcessStatusUpdate(mappedKey, value)
-                    end
-                else
-                    dbg_all("Ignoring unsupported JSON status key: " .. tostring(key))
-                end
+                ProcessStatusUpdate(fieldMap[key] or key, value)
             end
         end
     end
@@ -1436,6 +1483,28 @@ end
 
 function ProcessStatusUpdate(status, value)
     if not status or not value then return end
+
+    -- Spam suppression: the device sends ~85 status pairs per reconnect, of
+    -- which we route ~18 keys and intentionally ignore ~67. Without these
+    -- guards every reconnect produces ~85 debug log lines; the noise buries
+    -- the actually-useful messages.
+    if KNOWN_IGNORED_STATUS_KEYS[status] then
+        -- Preserve operator-visible firmware identification until B1 promotes
+        -- the fw_* fields into a dedicated Composer property. Logged at INFO
+        -- so it appears regardless of debug-level configuration.
+        if status == "fw_revision" then
+            dbg_info("Firmware revision reported by device: " .. tostring(value))
+        end
+        return
+    end
+    if not HANDLED_STATUS_KEYS[status] then
+        -- Firmware sent a key the driver doesn't know about. Surface at WARN
+        -- so new firmware revisions are noticed and the allowlist can be
+        -- updated explicitly (rather than this becoming silent drift).
+        dbg_warn("Unknown status key from firmware (not handled, not allowlisted): "
+            .. tostring(status) .. "=" .. tostring(value))
+        return
+    end
 
     dbg_debug("ProcessStatusUpdate: " .. tostring(status) .. " = " .. tostring(value))
     local change = ApplyDeviceStatus(status, value)
