@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026060107 (2026-06-01)
+- **Driver Version**: 2026060108 (2026-06-03)
 
 ---
 
@@ -53,7 +53,6 @@ This driver enables Control4 home automation systems to control Proflame WiFi-en
 | Port | INTEGER | 88 | WebSocket port |
 | Ping Interval | INTEGER | 5 | Keep-alive interval (seconds) |
 | Reconnect Delay | INTEGER | 10 | Delay before reconnect (seconds) |
-| Strict WebSocket Handshake | LIST | Off | Require full WebSocket upgrade validation; Off allows legacy 101 fallback |
 | Default On Mode | LIST | Smart (Thermostat) | Mode when turning on: Manual, Smart (Thermostat), Eco |
 | Default Flame Level | INTEGER | 6 | Initial flame level (1-6) |
 | Default Timer | INTEGER | 180 | Auto-off timer used only by Turn On; 0 disables timer arming and causes timer safety to force the fireplace off |
@@ -98,7 +97,7 @@ Sec-WebSocket-Accept: <calculated-accept-key>
 base64(sha1(Sec-WebSocket-Key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
 ```
 
-The driver validates the status line, Upgrade/Connection headers, and Sec-WebSocket-Accept. Until real-device testing confirms all supported firmware returns a fully compliant handshake, the `Strict WebSocket Handshake` property defaults to `Off` and permits the legacy `101` compatibility fallback with a diagnostic log.
+The driver strictly validates the status line, Upgrade/Connection headers, and Sec-WebSocket-Accept per RFC 6455. The prior `Strict WebSocket Handshake = Off` lenient-101 fallback was removed in 2026060108 after direct device probe (firmware `FW: 625.04.673`) confirmed the Proflame returns a fully compliant 101 — see `tools/probes/FINDINGS.md` §1.
 
 ### 2.3 WebSocket Frame Format
 
@@ -1625,6 +1624,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026060108 | 2026-06-03 | Tier A1: dropped Strict WebSocket Handshake property + lenient 101 fallback (evidence-backed deletion per tools/probes/FINDINGS.md §1) |
 | 2026060107 | 2026-06-01 | Logging discipline: classified 101 dbg_err calls by intent into dbg_err/warn/info/debug; added dbg_trace helper |
 | 2026060106 | 2026-06-01 | Review-cleanup: restored http_client watchdog (T2d+ regression), removed dead dbg() function, clarified empty-asset install message, Update Status default Idle |
 | 2026060105 | 2026-06-01 | Replaced slim updater with full template github-updater (auto-install via Composer SOAP); manual-trigger only via "Install Latest Release" command |
