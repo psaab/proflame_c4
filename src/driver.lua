@@ -8,10 +8,15 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026060301"
+DRIVER_VERSION = "2026060302"
 DRIVER_DATE = "2026-06-03"
 
-NETWORK_BINDING_ID = 6001
+-- The WebSocket network binding is now allocated dynamically by the vendored
+-- drivers-common-public/module/websocket.lua (it scans 6100-6199 for the first
+-- free binding via C4:GetBindingAddress). The previous static binding 6001
+-- (with its <connection> entry in driver.xml) was removed in C1 Phase 2.
+-- Code paths that previously referenced NETWORK_BINDING_ID now read
+-- `gWebSocket and gWebSocket.netBinding` instead.
 THERMOSTAT_PROXY_ID = 5001
 
 EVENT_FIREPLACE_TURNED_ON = 1
@@ -107,11 +112,9 @@ KNOWN_IGNORED_STATUS_KEYS = {
 -- When the Lua file is loaded/reloaded, this code runs immediately
 -- =============================================================================
 
--- Force cleanup of any existing timers from previous driver instance
-if gPingTimerId then
-    pcall(function() gPingTimerId:Cancel() end)
-    gPingTimerId = nil
-end
+-- Force cleanup of any existing timers from previous driver instance.
+-- C1 Phase 2 dropped the hand-rolled PROFLAMEPING keepalive (gPingTimerId);
+-- the vendored WebSocket module owns the WS-level ping/pong now.
 if gReconnectTimerId then
     pcall(function() gReconnectTimerId:Cancel() end)
     gReconnectTimerId = nil
@@ -137,15 +140,13 @@ if gTimerSafetyCheckTimer then
     gTimerSafetyCheckTimer = nil
 end
 
--- Force disconnect if we were connected
-if gConnected then
-    pcall(function()
-        local port = 88
-        if Properties and Properties["Port"] then
-            port = tonumber(Properties["Port"]) or 88
-        end
-        C4:NetDisconnect(NETWORK_BINDING_ID, port)
-    end)
+-- Force disconnect if we were connected. The vendored WebSocket module
+-- owns the network binding now, so we close through it (gWebSocket:Close()
+-- handles the WS close frame + NetDisconnect on its dynamically-allocated
+-- binding). If the gWebSocket reference is missing (e.g., a partial load
+-- caught us between modules), there's nothing for us to close.
+if gConnected and gWebSocket then
+    pcall(function() gWebSocket:Close() end)
 end
 
 -- Log that we're loading
@@ -197,7 +198,7 @@ gFirmwareVersions = {
 gTemperatureUnit = "F"
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260603-000004"
+BUILD_TIMESTAMP = "20260603-000005"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -274,7 +275,6 @@ gConnected = false
 gConnecting = false
 gHandshakeComplete = false
 gReceiveBuffer = ""
-gPingTimerId = nil
 gReconnectTimerId = nil
 gStatusRefreshTimerId = nil
 gTimerModeDelayTimer = nil
@@ -286,7 +286,13 @@ gTurnOffRetryCount = 0
 gTurnOffInProgress = false
 gTimerSafetyCheckTimer = nil
 gTimerSafetyOffPending = false
-gWebSocketKey = nil
+-- Vendored WebSocket object (drivers-common-public/module/websocket.lua).
+-- Created in Connect() via WebSocket:new(url); owns the dynamically allocated
+-- network binding (gWebSocket.netBinding, scanned from 6100-6199). Holds the
+-- WS-level ping/pong timers and dispatches inbound text frames into our
+-- OnWebSocketMessage callback after stripping framing/masking. Set back to
+-- nil in Disconnect() so a stale handle can't dispatch onto a closed binding.
+gWebSocket = nil
 gExtrasThrottle = false
 gSuppressTimerUpdates = false  -- Suppress device timer_count updates while we're setting timer
 gTimerExpired = false  -- Set when timer reaches 0, cleared when timer_status goes to 1
@@ -925,28 +931,19 @@ end
 -- TIMERS
 -- =============================================================================
 
-function OnPingTimer()
-    if gConnected and gHandshakeComplete then SendPing() end
-end
-
+-- C1 Phase 2 dropped the hand-rolled PROFLAMEPING text-frame keepalive
+-- (StartPingTimer/StopPingTimer/OnPingTimer) and the associated
+-- "Ping Interval (seconds)" Composer property + gPingTimerId global. The
+-- vendored drivers-common-public/module/websocket.lua now runs a 30s
+-- WS-level ping/pong (opcode 0x09/0x0A) with a 10s pong-response timeout
+-- — that's the correct keepalive mechanism per RFC 6455, and the 2026-06-03
+-- probe (tools/probes/evidence/characterize-20260603T024355Z.json
+-- ws_ping.ws_pong_received=true) confirms the device replies to it.
 function OnReconnectTimer()
     gReconnectTimerId = nil
     if not gConnected and not gConnecting then
         dbg_info("Reconnect timer fired")
         Connect()
-    end
-end
-
-function StartPingTimer()
-    StopPingTimer()
-    local interval = (tonumber(Properties["Ping Interval (seconds)"]) or 5) * 1000
-    gPingTimerId = C4:SetTimer(interval, function(timer) OnPingTimer() end, true)
-end
-
-function StopPingTimer()
-    if gPingTimerId then
-        gPingTimerId:Cancel()
-        gPingTimerId = nil
     end
 end
 
@@ -999,187 +996,59 @@ end
 -- =============================================================================
 -- WEBSOCKET
 -- =============================================================================
-
-function GenerateWebSocketKey()
-    local bytes = GenerateRandomBytes(16)
-    return Base64Encode(bytes)
-end
-
-function BuildWebSocketHandshake(host, port)
-    gWebSocketKey = GenerateWebSocketKey()
-    return "GET / HTTP/1.1\r\n" ..
-           "Host: " .. host .. ":" .. tostring(port) .. "\r\n" ..
-           "Upgrade: websocket\r\n" ..
-           "Connection: Upgrade\r\n" ..
-           "Sec-WebSocket-Key: " .. gWebSocketKey .. "\r\n" ..
-           "Sec-WebSocket-Version: 13\r\n" ..
-           "Origin: http://" .. host .. "\r\n" ..
-           "\r\n"
-end
-
-function ParseHttpHeaders(response)
-    local headers = {}
-    for line in tostring(response or ""):gmatch("([^\r\n]+)") do
-        local name, value = line:match("^%s*([^:%s]+)%s*:%s*(.-)%s*$")
-        if name and value then
-            headers[name:lower()] = value
-        end
-    end
-    return headers
-end
-
-function ExpectedWebSocketAccept(key)
-    if not key or key == "" then return nil end
-    local guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-    return Base64Encode(SHA1(key .. guid))
-end
-
--- Validates the WebSocket upgrade response per RFC 6455 §4.2.2:
--- status line "HTTP/1.1 101 Switching Protocols", `Upgrade: websocket`,
--- `Connection: Upgrade` (case-insensitive, may include extra tokens), and
--- `Sec-WebSocket-Accept` matching base64(SHA1(key + GUID)).
 --
--- The earlier `Strict WebSocket Handshake = Off` lenient fallback (which
--- accepted any response containing the literal "101") was removed after the
--- 2026-06-02 device probe (tools/probes/evidence/) demonstrated that the
--- Proflame firmware returns a fully RFC-compliant 101. See
--- tools/probes/FINDINGS.md §1 for the captured handshake. If a future
--- firmware revision returns a non-compliant upgrade response, the
--- handshake will fail loudly here — fix the firmware-specific path then,
--- with an explicit `OnReceiveHandshakeFromFirmware()` shim rather than a
--- generic lenient fallback.
-function ValidateHandshakeResponse(response)
-    if not response then
-        dbg_err("Handshake failed: empty response")
-        return false
-    end
-
-    local statusLine = response:match("^([^\r\n]+)")
-    if not statusLine or not statusLine:match("^HTTP/%d+%.%d+%s+101%s") then
-        dbg_err("Handshake failed: invalid status line: " .. tostring(statusLine))
-        return false
-    end
-
-    local headers = ParseHttpHeaders(response)
-    local upgrade = (headers["upgrade"] or ""):lower()
-    local connection = (headers["connection"] or ""):lower()
-    if upgrade ~= "websocket" then
-        dbg_err("Handshake failed: missing Upgrade websocket header")
-        return false
-    end
-    if not connection:find("upgrade", 1, true) then
-        dbg_err("Handshake failed: missing Connection upgrade header")
-        return false
-    end
-
-    local expectedAccept = ExpectedWebSocketAccept(gWebSocketKey)
-    local actualAccept = headers["sec-websocket-accept"]
-    if not expectedAccept or actualAccept ~= expectedAccept then
-        dbg_err("Handshake failed: invalid Sec-WebSocket-Accept")
-        return false
-    end
-
-    return true
-end
-
-function CreateWebSocketFrame(data, opcode)
-    opcode = opcode or 0x01
-    local frame = ""
-    frame = frame .. string.char(bit.bor(0x80, opcode))
-    local mask = GenerateRandomBytes(4)
-    local len = #data
-    if len <= 125 then
-        frame = frame .. string.char(bit.bor(0x80, len))
-    elseif len <= 65535 then
-        frame = frame .. string.char(bit.bor(0x80, 126))
-        frame = frame .. string.char(math.floor(len / 256))
-        frame = frame .. string.char(len % 256)
-    else
-        frame = frame .. string.char(bit.bor(0x80, 127))
-        for i = 7, 0, -1 do
-            frame = frame .. string.char(math.floor(len / (256 ^ i)) % 256)
-        end
-    end
-    frame = frame .. mask
-    for i = 1, #data do
-        local byte = data:byte(i)
-        local maskByte = mask:byte(((i - 1) % 4) + 1)
-        frame = frame .. string.char(bit.bxor(byte, maskByte))
-    end
-    return frame
-end
-
-function ParseWebSocketFrame(data)
-    if not data or #data < 2 then return nil, nil, data or "" end
-    local byte1 = data:byte(1)
-    local byte2 = data:byte(2)
-    local fin = bit.band(byte1, 0x80) ~= 0
-    local rsv = bit.band(byte1, 0x70)
-    local opcode = bit.band(byte1, 0x0F)
-    if rsv ~= 0 then
-        dbg_err("Unsupported WebSocket frame: RSV bits set")
-        return false, nil, ""
-    end
-    if not fin then
-        dbg_err("Unsupported fragmented WebSocket frame")
-        return false, nil, ""
-    end
-    local masked = bit.band(byte2, 0x80) ~= 0
-    local payloadLen = bit.band(byte2, 0x7F)
-    local headerLen = 2
-    if payloadLen == 126 then
-        if #data < 4 then return nil, nil, data end
-        payloadLen = data:byte(3) * 256 + data:byte(4)
-        headerLen = 4
-    elseif payloadLen == 127 then
-        if #data < 10 then return nil, nil, data end
-        payloadLen = 0
-        for i = 3, 10 do
-            payloadLen = payloadLen * 256 + data:byte(i)
-        end
-        headerLen = 10
-    end
-    local maskLen = masked and 4 or 0
-    local totalLen = headerLen + maskLen + payloadLen
-    if #data < totalLen then return nil, nil, data end
-    local payload = ""
-    if masked then
-        local mask = data:sub(headerLen + 1, headerLen + 4)
-        local masked_data = data:sub(headerLen + 5, headerLen + 4 + payloadLen)
-        for i = 1, #masked_data do
-            local byte = masked_data:byte(i)
-            local maskByte = mask:byte(((i - 1) % 4) + 1)
-            payload = payload .. string.char(bit.bxor(byte, maskByte))
-        end
-    else
-        payload = data:sub(headerLen + 1, headerLen + payloadLen)
-    end
-    local remaining = data:sub(totalLen + 1)
-    return opcode, payload, remaining
-end
+-- C1 Phase 2 deleted the 9 hand-rolled WebSocket helpers that used to live
+-- here (GenerateWebSocketKey, BuildWebSocketHandshake, ParseHttpHeaders,
+-- ExpectedWebSocketAccept, ValidateHandshakeResponse, CreateWebSocketFrame,
+-- ParseWebSocketFrame, SendWebSocketMessage, SendPing, SendPong). The vendored
+-- drivers-common-public/module/websocket.lua now owns RFC 6455 framing,
+-- masking, fragmentation, the upgrade handshake (MakeHeaders/parseHTTPPacket),
+-- and the WS-level ping/pong keepalive. We talk to it through gWebSocket
+-- and the four callbacks below (Established / ProcessMessage / Offline /
+-- ClosedByRemote). See OnWebSocketMessage for the app-protocol decode that
+-- used to be at the bottom of the old ReceivedFromNetwork loop.
 
 -- =============================================================================
 -- NETWORK
 -- =============================================================================
 
 function Connect()
-    if gConnected or gConnecting then return end
     local ipAddress = Properties["IP Address"]
-    local port = tonumber(Properties["Port"]) or 88
     if not ipAddress or ipAddress == "" then
         C4:UpdateProperty("Connection Status", "Not Configured")
         return
     end
+    if gWebSocket then
+        -- Already have a socket — either connecting, connected, or in the
+        -- 3-second close window. WebSocket:new(url) would return the cached
+        -- one anyway; bailing here keeps Connect() idempotent so the
+        -- IP/Port change handlers and OnDriverLateInit can both call it
+        -- without stacking sockets.
+        return
+    end
+    local port = tonumber(Properties["Port"]) or 88
     gConnecting = true
     gHandshakeComplete = false
     gReceiveBuffer = ""
     C4:UpdateProperty("Connection Status", "Connecting...")
-    C4:CreateNetworkConnection(NETWORK_BINDING_ID, ipAddress)
-    C4:NetConnect(NETWORK_BINDING_ID, port)
+    local url = string.format("ws://%s:%d/", ipAddress, port)
+    local ws, err = WebSocket:new(url)
+    if not ws then
+        dbg_err("WebSocket:new() failed: " .. tostring(err))
+        gConnecting = false
+        C4:UpdateProperty("Connection Status", "Disconnected")
+        ScheduleReconnect()
+        return
+    end
+    gWebSocket = ws
+    ws:SetEstablishedFunction(OnWebSocketEstablished)
+    ws:SetProcessMessageFunction(OnWebSocketMessage)
+    ws:SetOfflineFunction(OnWebSocketOffline)
+    ws:SetClosedByRemoteFunction(OnWebSocketClosedByRemote)
+    ws:Start()
 end
 
 function Disconnect()
-    StopPingTimer()
     StopStatusRefreshTimer()
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()
@@ -1187,9 +1056,13 @@ function Disconnect()
         SetTimerSuppression(false, "disconnect")
     end
     ClearTurnOffInProgress("disconnect")
-    local port = tonumber(Properties["Port"]) or 88
-    if gConnected then
-        pcall(function() C4:NetDisconnect(NETWORK_BINDING_ID, port) end)
+    if gWebSocket then
+        -- :Close() schedules a NetDisconnect on its own 3s timer (so the
+        -- close frame has time to land). We clear our cached handle right
+        -- away so any racing Connect() call allocates a fresh one rather
+        -- than reusing the closing socket.
+        pcall(function() gWebSocket:Close() end)
+        gWebSocket = nil
     end
     gConnected = false
     gConnecting = false
@@ -1205,23 +1078,16 @@ function Reconnect()
     ScheduleReconnect()
 end
 
+-- Send a single app-protocol text frame through the vendored WebSocket. The
+-- vendored :Send() wraps the payload in an opcode-0x01 frame with masking
+-- and emits it on the dynamically-allocated binding. Returns false if we
+-- have no socket or the handshake hasn't completed (matches the behavior
+-- of the old SendWebSocketMessage that fronted CreateWebSocketFrame).
 function SendWebSocketMessage(message)
-    if not gConnected or not gHandshakeComplete then return false end
-    local frame = CreateWebSocketFrame(message, 0x01)
-    local port = tonumber(Properties["Port"]) or 88
-    C4:SendToNetwork(NETWORK_BINDING_ID, port, frame)
-    return true
-end
-
-function SendPing()
-    SendWebSocketMessage("PROFLAMEPING")
-end
-
-function SendPong(payload)
-    if not gConnected or not gHandshakeComplete then return false end
-    local frame = CreateWebSocketFrame(payload or "", 0x0A)
-    local port = tonumber(Properties["Port"]) or 88
-    C4:SendToNetwork(NETWORK_BINDING_ID, port, frame)
+    if not gWebSocket or not gConnected or not gHandshakeComplete then
+        return false
+    end
+    gWebSocket:Send(message)
     return true
 end
 
@@ -1255,8 +1121,10 @@ function SendDeviceControl(control, value)
 end
 
 function RequestAllStatus()
-    -- The Proflame device requires PROFLAMECONNECTION to trigger full status dump
-    -- This is similar to PROFLAMEPING/PROFLAMEPONG but for initial connection
+    -- The Proflame device requires PROFLAMECONNECTION to trigger full status dump.
+    -- After C1 Phase 2, the WS-level ping/pong owned by the vendored
+    -- websocket.lua handles connection-liveness checking; PROFLAMECONNECTION
+    -- is purely an app-protocol full-status-refresh request.
     dbg_debug("Sending PROFLAMECONNECTION to request full status")
     SendWebSocketMessage("PROFLAMECONNECTION")
 end
@@ -1355,6 +1223,12 @@ end
 function ParseStatusMessage(data)
     if not data then return end
     if data == "PROFLAMEPONG" then
+        -- PROFLAMEPING is gone (C1 Phase 2 dropped the app-level keepalive),
+        -- but the device occasionally still emits PROFLAMEPONG echoes from
+        -- a fresh probe / Composer button / previous-driver-state cleanup.
+        -- Surface the timestamp so the existing "Last Ping Response"
+        -- Composer field stays useful for diagnostics; we just no longer
+        -- generate the requests ourselves.
         C4:UpdateProperty("Last Ping Response", os.date("%Y-%m-%d %H:%M:%S"))
         return
     end
@@ -1367,7 +1241,7 @@ function ParseStatusMessage(data)
     if data:sub(1, 1) == "{" then
         dbg_debug("Received JSON: " .. data:sub(1, 200))
         local json = JsonDecode(data)
-        
+
         -- First try indexed format (status0/value0, status1/value1, etc.)
         local i = 0
         local foundIndexed = false
@@ -1379,7 +1253,7 @@ function ParseStatusMessage(data)
             ProcessStatusUpdate(status, value)
             i = i + 1
         end
-        
+
         -- Direct key-value format from device status response. ProcessStatusUpdate
         -- handles the HANDLED / KNOWN_IGNORED / unknown classification internally
         -- so we no longer need a separate "is this known?" guard here. The
@@ -1399,6 +1273,18 @@ function ParseStatusMessage(data)
             end
         end
     end
+end
+
+-- Decodes a single already-unframed text payload from the device. The
+-- vendored WebSocket module strips RFC 6455 framing/masking and hands us
+-- the raw application payload via the :SetProcessMessageFunction callback,
+-- so this is the entry point for our app-protocol decode
+-- (PROFLAMECONNECTIONOPEN / PROFLAMEPONG / JSON status frames). It's the
+-- factored-out equivalent of the per-frame branch that used to live inside
+-- the old hand-rolled ReceivedFromNetwork loop. Reusable from the
+-- probe-replay test in test/test_websocket_integration.lua.
+function HandleProflameMessage(data)
+    ParseStatusMessage(data)
 end
 
 -- Returns a change table consumed by property/proxy/event/Extras adapters.
@@ -1877,7 +1763,7 @@ end
 
 function OnPropertyChanged(strProperty)
     dbg_info("OnPropertyChanged: " .. tostring(strProperty))
-    if strProperty == "IP Address" then 
+    if strProperty == "IP Address" then
         dbg_info("IP Address changed, disconnecting and reconnecting...")
         Disconnect()
         local ipAddress = Properties["IP Address"] or ""
@@ -1896,10 +1782,6 @@ function OnPropertyChanged(strProperty)
     elseif strProperty == "Debug Mode" or strProperty == "Debug Level" then
         ApplyDebugLogSettings()
         dbg_info("Debug settings: mode=" .. tostring(Properties["Debug Mode"]) .. " level=" .. tostring(Properties["Debug Level"]))
-    elseif strProperty == "Ping Interval (seconds)" then
-        if gConnected and gHandshakeComplete then
-            StartPingTimer()  -- Restart with new interval
-        end
     elseif strProperty == "Status Refresh Interval (minutes)" then
         if gConnected and gHandshakeComplete then
             StartStatusRefreshTimer()  -- Restart with new interval (or stop if 0)
@@ -1910,79 +1792,86 @@ end
 -- =============================================================================
 -- NETWORK CALLBACKS
 -- =============================================================================
+--
+-- The framework still calls OnConnectionStatusChanged / ReceivedFromNetwork
+-- as top-level entry points. Under C1 Phase 2 the vendored websocket.lua
+-- registers OCS[netBinding] / RFN[netBinding] for its dynamically-allocated
+-- binding inside its setupC4Connection(). Our top-level shadowing
+-- versions below check whether the call is for the vendored WebSocket's
+-- binding and, if so, delegate to the OCS/RFN table entry — otherwise the
+-- vendored handshake parser and ws-frame parser never get to run.
 
 function OnConnectionStatusChanged(idBinding, nPort, strStatus)
-    if idBinding ~= NETWORK_BINDING_ID then return end
-    if strStatus == "ONLINE" then
-        gConnected = true
-        gConnecting = false
-        local ipAddress = Properties["IP Address"]
-        local port = tonumber(Properties["Port"]) or 88
-        local handshake = BuildWebSocketHandshake(ipAddress, port)
-        C4:SendToNetwork(NETWORK_BINDING_ID, port, handshake)
-        C4:UpdateProperty("Connection Status", "Handshaking...")
-    elseif strStatus == "OFFLINE" then
-        gConnected = false
-        gConnecting = false
-        gHandshakeComplete = false
-        StopPingTimer()
-        StopStatusRefreshTimer()
-        HandleConnectionEvent(false)
-        C4:UpdateProperty("Connection Status", "Disconnected")
-        ScheduleReconnect()
+    if gWebSocket and gWebSocket.netBinding == idBinding then
+        local cb = OCS and OCS[idBinding]
+        if type(cb) == "function" then
+            return cb(idBinding, nPort, strStatus)
+        end
     end
+    -- No other consumers register OCS callbacks today; fall through silently.
 end
 
 function ReceivedFromNetwork(idBinding, nPort, strData)
-    if idBinding ~= NETWORK_BINDING_ID then return end
-    gReceiveBuffer = gReceiveBuffer .. strData
-    if not gHandshakeComplete then
-        local headerEnd = gReceiveBuffer:find("\r\n\r\n")
-        if headerEnd then
-            local response = gReceiveBuffer:sub(1, headerEnd + 3)
-            gReceiveBuffer = gReceiveBuffer:sub(headerEnd + 4)
-            if ValidateHandshakeResponse(response) then
-                gHandshakeComplete = true
-                C4:UpdateProperty("Connection Status", "Connected")
-                HandleConnectionEvent(true)
-                StartPingTimer()
-                StartStatusRefreshTimer()
-                RequestAllStatus()
-                UpdateAllProxies()
-                -- FORCE EXTRAS SETUP ON CONNECT
-                SetupExtras()
-            else
-                Disconnect()
-                ScheduleReconnect()
-            end
-        else
-            return
+    if gWebSocket and gWebSocket.netBinding == idBinding then
+        local cb = RFN and RFN[idBinding]
+        if type(cb) == "function" then
+            return cb(idBinding, nPort, strData)
         end
     end
-    while #gReceiveBuffer > 0 do
-        local opcode, payload, remaining = ParseWebSocketFrame(gReceiveBuffer)
-        if opcode == nil then break end
-        if opcode == false then
-            Disconnect()
-            ScheduleReconnect()
-            break
-        end
-        gReceiveBuffer = remaining
-        if opcode == 0x01 then
-            ParseStatusMessage(payload)
-        elseif opcode == 0x08 then
-            dbg_info("WebSocket close frame received")
-            Disconnect()
-            ScheduleReconnect()
-        elseif opcode == 0x09 then
-            dbg_debug("WebSocket ping frame received")
-            SendPong(payload)
-        elseif opcode == 0x0A then
-            dbg_all("WebSocket pong frame received")
-        else
-            dbg_all("Ignoring unsupported WebSocket opcode: " .. tostring(opcode))
-        end
-    end
+    -- No other consumers register RFN callbacks today; fall through silently.
+end
+
+-- =============================================================================
+-- WEBSOCKET CALLBACKS
+-- =============================================================================
+--
+-- The vendored WebSocket fires :Established after its own RFC 6455 handshake
+-- validation succeeds (status line + Upgrade + Connection + Sec-WebSocket-
+-- Accept all check out per vendor/drivers-common-public/module/websocket.lua
+-- parseHTTPPacket). At that point we own the app-protocol layer: send
+-- PROFLAMECONNECTION, refresh proxies, start the status-refresh timer.
+function OnWebSocketEstablished(ws)
+    gConnected = true
+    gConnecting = false
+    gHandshakeComplete = true
+    C4:UpdateProperty("Connection Status", "Connected")
+    HandleConnectionEvent(true)
+    StartStatusRefreshTimer()
+    RequestAllStatus()
+    UpdateAllProxies()
+    SetupExtras()
+end
+
+-- :ProcessMessage receives ONE already-decoded text-frame payload at a time
+-- (vendor module strips RFC 6455 framing/masking + reassembles fragments).
+-- Drive that straight into the existing app-protocol decoder.
+function OnWebSocketMessage(ws, data)
+    HandleProflameMessage(data)
+end
+
+-- :Offline fires on either our local close (gWebSocket:Close in Disconnect)
+-- or a network-layer drop (OFFLINE transition from C4). Clear our flags and
+-- schedule a reconnect attempt. We deliberately do NOT call Disconnect()
+-- here — the WebSocket object has already initiated its own close path,
+-- and re-entering Disconnect would either double-close or stack a second
+-- reconnect schedule.
+function OnWebSocketOffline(ws)
+    gConnected = false
+    gConnecting = false
+    gHandshakeComplete = false
+    StopStatusRefreshTimer()
+    HandleConnectionEvent(false)
+    C4:UpdateProperty("Connection Status", "Disconnected")
+    ScheduleReconnect()
+end
+
+-- :ClosedByRemote fires when the device sends a CLOSE control frame. The
+-- vendored module follows up with its own Close() (which trips Offline a
+-- few seconds later when NetDisconnect lands), but to keep the reconnect
+-- timer prompt we do the same teardown as Offline immediately.
+function OnWebSocketClosedByRemote(ws)
+    dbg_info("WebSocket close frame received from device")
+    OnWebSocketOffline(ws)
 end
 
 -- =============================================================================
@@ -2735,14 +2624,16 @@ function ResetDriverState()
     gTurnOffInProgress = false
     gTimerSafetyOffPending = false
 
-    -- Cancel any pending timers
-    StopPingTimer()
+    -- Cancel any pending timers. The WS-level ping/pong timer is owned by
+    -- the vendored WebSocket module and gets cleaned up by gWebSocket:Close()
+    -- (called from Disconnect), so it's not in this list.
     StopReconnectTimer()
+    StopStatusRefreshTimer()
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()
     CancelTurnOffRetryTimer()
     CancelTimerSafetyCheck()
-    
+
     -- Reset device state
     gState = {
         main_mode = "0",
@@ -2933,7 +2824,6 @@ end
 
 function OnDriverDestroyed()
     dbg_info("OnDriverDestroyed - cleaning up")
-    StopPingTimer()
     StopReconnectTimer()
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()
@@ -2945,9 +2835,8 @@ end
 function OnDriverUpdated()
     -- Called when driver is updated/reloaded
     dbg_info("OnDriverUpdated - driver updated to version " .. DRIVER_VERSION)
-    
+
     -- Clean up old state
-    StopPingTimer()
     StopReconnectTimer()
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()

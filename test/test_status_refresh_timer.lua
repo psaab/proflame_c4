@@ -116,33 +116,37 @@ Test.assertEqual(_request_calls, 1, "timer fire when fully connected: one reques
 RequestAllStatus = original_RequestAllStatus
 
 --------------------------------------------------------------------------------
--- 7. OFFLINE network-status branch stops the status-refresh timer alongside
---    the ping timer. Codex flagged this — without it, a repeating timer
---    would keep firing through an arbitrarily long outage. The gating in
---    the fire callback makes it a no-op, but leaving a live timer running
---    is sloppy and inconsistent with Disconnect()'s behavior.
+-- 7. The vendored-WebSocket Offline callback stops the status-refresh timer.
+--    Codex flagged this for the pre-C1 OFFLINE branch — without it, a
+--    repeating timer would keep firing through an arbitrarily long outage.
+--    After C1 Phase 2 the offline transition flows through
+--    OnWebSocketOffline (called from the vendored WebSocket's :Offline
+--    hook, which OnConnectionStatusChanged delegates to via OCS[netBinding]).
+--    The gating in the fire callback makes a leftover timer a no-op, but
+--    leaving a live timer running is sloppy and inconsistent with
+--    Disconnect()'s behavior.
 --------------------------------------------------------------------------------
 _timers = {}
 Properties["Status Refresh Interval (minutes)"] = "5"
 StartStatusRefreshTimer()
 local offline_handle = gStatusRefreshTimerId
-Test.assert(offline_handle ~= nil, "timer scheduled before OFFLINE")
+Test.assert(offline_handle ~= nil, "timer scheduled before Offline")
 
--- Stub HandleConnectionEvent / C4:UpdateProperty / ScheduleReconnect so the
--- OFFLINE branch can run without exercising the rest of the connection
--- lifecycle.
+-- Stub HandleConnectionEvent / ScheduleReconnect so the Offline path can
+-- run without exercising the rest of the connection lifecycle.
 local original_HandleConnectionEvent = HandleConnectionEvent
 local original_ScheduleReconnect = ScheduleReconnect
 HandleConnectionEvent = function() end
 ScheduleReconnect = function() end
 
--- OnConnectionStatusChanged signature: (idBinding, nPort, strStatus). The
--- function ignores binding+port in the OFFLINE branch — only strStatus
--- routes the if/elseif.
-OnConnectionStatusChanged(NETWORK_BINDING_ID, tonumber(Properties["Port"]) or 88, "OFFLINE")
+-- OnWebSocketOffline is the vendored-module entry point Phase 2 wires the
+-- offline-teardown through. Pre-Phase-2 this used to be the OFFLINE branch
+-- of OnConnectionStatusChanged; the binding-dispatch test
+-- (test_websocket_integration.lua) covers the OCS routing path.
+OnWebSocketOffline({})
 
-Test.assert(offline_handle.cancelled, "OFFLINE branch cancelled the status-refresh timer")
-Test.assertEqual(gStatusRefreshTimerId, nil, "OFFLINE branch cleared timer handle")
+Test.assert(offline_handle.cancelled, "Offline callback cancelled the status-refresh timer")
+Test.assertEqual(gStatusRefreshTimerId, nil, "Offline callback cleared timer handle")
 
 HandleConnectionEvent = original_HandleConnectionEvent
 ScheduleReconnect = original_ScheduleReconnect
