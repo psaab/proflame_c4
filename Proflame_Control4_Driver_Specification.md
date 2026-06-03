@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026060201 (2026-06-03)
+- **Driver Version**: 2026060202 (2026-06-03)
 
 ---
 
@@ -1624,6 +1624,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026060202 | 2026-06-03 | Tier B1: added read-only "Firmware Versions" Composer property composed from the 5 fw_* sub-fields the device pushes |
 | 2026060201 | 2026-06-03 | Tier A2: HANDLED/KNOWN_IGNORED status-key allowlists silence ~67 debug-log lines per reconnect; unknown firmware keys now surface at WARN |
 | 2026060108 | 2026-06-03 | Tier A1: dropped Strict WebSocket Handshake property + lenient 101 fallback (evidence-backed deletion per tools/probes/FINDINGS.md §1) |
 | 2026060107 | 2026-06-01 | Logging discipline: classified 101 dbg_err calls by intent into dbg_err/warn/info/debug; added dbg_trace helper |
