@@ -142,6 +142,128 @@ Test.assertEqual(
 )
 
 --------------------------------------------------------------------------------
+-- 2c. A3 carve-out: temperature_unit captures into gTemperatureUnit and writes
+--     the "Temperature Unit" Composer property, and the suffix on the two
+--     live temperature properties (Temperature Setpoint, Room Temperature)
+--     flips immediately without waiting for the next device frame.
+--------------------------------------------------------------------------------
+local function reset_temp_state(initialUnit, setpointEncoded, roomEncoded)
+    -- Clear the property-update capture and reset the unit so the carve-out
+    -- is forced to take the "value changed" branch.
+    _prop_updates = {}
+    -- Force a non-matching initial value so the next CaptureTemperatureUnit
+    -- call always goes through the update branch. We use a string the
+    -- production code will never produce ("Z") to bypass the idempotence
+    -- short-circuit even when the test re-asserts the same final unit.
+    gTemperatureUnit = initialUnit or "Z"
+    gState = gState or {}
+    gState.temperature_set = setpointEncoded or "700"
+    gState.room_temperature = roomEncoded or "685"
+end
+
+-- "1" -> Fahrenheit
+reset_temp_state("Z", "750", "705")
+ProcessStatusUpdate("temperature_unit", "1")
+Test.assertEqual(gTemperatureUnit, "F", 'temperature_unit "1" sets gTemperatureUnit = "F"')
+Test.assertEqual(
+    _prop_updates["Temperature Unit"], "Fahrenheit",
+    'temperature_unit "1" writes "Fahrenheit" to the Composer property'
+)
+Test.assertEqual(
+    _prop_updates["Temperature Setpoint"], "75F",
+    'F unit re-stamps Temperature Setpoint with "F" suffix immediately'
+)
+Test.assertEqual(
+    _prop_updates["Room Temperature"], "70.5F",
+    'F unit re-stamps Room Temperature with "F" suffix immediately'
+)
+
+-- "0" -> Celsius (mid-session flip; suffix must change without a setpoint frame)
+reset_temp_state("Z", "750", "705")
+ProcessStatusUpdate("temperature_unit", "0")
+Test.assertEqual(gTemperatureUnit, "C", 'temperature_unit "0" sets gTemperatureUnit = "C"')
+Test.assertEqual(
+    _prop_updates["Temperature Unit"], "Celsius",
+    'temperature_unit "0" writes "Celsius" to the Composer property'
+)
+Test.assertEqual(
+    _prop_updates["Temperature Setpoint"], "75C",
+    'C unit re-stamps Temperature Setpoint with "C" suffix without a fresh frame'
+)
+Test.assertEqual(
+    _prop_updates["Room Temperature"], "70.5C",
+    'C unit re-stamps Room Temperature with "C" suffix without a fresh frame'
+)
+
+-- Anything else -> defensive default to F (preserves historical behavior)
+for _, malformed in ipairs({ "2", "", "F", "yes", "0\n[ERROR]:fake" }) do
+    reset_temp_state("Z", "700", "700")
+    ProcessStatusUpdate("temperature_unit", malformed)
+    local printable = (malformed:gsub("%c", "?"))  -- parens force single return
+    Test.assertEqual(
+        gTemperatureUnit, "F",
+        'temperature_unit "' .. printable .. '" defensively defaults to F'
+    )
+    Test.assertEqual(
+        _prop_updates["Temperature Unit"], "Fahrenheit",
+        'malformed value renders as "Fahrenheit" in the property'
+    )
+end
+
+-- Idempotence: same unit re-pushed is a no-op (no property update reissued)
+gTemperatureUnit = "F"
+_prop_updates = {}
+ProcessStatusUpdate("temperature_unit", "1")
+Test.assertEqual(
+    _prop_updates["Temperature Unit"], nil,
+    "duplicate temperature_unit=1 does NOT re-fire UpdateProperty"
+)
+
+-- Direct dispatch of a temperature_set status under gTemperatureUnit = "C"
+-- routes through the UpdatePropertiesForStatus branch (the actually-handled
+-- path) and produces a "C"-suffixed value.
+gTemperatureUnit = "C"
+_prop_updates = {}
+ProcessStatusUpdate("temperature_set", "720")
+Test.assertEqual(
+    _prop_updates["Temperature Setpoint"], "72C",
+    'temperature_set dispatched with gTemperatureUnit="C" emits a "C"-suffixed property value'
+)
+
+-- And under gTemperatureUnit = "F" the same dispatch emits "F".
+gTemperatureUnit = "F"
+_prop_updates = {}
+ProcessStatusUpdate("temperature_set", "720")
+Test.assertEqual(
+    _prop_updates["Temperature Setpoint"], "72F",
+    'temperature_set dispatched with gTemperatureUnit="F" emits an "F"-suffixed property value'
+)
+
+-- Codex #57 regression check: InitializePropertiesFromState must re-stamp
+-- the "Temperature Unit" and "Firmware Versions" properties from the
+-- accumulators (so a state reset doesn't leave Composer showing the prior
+-- session's strings).
+gTemperatureUnit = "F"
+gFirmwareVersions = {
+    fw_revision = "", fw_ble = "", fw_ifc_c = "", fw_ifc_s = "", fw_rc = "",
+}
+gState.temperature_set = "700"
+gState.room_temperature = "700"
+_prop_updates = {}
+InitializePropertiesFromState()
+Test.assertEqual(
+    _prop_updates["Temperature Unit"], "Fahrenheit",
+    "InitializePropertiesFromState re-stamps Temperature Unit (Codex #57)"
+)
+Test.assertEqual(
+    _prop_updates["Firmware Versions"], "",
+    "InitializePropertiesFromState re-stamps Firmware Versions to '' after reset (Codex #57)"
+)
+
+-- Restore the production-default unit for the rest of the suite.
+gTemperatureUnit = "F"
+
+--------------------------------------------------------------------------------
 -- 3. Unknown key (not in either set) produces a WARN log so firmware additions
 --    surface visibly. Use a key we know isn't in either set.
 --------------------------------------------------------------------------------
@@ -158,6 +280,24 @@ Test.assert(
 Test.assert(
     any_print_matches("=42"),
     "unknown key log includes the value"
+)
+
+-- Codex #58 regression: SanitizeDeviceString strips control characters out of
+-- the unknown-key WARN log so a hostile/buggy device can't inject newlines or
+-- forged level prefixes. The raw bytes must not appear; the warn line should.
+reset_capture()
+ProcessStatusUpdate("evil_key", "real\n[ERROR]:forged")
+Test.assert(
+    any_print_matches("Unknown status key from firmware"),
+    "sanitized unknown-key warn still includes the warn prefix"
+)
+Test.assert(
+    not any_print_matches("\n[ERROR]:forged"),
+    "raw newline + forged level prefix must NOT survive into the log line"
+)
+Test.assert(
+    any_print_matches("real [ERROR]:forged") or any_print_matches("real  [ERROR]:forged"),
+    "sanitized value renders control bytes as spaces"
 )
 
 --------------------------------------------------------------------------------

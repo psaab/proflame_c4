@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026060202 (2026-06-03)
+- **Driver Version**: 2026060203 (2026-06-03)
 
 ---
 
@@ -216,6 +216,7 @@ All controllable parameters plus:
 | `rssi` | Alias for wifi_signal_str |
 | `fw_revision` | Firmware version string |
 | `dongle_name` | Device name |
+| `temperature_unit` | Device's displayed unit preference: `"1"` = Fahrenheit, `"0"` = Celsius. The driver mirrors this into the read-only "Temperature Unit" Composer property and uses it to flip the display suffix on "Temperature Setpoint" / "Room Temperature". Wire encoding (Fx10 integer) for the temperature values themselves is unchanged. |
 
 ### 2.11 Timer Operation Sequence
 
@@ -1624,6 +1625,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026060203 | 2026-06-03 | Tier A3: read device `temperature_unit` and flip Composer temperature suffix to F or C; added read-only "Temperature Unit" property; added SanitizeDeviceString defense-in-depth wrapper applied to firmware + temperature_unit values and the unknown-key WARN log (#58); InitializePropertiesFromState now re-stamps Firmware Versions and Temperature Unit after state resets (#57) |
 | 2026060202 | 2026-06-03 | Tier B1: added read-only "Firmware Versions" Composer property composed from the 5 fw_* sub-fields the device pushes |
 | 2026060201 | 2026-06-03 | Tier A2: HANDLED/KNOWN_IGNORED status-key allowlists silence ~67 debug-log lines per reconnect; unknown firmware keys now surface at WARN |
 | 2026060108 | 2026-06-03 | Tier A1: dropped Strict WebSocket Handshake property + lenient 101 fallback (evidence-backed deletion per tools/probes/FINDINGS.md §1) |
