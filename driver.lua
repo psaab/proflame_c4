@@ -12,7 +12,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026060203"
+DRIVER_VERSION = "2026060204"
 DRIVER_DATE = "2026-06-03"
 
 NETWORK_BINDING_ID = 6001
@@ -119,6 +119,10 @@ end
 if gReconnectTimerId then
     pcall(function() gReconnectTimerId:Cancel() end)
     gReconnectTimerId = nil
+end
+if gStatusRefreshTimerId then
+    pcall(function() gStatusRefreshTimerId:Cancel() end)
+    gStatusRefreshTimerId = nil
 end
 if gTimerModeDelayTimer then
     pcall(function() gTimerModeDelayTimer:Cancel() end)
@@ -276,6 +280,7 @@ gHandshakeComplete = false
 gReceiveBuffer = ""
 gPingTimerId = nil
 gReconnectTimerId = nil
+gStatusRefreshTimerId = nil
 gTimerModeDelayTimer = nil
 gTimerStartDelayTimer = nil
 gTimerSuppressClearTimer = nil
@@ -4566,6 +4571,39 @@ function StopPingTimer()
     end
 end
 
+-- Periodic status-refresh timer. The 2026-06-02 probe (tools/probes/FINDINGS.md
+-- §8) showed the Proflame device does NOT push spontaneously during idle
+-- silence — 0 frames in a 10s silent window. So local-panel state changes
+-- (someone pressing a button on the physical fireplace control) are invisible
+-- to the driver until the next user-initiated command or reconnect.
+--
+-- This periodically resends PROFLAMECONNECTION which triggers the device's
+-- full status dump (5 frames, ~85 status pairs), letting us pick up any
+-- local-side changes. Default 5 minutes; 0 disables. The PROFLAMEPING
+-- keepalive at 5s continues to run independently.
+function StartStatusRefreshTimer()
+    StopStatusRefreshTimer()
+    local minutes = tonumber(Properties["Status Refresh Interval (minutes)"]) or 5
+    if minutes <= 0 then
+        dbg_info("Status refresh timer disabled (Status Refresh Interval = 0)")
+        return
+    end
+    local intervalMs = minutes * 60 * 1000
+    gStatusRefreshTimerId = C4:SetTimer(intervalMs, function(timer)
+        if gConnected and gHandshakeComplete then
+            dbg_info("Status refresh timer fired; requesting full status dump from device")
+            RequestAllStatus()
+        end
+    end, true)
+end
+
+function StopStatusRefreshTimer()
+    if gStatusRefreshTimerId then
+        gStatusRefreshTimerId:Cancel()
+        gStatusRefreshTimerId = nil
+    end
+end
+
 function ScheduleReconnect()
     StopReconnectTimer()
     local delay = (tonumber(Properties["Reconnect Delay (seconds)"]) or 10) * 1000
@@ -4763,6 +4801,7 @@ end
 
 function Disconnect()
     StopPingTimer()
+    StopStatusRefreshTimer()
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()
     if gSuppressTimerUpdates then
@@ -5482,6 +5521,10 @@ function OnPropertyChanged(strProperty)
         if gConnected and gHandshakeComplete then
             StartPingTimer()  -- Restart with new interval
         end
+    elseif strProperty == "Status Refresh Interval (minutes)" then
+        if gConnected and gHandshakeComplete then
+            StartStatusRefreshTimer()  -- Restart with new interval (or stop if 0)
+        end
     end
 end
 
@@ -5504,6 +5547,7 @@ function OnConnectionStatusChanged(idBinding, nPort, strStatus)
         gConnecting = false
         gHandshakeComplete = false
         StopPingTimer()
+        StopStatusRefreshTimer()
         HandleConnectionEvent(false)
         C4:UpdateProperty("Connection Status", "Disconnected")
         ScheduleReconnect()
@@ -5523,6 +5567,7 @@ function ReceivedFromNetwork(idBinding, nPort, strData)
                 C4:UpdateProperty("Connection Status", "Connected")
                 HandleConnectionEvent(true)
                 StartPingTimer()
+                StartStatusRefreshTimer()
                 RequestAllStatus()
                 UpdateAllProxies()
                 -- FORCE EXTRAS SETUP ON CONNECT
