@@ -4295,11 +4295,21 @@ end
 -- OCS/RFN/OPC/etc. dispatch tables plus framework handler functions; websocket
 -- reads handlers/timer/Metrics globals and returns the WebSocket factory.
 --
--- Phase 1 is INERT: nothing in this driver calls WebSocket:new() yet. The
--- upstream framework handlers (OnConnectionStatusChanged, OnPropertyChanged,
--- ReceivedFromNetwork, ExecuteCommand, ReceivedFromProxy) defined inside
--- handlers.lua are immediately shadowed by our hand-rolled versions further
--- down this file, which is exactly what we want until Phase 2 cuts over.
+-- Phase 1 is INERT for our hot paths: nothing in this driver calls
+-- WebSocket:new() yet, and the five framework handlers our driver overrides
+-- (OnConnectionStatusChanged, OnPropertyChanged, ReceivedFromNetwork,
+-- ExecuteCommand, ReceivedFromProxy) defined inside handlers.lua are
+-- immediately shadowed by our hand-rolled versions further down this file.
+--
+-- Caveat (Codex review of #67): handlers.lua additionally defines top-level
+-- OnBindingChanged, OnDeviceEvent, OnSystemEvent, OnVariableChanged,
+-- OnWatchedVariableChanged, TestCondition, and UIRequest. Our driver does NOT
+-- define these, so the vendored versions are now live. Each dispatches
+-- through an empty registry table (OBC, ODE, OSE, OVC, OWVC, etc.) — with
+-- nothing registered against those tables, every call is a no-op that returns
+-- nil. Phase 1 makes these reachable; Phase 2 will either register against
+-- them (the framework-native path) or continue ignoring them.
+
 --
 -- The vendored files require()-import each other (e.g. handlers.lua does
 -- `require('drivers-common-public.global.lib')`). The shim below makes those
