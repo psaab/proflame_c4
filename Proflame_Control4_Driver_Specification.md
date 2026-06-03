@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026060203 (2026-06-03)
+- **Driver Version**: 2026060204 (2026-06-03)
 
 ---
 
@@ -1627,6 +1627,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026060204 | 2026-06-03 | Tier B3: periodic PROFLAMECONNECTION refresh every N minutes (default 5, 0 disables) to catch local-panel state changes the device does not push spontaneously (tools/probes/FINDINGS.md §8). New Composer property "Status Refresh Interval (minutes)"; timer started after handshake-complete and stopped in Disconnect alongside the ping timer. |
 | 2026060203 | 2026-06-03 | Tier A3: read device `temperature_unit` and flip Composer temperature suffix to F or C; added read-only "Temperature Unit" property; added SanitizeDeviceString defense-in-depth wrapper applied to firmware + temperature_unit values and the unknown-key WARN log (#58); InitializePropertiesFromState now re-stamps Firmware Versions and Temperature Unit after state resets (#57) |
 | 2026060202 | 2026-06-03 | Tier B1: added read-only "Firmware Versions" Composer property composed from the 5 fw_* sub-fields the device pushes |
 | 2026060201 | 2026-06-03 | Tier A2: HANDLED/KNOWN_IGNORED status-key allowlists silence ~67 debug-log lines per reconnect; unknown firmware keys now surface at WARN |
