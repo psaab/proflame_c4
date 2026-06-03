@@ -10,9 +10,22 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import re
 import socket
 import struct
 import time
+
+# Matches the Lua driver's strict status-line check (src/driver.lua
+# ValidateHandshakeResponse) so probe evidence aligned with the live
+# validator. A line like "HTTP/1.1 1010 Weird" would be rejected here even
+# though it contains the substring "101".
+#
+# re.ASCII is load-bearing: without it, Python's \d and \s would match
+# Unicode digits and Unicode whitespace (e.g. NBSP, U+00A0) that Lua's
+# %d and %s do NOT match. Without the flag, a status line like
+# "HTTP/1.1\xa0101\xa0Switching" passes here but fails the live driver,
+# producing a misleading "strict-compatible" probe verdict.
+_STATUS_LINE_101_RE = re.compile(r"^HTTP/\d+\.\d+\s+101\s", re.ASCII)
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -52,7 +65,7 @@ def open_ws(host: str, port: int, timeout: float = 5.0):
         )
     }
     strict_ok = (
-        "101" in status_line
+        bool(_STATUS_LINE_101_RE.match(status_line))
         and headers_lc.get("upgrade", "").lower() == "websocket"
         and "upgrade" in headers_lc.get("connection", "").lower()
         and headers_lc.get("sec-websocket-accept") == expected

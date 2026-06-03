@@ -99,6 +99,8 @@ base64(sha1(Sec-WebSocket-Key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
 
 The driver strictly validates the status line, Upgrade/Connection headers, and Sec-WebSocket-Accept per RFC 6455. The prior `Strict WebSocket Handshake = Off` lenient-101 fallback was removed in 2026060108 after direct device probe (firmware `FW: 625.04.673`) confirmed the Proflame returns a fully compliant 101 — see `tools/probes/FINDINGS.md` §1.
 
+**Compatibility tradeoff (2026060108):** default-Off installs had been silently using the lenient-101 fallback. After the removal, those installs become strict-only — the same behavior an explicitly-set `Strict WebSocket Handshake = On` would have produced. On `FW: 625.04.673` no behavior changes (the probe shows the firmware is RFC-compliant), but a deployment against a different firmware revision that emitted a non-compliant 101 would now refuse to connect. Re-run `tools/probes/handshake_and_ping.py` to verify a new firmware before deploying.
+
 ### 2.3 WebSocket Frame Format
 
 Standard WebSocket framing is used:
@@ -1628,7 +1630,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 | 2026060203 | 2026-06-03 | Tier A3: read device `temperature_unit` and flip Composer temperature suffix to F or C; added read-only "Temperature Unit" property; added SanitizeDeviceString defense-in-depth wrapper applied to firmware + temperature_unit values and the unknown-key WARN log (#58); InitializePropertiesFromState now re-stamps Firmware Versions and Temperature Unit after state resets (#57) |
 | 2026060202 | 2026-06-03 | Tier B1: added read-only "Firmware Versions" Composer property composed from the 5 fw_* sub-fields the device pushes |
 | 2026060201 | 2026-06-03 | Tier A2: HANDLED/KNOWN_IGNORED status-key allowlists silence ~67 debug-log lines per reconnect; unknown firmware keys now surface at WARN |
-| 2026060108 | 2026-06-03 | Tier A1: dropped Strict WebSocket Handshake property + lenient 101 fallback (evidence-backed deletion per tools/probes/FINDINGS.md §1) |
+| 2026060108 | 2026-06-03 | Tier A1: dropped Strict WebSocket Handshake property + lenient 101 fallback. **Default-Off installs become strict-only** — this is a deliberate compatibility tradeoff based on FW 625.04.673 probe evidence (tools/probes/FINDINGS.md §1). Older or non-standard firmware variants that returned a non-RFC-compliant 101 would have been silently accepted before this version and will now fail to connect. |
 | 2026060107 | 2026-06-01 | Logging discipline: classified 101 dbg_err calls by intent into dbg_err/warn/info/debug; added dbg_trace helper |
 | 2026060106 | 2026-06-01 | Review-cleanup: restored http_client watchdog (T2d+ regression), removed dead dbg() function, clarified empty-asset install message, Update Status default Idle |
 | 2026060105 | 2026-06-01 | Replaced slim updater with full template github-updater (auto-install via Composer SOAP); manual-trigger only via "Install Latest Release" command |

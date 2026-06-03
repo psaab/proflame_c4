@@ -20,9 +20,16 @@ Usage: python3 /tmp/proflame_probe.py 172.16.1.81 88
 import base64
 import hashlib
 import os
+import re
 import socket
 import struct
 import sys
+
+# Same regex as `_ws.py` and the Lua driver's ValidateHandshakeResponse so
+# probe evidence reflects the actual production strict validator. The
+# re.ASCII flag matches Lua %d / %s semantics — without it, Python's
+# Unicode-aware \d / \s would over-accept (e.g. NBSP between fields).
+_STATUS_LINE_101_RE = re.compile(r"^HTTP/\d+\.\d+\s+101\s", re.ASCII)
 import time
 
 HOST = sys.argv[1] if len(sys.argv) > 1 else "172.16.1.81"
@@ -154,7 +161,7 @@ def main() -> int:
         print(f"    expected: {expected_accept}")
         print(f"    actual:   {actual_accept}")
     strict_ok = (
-        "101" in status_line
+        bool(_STATUS_LINE_101_RE.match(status_line))
         and "websocket" in upgrade_hdr.lower()
         and "upgrade" in connection_hdr.lower()
         and actual_accept == expected_accept
