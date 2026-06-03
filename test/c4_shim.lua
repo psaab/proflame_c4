@@ -92,6 +92,34 @@ function C4:UpdateProperty(name, value)
 end
 
 --------------------------------------------------------------------------------
+-- Identity / driver-config — explicit stubs (NOT modifying fallback contract)
+--
+-- The vendored Snap One drivers-common-public modules (Metrics:new, called at
+-- top level by handlers.lua's `do --Setup Metrics` block) wrap their results
+-- in `tostring(C4:GetDeviceID())` and `tostring(C4:GetDriverConfigInfo(...))`.
+-- The metatable __index fallback returns `noop`, which yields zero return
+-- values; `tostring()` with no argument throws "value expected". That breaks
+-- driver.lua loading entirely.
+--
+-- Adding explicit stubs that return strings here is the documented escape
+-- hatch the file's header comment calls out: "If a future test calls a C4
+-- method that the production driver expects to return a string/table, add an
+-- explicit stub for that method below — don't rely on the fallback." We are
+-- NOT changing the fallback's return-nothing semantics; we are stubbing two
+-- specific methods that vendored top-level code depends on.
+--------------------------------------------------------------------------------
+
+function C4:GetDeviceID()
+    return "test-device-id"
+end
+
+function C4:GetDriverConfigInfo(key)
+    if key == "name" then return "Proflame WiFi Fireplace" end
+    if key == "version" then return "test-version" end
+    return ""
+end
+
+--------------------------------------------------------------------------------
 -- Test helpers — namespace `Test` for inspection / reset between cases.
 --------------------------------------------------------------------------------
 

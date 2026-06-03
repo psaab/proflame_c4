@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026060204 (2026-06-03)
+- **Driver Version**: 2026060301 (2026-06-03)
 
 ---
 
@@ -1627,6 +1627,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026060301 | 2026-06-03 | Tier C1 Phase 1: vendored Snap One `drivers-common-public` `{global/lib, global/timer, global/handlers, module/metrics, module/websocket}` into `vendor/drivers-common-public/` preserving upstream subdirectory layout. Files are byte-identical to upstream master `64663d5deacaec25327418d207dc4b0e5e0f27ab`. Bundle script extended with `bundle_one_noreturn` for vendor files that register their API via top-level globals (no trailing `return`); a small `require` shim in `src/driver.lua` maps the upstream `require('drivers-common-public.…')` calls to the bundled globals so the side-effect top-level executable code in each vendor file works under the bundled single-file deployment. Phase 1 is INERT: the 9 hand-rolled WebSocket helpers in `src/driver.lua` (lines 928-1148) and the static `<connection><binding id="6001">` in `driver.xml` are unchanged; nothing in this driver calls `WebSocket:new()` yet. Phase 2 will replace the hand-rolled helpers and drop the static binding so `websocket.lua` can allocate it dynamically via `C4:CreateNetworkConnection`. |
 | 2026060204 | 2026-06-03 | Tier B3: periodic PROFLAMECONNECTION refresh every N minutes (default 5, 0 disables) to catch local-panel state changes the device does not push spontaneously (tools/probes/FINDINGS.md §8). New Composer property "Status Refresh Interval (minutes)"; timer started after handshake-complete and stopped in Disconnect alongside the ping timer. |
 | 2026060203 | 2026-06-03 | Tier A3: read device `temperature_unit` and flip Composer temperature suffix to F or C; added read-only "Temperature Unit" property; added SanitizeDeviceString defense-in-depth wrapper applied to firmware + temperature_unit values and the unknown-key WARN log (#58); InitializePropertiesFromState now re-stamps Firmware Versions and Temperature Unit after state resets (#57) |
 | 2026060202 | 2026-06-03 | Tier B1: added read-only "Firmware Versions" Composer property composed from the 5 fw_* sub-fields the device pushes |

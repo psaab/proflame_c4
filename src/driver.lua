@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026060204"
+DRIVER_VERSION = "2026060301"
 DRIVER_DATE = "2026-06-03"
 
 NETWORK_BINDING_ID = 6001
@@ -585,6 +585,71 @@ end
 -- BUNDLE_INSERT vendor/http.lua
 
 -- BUNDLE_INSERT vendor/github_updater.lua
+
+-- =============================================================================
+-- VENDORED: Snap One drivers-common-public (WebSocket module + deps)
+--
+-- C1 Phase 1 vendors the upstream Snap One WebSocket helper and its full
+-- transitive Lua dependency tree. The five files below are byte-identical to
+-- snap-one/drivers-common-public master and live under
+-- vendor/drivers-common-public/ preserving the upstream directory layout. The
+-- bundle order below is load-bearing: lib registers Select/CopyTable/JSON
+-- helpers; timer registers SetTimer/CancelTimer; metrics returns the Metrics
+-- factory; handlers reads Metrics/lib at top-level and registers
+-- OCS/RFN/OPC/etc. dispatch tables plus framework handler functions; websocket
+-- reads handlers/timer/Metrics globals and returns the WebSocket factory.
+--
+-- Phase 1 is INERT: nothing in this driver calls WebSocket:new() yet. The
+-- upstream framework handlers (OnConnectionStatusChanged, OnPropertyChanged,
+-- ReceivedFromNetwork, ExecuteCommand, ReceivedFromProxy) defined inside
+-- handlers.lua are immediately shadowed by our hand-rolled versions further
+-- down this file, which is exactly what we want until Phase 2 cuts over.
+--
+-- The vendored files require()-import each other (e.g. handlers.lua does
+-- `require('drivers-common-public.global.lib')`). The shim below makes those
+-- requires no-ops that return the appropriate already-bundled global so the
+-- top-level executable code in each vendor file works under the bundled
+-- single-file deployment model that Control4 uses. require() for any string
+-- not in this map falls through to the original loader (nil under DriverWorks,
+-- the real Lua loader under our test harness).
+-- =============================================================================
+
+do  -- Snap One require shim
+    local _vendored_modules = {
+        -- handlers.lua and (transitively) lib.lua both require this. Our own
+        -- vendor/JSON.lua is already bundled above as the global `JSON`, so
+        -- return that — preserves the encoder we already use everywhere else.
+        ['drivers-common-public.module.json']     = function() return JSON end,
+        -- The remaining four are bundled inline below. By the time any
+        -- require() for them executes, the corresponding bundled block has
+        -- already run and registered its globals (Metrics / WebSocket /
+        -- top-level functions). Returning the published global is the closest
+        -- analogue to what the real Lua loader would hand back.
+        ['drivers-common-public.global.lib']      = function() return nil end,
+        ['drivers-common-public.global.timer']    = function() return nil end,
+        ['drivers-common-public.global.handlers'] = function() return nil end,
+        ['drivers-common-public.module.metrics']  = function() return Metrics end,
+        ['drivers-common-public.module.websocket']= function() return WebSocket end,
+    }
+    local _original_require = require
+    -- luacheck: globals require
+    require = function(modname)
+        local entry = _vendored_modules[modname]
+        if entry then return entry() end
+        if _original_require then return _original_require(modname) end
+        error('require not available for module: ' .. tostring(modname))
+    end
+end
+
+-- BUNDLE_INSERT vendor/drivers-common-public/global/lib.lua
+
+-- BUNDLE_INSERT vendor/drivers-common-public/global/timer.lua
+
+-- BUNDLE_INSERT vendor/drivers-common-public/module/metrics.lua
+
+-- BUNDLE_INSERT vendor/drivers-common-public/global/handlers.lua
+
+-- BUNDLE_INSERT vendor/drivers-common-public/module/websocket.lua
 
 -- Initial log configuration. ApplyDebugLogSettings() above re-applies these
 -- from Composer Properties in OnDriverLateInit and OnPropertyChanged.

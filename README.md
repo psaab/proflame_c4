@@ -522,6 +522,26 @@ scripts/package.sh [path/to/proflame_wifi_connect.c4z]
 
 `scripts/package.sh` first runs `scripts/bundle.sh`, which concatenates `src/driver.lua` and the vendored libraries under `vendor/` into the single `driver.lua` that ships inside the `.c4z`. **Edit `src/driver.lua` and `vendor/*.lua`, not `driver.lua` at the repo root** — that file is generated. `scripts/validate.sh` rejects working trees where `driver.lua` doesn't match what a fresh `bundle.sh` run would produce.
 
+#### Vendored libraries
+
+| Path | Upstream | Purpose |
+|---|---|---|
+| `vendor/JSON.lua` | Jeffrey Friedl's JSON.lua | JSON encode/decode (20211016.28) |
+| `vendor/logging.lua` | snap-one DriverWorks template | leveled logger |
+| `vendor/persist.lua` | snap-one DriverWorks template | encrypted persistence wrapper |
+| `vendor/deferred.lua` | snap-one DriverWorks template | promise/deferred helper |
+| `vendor/version.lua` | snap-one DriverWorks template | semver comparator |
+| `vendor/lib_helpers.lua` | snap-one DriverWorks template | misc lib helpers |
+| `vendor/http.lua` | snap-one DriverWorks template | HTTP client w/ retry+watchdog |
+| `vendor/github_updater.lua` | snap-one DriverWorks template | GitHub Releases auto-updater |
+| `vendor/drivers-common-public/global/lib.lua` | [snap-one/drivers-common-public@`64663d5`](https://github.com/snap-one/drivers-common-public/tree/64663d5deacaec25327418d207dc4b0e5e0f27ab) | `Select`/`CopyTable`/persist helpers/etc. (Phase 1 inert) |
+| `vendor/drivers-common-public/global/timer.lua` | [snap-one/drivers-common-public@`64663d5`](https://github.com/snap-one/drivers-common-public/tree/64663d5deacaec25327418d207dc4b0e5e0f27ab) | `SetTimer`/`CancelTimer`/`ONE_SECOND` etc. (Phase 1 inert) |
+| `vendor/drivers-common-public/global/handlers.lua` | [snap-one/drivers-common-public@`64663d5`](https://github.com/snap-one/drivers-common-public/tree/64663d5deacaec25327418d207dc4b0e5e0f27ab) | framework handler dispatch tables `OCS`/`RFN`/`OPC`/etc. (Phase 1 inert) |
+| `vendor/drivers-common-public/module/metrics.lua` | [snap-one/drivers-common-public@`64663d5`](https://github.com/snap-one/drivers-common-public/tree/64663d5deacaec25327418d207dc4b0e5e0f27ab) | `Metrics` factory (Phase 1 inert) |
+| `vendor/drivers-common-public/module/websocket.lua` | [snap-one/drivers-common-public@`64663d5`](https://github.com/snap-one/drivers-common-public/tree/64663d5deacaec25327418d207dc4b0e5e0f27ab) | `WebSocket:new()` factory — replaces our 9 hand-rolled helpers in Phase 2 |
+
+The `vendor/drivers-common-public/` tree mirrors upstream's directory layout exactly and the files are byte-identical to upstream master at the linked commit. They `require()` each other; a small `require` shim in `src/driver.lua` maps those calls to the bundled globals so the side-effect top-level code in each vendor file works under the bundled single-file deployment model.
+
 Both scripts read the package file list from `scripts/manifest.txt`. The packager normalizes ZIP entry timestamps so repeated rebuilds produce byte-identical archives when the source files are unchanged. The validator checks `driver.xml` with `xmllint`, verifies required source/package files, confirms the `.c4z` contains only the expected driver files, and fails if packaged source files are stale relative to the working tree. The same validation and deterministic rebuild check run in GitHub Actions on pushes to `main` and on pull requests.
 
 ### Unit Tests
