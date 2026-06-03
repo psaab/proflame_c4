@@ -48,6 +48,8 @@ Base64(SHA1(Sec-WebSocket-Key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
 
 The driver strictly validates the upgrade response per RFC 6455 §4.2.2 — status line, `Upgrade: websocket`, `Connection: Upgrade`, and `Sec-WebSocket-Accept` matching the computed digest. Direct probe against `FW: 625.04.673` on 2026-06-02 confirmed the Proflame firmware returns a fully compliant 101 (`tools/probes/FINDINGS.md` §1), so the prior `Strict WebSocket Handshake = Off` lenient-fallback property was removed.
 
+**Compatibility note:** the removal in version `2026060108` flipped default-Off installs (the majority) from lenient-101 fallback to strict-only validation. This is a deliberate tradeoff backed by the probe evidence on `FW: 625.04.673` — older or non-standard firmware variants that returned a non-compliant 101 would have been silently accepted before that version and will now refuse to connect. If a deployment regresses against an unverified firmware revision, re-run `tools/probes/handshake_and_ping.py` to confirm strict compliance before deploying the driver to that controller.
+
 ### Keep-Alive Protocol
 - **Ping Message**: `PROFLAMEPING` (sent every 5 seconds)
 - **Pong Response**: `PROFLAMEPONG` (device responds)
