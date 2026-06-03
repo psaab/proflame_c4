@@ -9,7 +9,7 @@
   <manufacturer>SIT Group / Proflame</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026060301</version>
+  <version>2026060302</version>
   <created>12/02/2025 12:00 PM</created>
   <modified>06/03/2026 12:00 AM</modified>
   <auto_update>true</auto_update>
@@ -57,14 +57,6 @@
         <minimum>1</minimum>
         <maximum>65535</maximum>
         <default>88</default>
-        <readonly>false</readonly>
-      </property>
-      <property>
-        <name>Ping Interval (seconds)</name>
-        <type>RANGED_INTEGER</type>
-        <minimum>1</minimum>
-        <maximum>30</maximum>
-        <default>5</default>
         <readonly>false</readonly>
       </property>
       <property>
@@ -406,29 +398,14 @@
     </event>
   </events>
   <connections>
-    <connection>
-      <id>6001</id>
-      <facing>6</facing>
-      <connectionname>Proflame Network</connectionname>
-      <type>4</type>
-      <consumer>True</consumer>
-      <audiosource>False</audiosource>
-      <videosource>False</videosource>
-      <linelevel>False</linelevel>
-      <classes>
-        <class>
-          <classname>TCP</classname>
-          <ports>
-            <port>
-              <number>88</number>
-              <auto_connect>False</auto_connect>
-              <monitor_connection>False</monitor_connection>
-              <keep_connection>False</keep_connection>
-            </port>
-          </ports>
-        </class>
-      </classes>
-    </connection>
+    <!-- The static <connection id="6001"> TCP network binding was removed in
+         C1 Phase 2 (2026060302). The vendored
+         drivers-common-public/module/websocket.lua now allocates its own
+         network binding dynamically (scanning 6100-6199 for a free id via
+         C4:GetBindingAddress and then calling C4:CreateNetworkConnection on
+         the IP + port from the Composer "IP Address" / "Port" properties).
+         Pre-2026060302 installs had this static binding and it is the
+         documented surface change of the Phase 2 cutover. -->
     <connection>
       <id>5001</id>
       <facing>6</facing>

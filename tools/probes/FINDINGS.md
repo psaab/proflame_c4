@@ -153,7 +153,7 @@ Ordered by **(value per line) / risk**.
 
 | # | Change | Estimated size | Risk |
 |---|---|---|---|
-| **C1** | Vendor Snap One's `drivers-common-public/module/websocket.lua` (T1). Probe disproves the two behavioral blockers (strict handshake, WS ping). Only remaining concern is the binding-model choice (`netBinding` override vs. dropping the static 6001 binding from driver.xml). | Net: −250 lines of hand-rolled WS code, +650 vendored | Moderate — substantial code swap; mitigate with the captured probe transcript as a replay test |
+| **C1** | Vendor Snap One's `drivers-common-public/module/websocket.lua` (T1). Probe disproves the two behavioral blockers (strict handshake, WS ping). Binding-model decision: **drop the static `<connection id="6001">` binding from `driver.xml` and let the vendored `websocket.lua` allocate dynamically via `C4:CreateNetworkConnection` (scanning 6100-6199)** — this is the vendored module's native idiom. **LANDED:** Phase 1 (vendor only, inert) shipped as driver `2026060301` (PR #67). Phase 2 (actual cutover) shipped as driver `2026060302`: deleted the 9 hand-rolled WS helpers + PROFLAMEPING infrastructure; removed `NETWORK_BINDING_ID` and the `<connection id="6001">` element; wired our top-level `OnConnectionStatusChanged` / `ReceivedFromNetwork` to delegate to `OCS[netBinding]` / `RFN[netBinding]`; added 4 callbacks (`OnWebSocketEstablished`/`Message`/`Offline`/`ClosedByRemote`). New `test/test_websocket_integration.lua` replays the captured probe transcript through the new path. | Net: −250 lines of hand-rolled WS code, +650 vendored | Moderate — substantial code swap; mitigated by the captured probe transcript as a replay test |
 
 ### Tier D — deferred
 
