@@ -8,8 +8,8 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026060107"
-DRIVER_DATE = "2026-06-01"
+DRIVER_VERSION = "2026060108"
+DRIVER_DATE = "2026-06-03"
 
 NETWORK_BINDING_ID = 6001
 THERMOSTAT_PROXY_ID = 5001
@@ -114,7 +114,7 @@ gSuppressTimerUpdates = false
 gExtrasThrottle = false
 
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260601-000007"
+BUILD_TIMESTAMP = "20260603-000001"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -834,21 +834,20 @@ function ExpectedWebSocketAccept(key)
     return Base64Encode(SHA1(key .. guid))
 end
 
-function IsStrictWebSocketHandshakeEnabled()
-    return Properties["Strict WebSocket Handshake"] == "On"
-end
-
-function AllowLenientHandshakeFallback(response, reason)
-    if IsStrictWebSocketHandshakeEnabled() then
-        return false
-    end
-    if response and response:find("101", 1, true) then
-        dbg_warn("Handshake strict validation failed (" .. tostring(reason) .. "); accepting legacy 101 response because Strict WebSocket Handshake is Off")
-        return true
-    end
-    return false
-end
-
+-- Validates the WebSocket upgrade response per RFC 6455 §4.2.2:
+-- status line "HTTP/1.1 101 Switching Protocols", `Upgrade: websocket`,
+-- `Connection: Upgrade` (case-insensitive, may include extra tokens), and
+-- `Sec-WebSocket-Accept` matching base64(SHA1(key + GUID)).
+--
+-- The earlier `Strict WebSocket Handshake = Off` lenient fallback (which
+-- accepted any response containing the literal "101") was removed after the
+-- 2026-06-02 device probe (tools/probes/evidence/) demonstrated that the
+-- Proflame firmware returns a fully RFC-compliant 101. See
+-- tools/probes/FINDINGS.md §1 for the captured handshake. If a future
+-- firmware revision returns a non-compliant upgrade response, the
+-- handshake will fail loudly here — fix the firmware-specific path then,
+-- with an explicit `OnReceiveHandshakeFromFirmware()` shim rather than a
+-- generic lenient fallback.
 function ValidateHandshakeResponse(response)
     if not response then
         dbg_err("Handshake failed: empty response")
@@ -857,31 +856,27 @@ function ValidateHandshakeResponse(response)
 
     local statusLine = response:match("^([^\r\n]+)")
     if not statusLine or not statusLine:match("^HTTP/%d+%.%d+%s+101%s") then
-        local reason = "invalid status line: " .. tostring(statusLine)
-        dbg_err("Handshake failed: " .. reason)
-        return AllowLenientHandshakeFallback(response, reason)
+        dbg_err("Handshake failed: invalid status line: " .. tostring(statusLine))
+        return false
     end
 
     local headers = ParseHttpHeaders(response)
     local upgrade = (headers["upgrade"] or ""):lower()
     local connection = (headers["connection"] or ""):lower()
     if upgrade ~= "websocket" then
-        local reason = "missing Upgrade websocket header"
-        dbg_err("Handshake failed: " .. reason)
-        return AllowLenientHandshakeFallback(response, reason)
+        dbg_err("Handshake failed: missing Upgrade websocket header")
+        return false
     end
     if not connection:find("upgrade", 1, true) then
-        local reason = "missing Connection upgrade header"
-        dbg_err("Handshake failed: " .. reason)
-        return AllowLenientHandshakeFallback(response, reason)
+        dbg_err("Handshake failed: missing Connection upgrade header")
+        return false
     end
 
     local expectedAccept = ExpectedWebSocketAccept(gWebSocketKey)
     local actualAccept = headers["sec-websocket-accept"]
     if not expectedAccept or actualAccept ~= expectedAccept then
-        local reason = "invalid Sec-WebSocket-Accept"
-        dbg_err("Handshake failed: " .. reason)
-        return AllowLenientHandshakeFallback(response, reason)
+        dbg_err("Handshake failed: invalid Sec-WebSocket-Accept")
+        return false
     end
 
     return true
@@ -1545,12 +1540,6 @@ function OnPropertyChanged(strProperty)
         dbg_info("Port changed, disconnecting and reconnecting...")
         Disconnect()
         C4:SetTimer(500, function() Connect() end, false)
-    elseif strProperty == "Strict WebSocket Handshake" then
-        dbg_info("Strict WebSocket Handshake changed, reconnecting to verify handshake mode...")
-        Disconnect()
-        if (Properties["IP Address"] or "") ~= "" then
-            C4:SetTimer(500, function() Connect() end, false)
-        end
     elseif strProperty == "Command Format (non-Turn-Off)" then
         dbg_info("Command Format (non-Turn-Off) set to: " .. tostring(Properties["Command Format (non-Turn-Off)"]))
     elseif strProperty == "Debug Mode" or strProperty == "Debug Level" then
