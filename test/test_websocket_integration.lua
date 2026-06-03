@@ -275,3 +275,158 @@ OCS[TEST_BINDING] = nil
 RFN[TEST_BINDING] = nil
 
 print("test_websocket_integration: binding-dispatch assertions passed")
+
+--------------------------------------------------------------------------------
+-- Test 3: Lifecycle paths flagged in Codex review of PR #68
+--
+-- Three BLOCKER-class bugs were fixed before merge:
+--   #1 OnWebSocketOffline left gWebSocket non-nil -> next Connect() bailed,
+--      so the driver got stuck Disconnected forever after a network drop.
+--   #2 Disconnect's :Close() leaves vendor's Sockets[url] cached for 3s, so
+--      a fast Disconnect+Connect (e.g. Port-property edit) reused the dying
+--      socket and the old close timer then NetDisconnected the new binding.
+--   #4 Vendor's setupC4Connection returns a ws object even when all bindings
+--      6100-6199 are busy (netBinding nil). Without the fix, UI sticks at
+--      "Connecting..." forever because :Start is a no-op without a binding.
+-- These assertions guard the fixes.
+--------------------------------------------------------------------------------
+
+-- Set up minimal stubs for the vendor APIs TeardownWebSocket touches so the
+-- test runs without a real network. We don't need to verify the vendor
+-- module's internal correctness here, only that our teardown calls into the
+-- right places.
+local netdisconnect_calls = {}
+local original_NetDisconnect = C4.NetDisconnect
+function C4:NetDisconnect(binding, port)
+    table.insert(netdisconnect_calls, { binding = binding, port = port })
+end
+
+local original_SetBindingAddress = C4.SetBindingAddress
+function C4:SetBindingAddress(binding, addr)
+    -- no-op; just don't crash
+end
+
+local cancelled_timers = {}
+local original_CancelTimer = CancelTimer
+CancelTimer = function(name) table.insert(cancelled_timers, name) end
+
+WebSocket = WebSocket or {}
+WebSocket.Sockets = WebSocket.Sockets or {}
+
+-- BLOCKER #1 fix: OnWebSocketOffline must clear gWebSocket so Connect()
+-- can allocate fresh on the next OnReconnectTimer fire. Stub the vendored
+-- WebSocket object enough for TeardownWebSocket to clean up.
+local OFFLINE_BINDING = 6101
+local OFFLINE_URL = "ws://192.0.2.99:88/"
+local offline_ws = {
+    netBinding = OFFLINE_BINDING,
+    port = 88,
+    url = OFFLINE_URL,
+    timerPrefix = "WS_test_offline_Timer_",
+    connected = true,
+    running = true,
+}
+WebSocket.Sockets[OFFLINE_URL] = offline_ws
+WebSocket.Sockets[OFFLINE_BINDING] = offline_ws
+gWebSocket = offline_ws
+
+-- Stub the higher-level reconnect to avoid driving real timers.
+local reconnect_scheduled = false
+local original_ScheduleReconnect = ScheduleReconnect
+ScheduleReconnect = function() reconnect_scheduled = true end
+
+-- HandleConnectionEvent dispatches into proxy notifications we don't care
+-- about for this test.
+local original_HandleConnectionEvent = HandleConnectionEvent
+HandleConnectionEvent = function() end
+
+netdisconnect_calls = {}
+cancelled_timers = {}
+OnWebSocketOffline(offline_ws)
+
+Test.assertEqual(gWebSocket, nil,
+    "BLOCKER #1: OnWebSocketOffline clears gWebSocket so reconnect can allocate fresh")
+Test.assertEqual(WebSocket.Sockets[OFFLINE_URL], nil,
+    "BLOCKER #2: vendor Sockets[url] cache busted on offline")
+Test.assertEqual(WebSocket.Sockets[OFFLINE_BINDING], nil,
+    "BLOCKER #2: vendor Sockets[binding] cache busted on offline")
+Test.assert(#netdisconnect_calls > 0,
+    "OnWebSocketOffline triggers C4:NetDisconnect on the old binding")
+Test.assertEqual(netdisconnect_calls[1].binding, OFFLINE_BINDING,
+    "NetDisconnect targets the right binding")
+Test.assert(reconnect_scheduled, "OnWebSocketOffline schedules a reconnect")
+local saw_closing_cancel = false
+for _, name in ipairs(cancelled_timers) do
+    if name == "WS_test_offline_Timer_Closing" then saw_closing_cancel = true end
+end
+Test.assert(saw_closing_cancel,
+    "BLOCKER #2: TeardownWebSocket cancels the 3s Closing timer so it can't kill a future reconnect")
+
+-- BLOCKER #2 fix proven by the cache+timer assertions above. Now also drive
+-- Disconnect explicitly to confirm the same synchronous teardown happens
+-- via the user-initiated path (and that the close frame IS sent there).
+local DISCONNECT_BINDING = 6102
+local DISCONNECT_URL = "ws://192.0.2.99:88/"  -- vendor caches by url
+local close_frame_sends = {}
+local disconnect_ws = {
+    netBinding = DISCONNECT_BINDING,
+    port = 88,
+    url = DISCONNECT_URL,
+    timerPrefix = "WS_test_disconnect_Timer_",
+    connected = true,
+    running = true,
+    sendToNetwork = function(self, pkt)
+        table.insert(close_frame_sends, pkt)
+    end,
+}
+WebSocket.Sockets[DISCONNECT_URL] = disconnect_ws
+WebSocket.Sockets[DISCONNECT_BINDING] = disconnect_ws
+gWebSocket = disconnect_ws
+gConnected = true
+gHandshakeComplete = true
+
+netdisconnect_calls = {}
+cancelled_timers = {}
+
+-- The driver Disconnect() calls several module-level helpers; stub them.
+local original_StopStatusRefreshTimer = StopStatusRefreshTimer
+local original_CancelPendingTimerCommandTimers = CancelPendingTimerCommandTimers
+local original_CancelTurnOffConfirmTimer = CancelTurnOffConfirmTimer
+local original_SetTimerSuppression = SetTimerSuppression
+local original_ClearTurnOffInProgress = ClearTurnOffInProgress
+StopStatusRefreshTimer = function() end
+CancelPendingTimerCommandTimers = function() end
+CancelTurnOffConfirmTimer = function() end
+SetTimerSuppression = function() end
+ClearTurnOffInProgress = function() end
+
+Disconnect()
+
+Test.assertEqual(gWebSocket, nil, "Disconnect clears gWebSocket")
+Test.assert(#close_frame_sends >= 1,
+    "Disconnect (sendCloseFrame=true) emits the WS close frame")
+-- RFC 6455 close frame = 0x88, 0x82, mask(0,0,0,0), payload(0x03,0xE8) = status 1000
+Test.assertEqual(close_frame_sends[1]:sub(1, 2), string.char(0x88, 0x82),
+    "Close frame opcode 0x88 and masked-len 0x82 are correct")
+Test.assertEqual(close_frame_sends[1]:byte(7), 0x03,
+    "Close frame status high byte is 0x03 (1000)")
+Test.assertEqual(close_frame_sends[1]:byte(8), 0xE8,
+    "Close frame status low byte is 0xE8 (1000)")
+Test.assertEqual(WebSocket.Sockets[DISCONNECT_URL], nil,
+    "BLOCKER #2: Disconnect busts vendor Sockets[url] cache synchronously")
+Test.assert(#netdisconnect_calls > 0,
+    "Disconnect triggers C4:NetDisconnect on the old binding")
+
+StopStatusRefreshTimer = original_StopStatusRefreshTimer
+CancelPendingTimerCommandTimers = original_CancelPendingTimerCommandTimers
+CancelTurnOffConfirmTimer = original_CancelTurnOffConfirmTimer
+SetTimerSuppression = original_SetTimerSuppression
+ClearTurnOffInProgress = original_ClearTurnOffInProgress
+
+C4.NetDisconnect = original_NetDisconnect
+C4.SetBindingAddress = original_SetBindingAddress
+CancelTimer = original_CancelTimer
+ScheduleReconnect = original_ScheduleReconnect
+HandleConnectionEvent = original_HandleConnectionEvent
+
+print("test_websocket_integration: lifecycle teardown assertions passed")

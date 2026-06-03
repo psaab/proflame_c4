@@ -115,6 +115,24 @@ KNOWN_IGNORED_STATUS_KEYS = {
 -- Force cleanup of any existing timers from previous driver instance.
 -- C1 Phase 2 dropped the hand-rolled PROFLAMEPING keepalive (gPingTimerId);
 -- the vendored WebSocket module owns the WS-level ping/pong now.
+--
+-- Legacy cleanup for OTA upgrade from pre-Phase-2 installs (Codex review of
+-- PR #68 BLOCKER #3): if the old gPingTimerId global is still set when this
+-- new code loads, it's a 5s repeating timer from the previous instance
+-- pointing at the now-deleted OnPingTimer — left uncancelled, it fires every
+-- 5s and produces a Lua runtime error. Cancel it explicitly. Similarly, the
+-- pre-Phase-2 driver opened a NetConnect on static binding 6001; explicitly
+-- NetDisconnect that so it doesn't linger and compete with the dynamically
+-- allocated binding the vendored WebSocket module is about to grab.
+if gPingTimerId then
+    pcall(function() gPingTimerId:Cancel() end)
+    gPingTimerId = nil
+end
+pcall(function()
+    local port = 88
+    if Properties and Properties["Port"] then port = tonumber(Properties["Port"]) or 88 end
+    C4:NetDisconnect(6001, port)
+end)
 if gReconnectTimerId then
     pcall(function() gReconnectTimerId:Cancel() end)
     gReconnectTimerId = nil
@@ -141,10 +159,12 @@ if gTimerSafetyCheckTimer then
 end
 
 -- Force disconnect if we were connected. The vendored WebSocket module
--- owns the network binding now, so we close through it (gWebSocket:Close()
--- handles the WS close frame + NetDisconnect on its dynamically-allocated
--- binding). If the gWebSocket reference is missing (e.g., a partial load
--- caught us between modules), there's nothing for us to close.
+-- owns the network binding now, so we close through it. We can't call our
+-- own TeardownWebSocket here because the function isn't defined yet at this
+-- point in the load (top-level cleanup runs before function definitions);
+-- the vendored :Close() schedules a 3s NetDisconnect via the vendored timer
+-- module. That's acceptable for reload cleanup because the next Connect()
+-- waits for OnDriverLateInit, which runs much later.
 if gConnected and gWebSocket then
     pcall(function() gWebSocket:Close() end)
 end
@@ -274,7 +294,6 @@ end
 gConnected = false
 gConnecting = false
 gHandshakeComplete = false
-gReceiveBuffer = ""
 gReconnectTimerId = nil
 gStatusRefreshTimerId = nil
 gTimerModeDelayTimer = nil
@@ -442,126 +461,6 @@ function HandleConnectionEvent(online)
     else
         FireDriverEvent(EVENT_CONNECTION_LOST, "Connection Lost")
     end
-end
-
--- =============================================================================
--- CRYPTO / ENCODING
--- =============================================================================
-
-local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-
-function Base64Encode(data)
-    if not data or #data == 0 then return "" end
-    return ((data:gsub('.', function(x)
-        local r, b = '', x:byte()
-        for i = 8, 1, -1 do
-            r = r .. (b % 2 ^ i - b % 2 ^ (i - 1) > 0 and '1' or '0')
-        end
-        return r
-    end) .. '0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
-        if (#x < 6) then return '' end
-        local c = 0
-        for i = 1, 6 do
-            c = c + (x:sub(i, i) == '1' and 2 ^ (6 - i) or 0)
-        end
-        return b64chars:sub(c + 1, c + 1)
-    end) .. ({ '', '==', '=' })[#data % 3 + 1])
-end
-
-local function bytes_to_w32(a, b, c, d)
-    return (a or 0) * 0x1000000 + (b or 0) * 0x10000 + (c or 0) * 0x100 + (d or 0)
-end
-
-local function w32_to_bytes(i)
-    return math.floor(i / 0x1000000) % 0x100,
-           math.floor(i / 0x10000) % 0x100,
-           math.floor(i / 0x100) % 0x100,
-           i % 0x100
-end
-
-local function w32_rot(bits, a)
-    local b2 = 2 ^ (32 - bits)
-    local a1, b1 = math.modf(a / b2)
-    return a1 + b1 * b2 * (2 ^ bits)
-end
-
-local function w32_xor_n(...)
-    local args = {...}
-    local result = 0
-    for i = 1, #args do
-        result = bit.bxor(result, args[i] or 0)
-    end
-    return result
-end
-
-local function w32_or(a, b)
-    return bit.bor(a or 0, b or 0)
-end
-
-local function w32_and(a, b)
-    return bit.band(a or 0, b or 0)
-end
-
-local function w32_not(a)
-    return 4294967295 - (a or 0)
-end
-
-function SHA1(msg)
-    if not msg then return "" end
-    local H0, H1, H2, H3, H4 = 0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0
-    local msg_len_in_bits = #msg * 8
-    msg = msg .. string.char(0x80)
-    local extra = 64 - ((#msg + 8) % 64)
-    if extra == 64 then extra = 0 end
-    msg = msg .. string.rep(string.char(0), extra)
-    msg = msg .. string.char(0, 0, 0, 0)
-    for i = 1, 4 do
-        msg = msg .. string.char(math.floor(msg_len_in_bits / (256 ^ (4 - i))) % 256)
-    end
-    for chunk_start = 1, #msg, 64 do
-        local W = {}
-        for i = 0, 15 do
-            local offset = chunk_start + i * 4
-            W[i] = bytes_to_w32(msg:byte(offset, offset + 3))
-        end
-        for i = 16, 79 do
-            W[i] = w32_rot(1, w32_xor_n(W[i-3] or 0, W[i-8] or 0, W[i-14] or 0, W[i-16] or 0))
-        end
-        local A, B, C, D, E = H0, H1, H2, H3, H4
-        for i = 0, 79 do
-            local f, k
-            if i <= 19 then
-                f = w32_or(w32_and(B, C), w32_and(w32_not(B), D))
-                k = 0x5A827999
-            elseif i <= 39 then
-                f = w32_xor_n(B, C, D)
-                k = 0x6ED9EBA1
-            elseif i <= 59 then
-                f = w32_or(w32_or(w32_and(B, C), w32_and(B, D)), w32_and(C, D))
-                k = 0x8F1BBCDC
-            else
-                f = w32_xor_n(B, C, D)
-                k = 0xCA62C1D6
-            end
-            local temp = (w32_rot(5, A) + f + E + k + (W[i] or 0)) % 4294967296
-            E = D
-            D = C
-            C = w32_rot(30, B)
-            B = A
-            A = temp
-        end
-        H0 = (H0 + A) % 4294967296
-        H1 = (H1 + B) % 4294967296
-        H2 = (H2 + C) % 4294967296
-        H3 = (H3 + D) % 4294967296
-        H4 = (H4 + E) % 4294967296
-    end
-    local result = ""
-    for _, h in ipairs({H0, H1, H2, H3, H4}) do
-        local a, b, c, d = w32_to_bytes(h)
-        result = result .. string.char(a, b, c, d)
-    end
-    return result
 end
 
 -- =============================================================================
@@ -799,14 +698,6 @@ function GetDefaultTimerMinutes()
     return ClampNumber(Properties["Default Timer (minutes)"], 0, 480, DEFAULT_TIMER_MINUTES)
 end
 
-function GenerateRandomBytes(count)
-    local bytes = ""
-    for i = 1, count do
-        bytes = bytes .. string.char(math.random(0, 255))
-    end
-    return bytes
-end
-
 -- =============================================================================
 -- EXTRAS (FLAME CONTROL IN THERMOSTAT UI)
 -- =============================================================================
@@ -1029,12 +920,26 @@ function Connect()
     local port = tonumber(Properties["Port"]) or 88
     gConnecting = true
     gHandshakeComplete = false
-    gReceiveBuffer = ""
     C4:UpdateProperty("Connection Status", "Connecting...")
     local url = string.format("ws://%s:%d/", ipAddress, port)
     local ws, err = WebSocket:new(url)
     if not ws then
         dbg_err("WebSocket:new() failed: " .. tostring(err))
+        gConnecting = false
+        C4:UpdateProperty("Connection Status", "Disconnected")
+        ScheduleReconnect()
+        return
+    end
+    -- Vendor's setupC4Connection scans bindings 6100-6199 for a free slot;
+    -- if all are occupied it leaves netBinding nil but still returns the
+    -- ws object (Codex review of #68 DESIGN #4). Without netBinding, :Start
+    -- silently no-ops and no callback ever fires — UI would stick at
+    -- "Connecting..." forever. Catch it here and reschedule.
+    if not ws.netBinding then
+        dbg_err("WebSocket:new() returned with no allocated binding (6100-6199 all busy?)")
+        if WebSocket and WebSocket.Sockets then
+            WebSocket.Sockets[url] = nil
+        end
         gConnecting = false
         C4:UpdateProperty("Connection Status", "Disconnected")
         ScheduleReconnect()
@@ -1048,6 +953,58 @@ function Connect()
     ws:Start()
 end
 
+-- Synchronous WebSocket teardown shared by Disconnect (user-initiated) and
+-- OnWebSocketOffline (vendor-callback initiated). The vendored :Close()
+-- schedules a 3-second NetDisconnect+cleanup timer (vendor/.../websocket.lua
+-- wsObject:Close). That delay is the root of Codex BLOCKER #2: a fast
+-- Disconnect+Connect cycle (e.g. Port-property edit calls Disconnect then
+-- Connect 500ms later) leaves Sockets[url] cached so WebSocket:new(url)
+-- returns the dying object, and 2.5s later the old close timer fires
+-- NetDisconnect on the now-active binding, killing the new connection.
+--
+-- Fix: do the teardown synchronously here. Send the close frame if the
+-- socket is still connected, cancel the vendored ping/pong/closing timers,
+-- NetDisconnect the binding immediately, clear OCS/RFN dispatch entries,
+-- and bust both the URL and binding caches in WebSocket.Sockets so the
+-- next WebSocket:new(url) allocates a fresh object on a fresh binding.
+function TeardownWebSocket(sendCloseFrame)
+    if not gWebSocket then return end
+    local ws = gWebSocket
+    gWebSocket = nil
+    pcall(function()
+        local netBinding = ws.netBinding
+        local port = ws.port
+        local url = ws.url
+        local timerPrefix = ws.timerPrefix
+        if sendCloseFrame and ws.connected then
+            -- RFC 6455 close frame, status 1000 (normal). Same bytes the
+            -- vendor :Close() sends; we send it here so the device still
+            -- sees a graceful close before NetDisconnect tears the socket.
+            local closePkt = string.char(0x88, 0x82, 0x00, 0x00, 0x00, 0x00, 0x03, 0xE8)
+            pcall(function() ws:sendToNetwork(closePkt) end)
+        end
+        ws.running = false
+        ws.connected = false
+        if type(CancelTimer) == "function" then
+            pcall(function() CancelTimer(timerPrefix .. 'Ping') end)
+            pcall(function() CancelTimer(timerPrefix .. 'PongResponse') end)
+            pcall(function() CancelTimer(timerPrefix .. 'Closing') end)
+        end
+        if netBinding then
+            pcall(function() C4:NetDisconnect(netBinding, port) end)
+            if OCS then OCS[netBinding] = nil end
+            if RFN then RFN[netBinding] = nil end
+            if WebSocket and WebSocket.Sockets then
+                WebSocket.Sockets[netBinding] = nil
+            end
+            pcall(function() C4:SetBindingAddress(netBinding, '') end)
+        end
+        if WebSocket and WebSocket.Sockets and url then
+            WebSocket.Sockets[url] = nil
+        end
+    end)
+end
+
 function Disconnect()
     StopStatusRefreshTimer()
     CancelPendingTimerCommandTimers()
@@ -1056,19 +1013,11 @@ function Disconnect()
         SetTimerSuppression(false, "disconnect")
     end
     ClearTurnOffInProgress("disconnect")
-    if gWebSocket then
-        -- :Close() schedules a NetDisconnect on its own 3s timer (so the
-        -- close frame has time to land). We clear our cached handle right
-        -- away so any racing Connect() call allocates a fresh one rather
-        -- than reusing the closing socket.
-        pcall(function() gWebSocket:Close() end)
-        gWebSocket = nil
-    end
+    TeardownWebSocket(true)  -- send close frame on the way out
     gConnected = false
     gConnecting = false
     gHandshakeComplete = false
     gStatusSeen = {}
-    gReceiveBuffer = ""
     HandleConnectionEvent(false)
     C4:UpdateProperty("Connection Status", "Disconnected")
 end
@@ -1849,13 +1798,16 @@ function OnWebSocketMessage(ws, data)
     HandleProflameMessage(data)
 end
 
--- :Offline fires on either our local close (gWebSocket:Close in Disconnect)
--- or a network-layer drop (OFFLINE transition from C4). Clear our flags and
--- schedule a reconnect attempt. We deliberately do NOT call Disconnect()
--- here — the WebSocket object has already initiated its own close path,
--- and re-entering Disconnect would either double-close or stack a second
--- reconnect schedule.
+-- :Offline fires on either our local close (gWebSocket:Close) or a network-
+-- layer drop. Tear down the WebSocket handle and the vendor's URL/binding
+-- caches synchronously (per Codex review of #68 BLOCKER #1: without this,
+-- gWebSocket stays non-nil and the next OnReconnectTimer's Connect()
+-- short-circuits — the driver gets stuck Disconnected until manual action).
+-- Don't send a close frame on the way out: TCP is already gone (vendor
+-- module cleared ws.connected before firing this callback), so writing to
+-- the dead socket would just print noise.
 function OnWebSocketOffline(ws)
+    TeardownWebSocket(false)
     gConnected = false
     gConnecting = false
     gHandshakeComplete = false
@@ -2614,7 +2566,6 @@ function ResetDriverState()
     gConnected = false
     gConnecting = false
     gHandshakeComplete = false
-    gReceiveBuffer = ""
     gExtrasThrottle = false
     SetTimerSuppression(false, "driver state reset")
     gTimerExpired = false
