@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026060202"
+DRIVER_VERSION = "2026060203"
 DRIVER_DATE = "2026-06-03"
 
 NETWORK_BINDING_ID = 6001
@@ -91,8 +91,11 @@ KNOWN_IGNORED_STATUS_KEYS = {
     -- Device identity (4)
     dongle_name = true, dongle_type = true, scenario_name = true, label_aux = true,
     -- Other firmware-emitted fields with no current driver use (16; B2 may promote
-    -- child_lock / pilot_mode / remote_control / auxiliary_out / split_flow /
-    -- temperature_unit to read-only properties)
+    -- child_lock / pilot_mode / remote_control / auxiliary_out / split_flow to
+    -- read-only properties). `temperature_unit` stays in KNOWN_IGNORED but has
+    -- an A3 carve-out (see ProcessStatusUpdate) that captures the device's
+    -- F-vs-C preference into gTemperatureUnit and updates the "Temperature
+    -- Unit" Composer property — same shape as the fw_* B1 carve-out.
     auxiliary_out = true, child_lock = true, color_period = true, data_to_server = true,
     idx_room = true, index_aux = true, index_weekly = true, loads_conf = true,
     not_keep_ls = true, num_cascade = true, pilot_mode = true, remote_control = true,
@@ -179,8 +182,18 @@ gFirmwareVersions = {
     fw_rc = "",
 }
 
+-- Device-reported temperature unit preference ("F" or "C"). Populated by
+-- ProcessStatusUpdate's temperature_unit A3 carve-out (wire values "1"->F,
+-- "0"->C; anything else defaults to F to preserve historical behavior).
+-- Drives the display suffix in UpdateRoomTemperatureProperty(),
+-- UpdatePropertiesForStatus()'s temperature_set branch, and
+-- InitializePropertiesFromState() via TemperatureSuffix(). The wire
+-- encoding (Fx10 integer) is NOT changed — only the trailing F/C glyph
+-- that operators see in the Composer property pane.
+gTemperatureUnit = "F"
+
 -- Build timestamp for cache busting - this changes every build
-BUILD_TIMESTAMP = "20260603-000003"
+BUILD_TIMESTAMP = "20260603-000004"
 
 -- Try to update version property immediately on load
 pcall(function()
@@ -304,6 +317,7 @@ gFirmwareVersions = {
     fw_ifc_s = "",
     fw_rc = "",
 }
+gTemperatureUnit = "F"
 
 -- =============================================================================
 -- LOGGING
@@ -1190,7 +1204,7 @@ end
 function UpdateRoomTemperatureProperty()
     local tempEncoded = gState.room_temperature or "700"
     local tempF = DecodeTemperature(tempEncoded)
-    C4:UpdateProperty("Room Temperature", tostring(tempF) .. "F")
+    C4:UpdateProperty("Room Temperature", tostring(tempF) .. TemperatureSuffix())
 end
 
 function UpdateRoomTemperatureProxy()
@@ -1430,7 +1444,7 @@ function UpdatePropertiesForStatus(change)
     elseif status == "lamp_control" then
         C4:UpdateProperty("Light Level", tostring(value))
     elseif status == "temperature_set" then
-        C4:UpdateProperty("Temperature Setpoint", DecodeTemperature(value) .. "F")
+        C4:UpdateProperty("Temperature Setpoint", DecodeTemperature(value) .. TemperatureSuffix())
     elseif status == "room_temperature" then
         UpdateRoomTemperatureProperty()
     elseif status == "thermo_control" then
@@ -1502,6 +1516,87 @@ function ScheduleExtrasRefresh(reason, timerOnly)
     end
 end
 
+-- Defense-in-depth scrub for device-controlled strings before they reach a log
+-- line or a Composer STRING property. Replaces ALL Lua control characters
+-- (`%c`: \0-\31 plus \127) with a single space so a buggy/hostile device can't
+-- inject newline + forged "[ERROR]: ..." prefixes into our logs, and so
+-- Composer's property pane / CSV export doesn't render literal control bytes.
+-- Optional max_len truncates oversize values with an ellipsis. Returns "" for
+-- nil input. Used by CaptureFirmwareVersion (B1), CaptureTemperatureUnit (A3),
+-- and the unknown-status-key WARN branch in ProcessStatusUpdate. Addresses
+-- GitHub issue #58.
+function SanitizeDeviceString(s, max_len)
+    if s == nil then return "" end
+    local result = tostring(s):gsub("%c", " ")
+    if max_len and #result > max_len then
+        result = result:sub(1, max_len) .. "..."
+    end
+    return result
+end
+
+-- Display suffix ("F" or "C") used everywhere the driver writes a
+-- human-readable temperature string into a Composer STRING property. Derived
+-- from gTemperatureUnit which itself is captured from the device's
+-- `temperature_unit` status key by CaptureTemperatureUnit. Defaults to "F" if
+-- the device hasn't reported a unit yet — matches the historical hard-coded
+-- behavior so existing operators see no change.
+function TemperatureSuffix()
+    if gTemperatureUnit == "C" then return "C" end
+    return "F"
+end
+
+-- Composer-friendly display string for the "Temperature Unit" property.
+-- Returns "Fahrenheit" or "Celsius" instead of the raw "1"/"0" the device
+-- sends. Defaults to "Fahrenheit" for symmetry with TemperatureSuffix().
+function TemperatureUnitDisplay()
+    if gTemperatureUnit == "C" then return "Celsius" end
+    return "Fahrenheit"
+end
+
+-- Captures the device's `temperature_unit` status into gTemperatureUnit and
+-- re-emits the "Temperature Unit" Composer property + the suffix on the two
+-- live temperature properties (Temperature Setpoint, Room Temperature) so a
+-- mid-session unit change reflects immediately without waiting for the next
+-- room_temperature / temperature_set frame.
+--
+-- Wire mapping (confirmed against firmware FW: 625.04.673 via direct probe):
+--   "1" -> Fahrenheit
+--   "0" -> Celsius
+--   anything else -> Fahrenheit (defensive default, preserves driver history)
+--
+-- Idempotent: no-op if the unit hasn't changed, so the initial-dump duplicates
+-- don't spam Composer or re-fire suffix flips.
+function CaptureTemperatureUnit(value)
+    local raw = SanitizeDeviceString(value, 16)
+    local newUnit
+    if raw == "0" then
+        newUnit = "C"
+    elseif raw == "1" then
+        newUnit = "F"
+    else
+        newUnit = "F"
+    end
+    if gTemperatureUnit == newUnit then return end
+    gTemperatureUnit = newUnit
+    local display = TemperatureUnitDisplay()
+    local suffix = TemperatureSuffix()
+    pcall(C4.UpdateProperty, C4, "Temperature Unit", display)
+    -- Re-stamp the live temperature properties so the suffix flips
+    -- immediately, not on the next device frame. DecodeTemperature is
+    -- unchanged — wire format stays Fx10 integer tenths — only the
+    -- trailing glyph operators see changes.
+    if gState and gState.temperature_set then
+        pcall(C4.UpdateProperty, C4, "Temperature Setpoint",
+            DecodeTemperature(gState.temperature_set) .. suffix)
+    end
+    if gState and gState.room_temperature then
+        pcall(C4.UpdateProperty, C4, "Room Temperature",
+            DecodeTemperature(gState.room_temperature) .. suffix)
+    end
+    dbg_info("Temperature unit = " .. display
+        .. " (wire value: " .. raw .. ", suffix: " .. suffix .. ")")
+end
+
 -- Composes the 5 fw_* sub-fields into a single human-readable string for the
 -- "Firmware Versions" Composer property. Empty sub-fields are omitted so the
 -- display starts populated as the device pushes each one. Presentation order
@@ -1529,9 +1624,11 @@ end
 -- Captures a single firmware sub-field into gFirmwareVersions and re-emits
 -- the composed property. No-op if the value is unchanged (avoids redundant
 -- C4:UpdateProperty calls during the device's initial dump where the same
--- value may appear multiple times across frames).
+-- value may appear multiple times across frames). Sanitizes device-supplied
+-- strings before logging or writing to a Composer property — see
+-- SanitizeDeviceString and GitHub issue #58.
 function CaptureFirmwareVersion(key, value)
-    local strValue = tostring(value or "")
+    local strValue = SanitizeDeviceString(value, 128)
     if gFirmwareVersions[key] == strValue then return end
     gFirmwareVersions[key] = strValue
     local formatted = FormatFirmwareVersions()
@@ -1556,6 +1653,12 @@ function ProcessStatusUpdate(status, value)
         -- which only know about gState fields.
         if gFirmwareVersions[status] ~= nil then
             CaptureFirmwareVersion(status, value)
+        elseif status == "temperature_unit" then
+            -- A3 carve-out (same shape as the fw_* one): the device tells us
+            -- whether it's displaying Fahrenheit or Celsius. We don't route
+            -- temperature_unit through gState because it doesn't fit the
+            -- "wire-value-string" model — it's a presentation-only signal.
+            CaptureTemperatureUnit(value)
         end
         return
     end
@@ -1563,8 +1666,11 @@ function ProcessStatusUpdate(status, value)
         -- Firmware sent a key the driver doesn't know about. Surface at WARN
         -- so new firmware revisions are noticed and the allowlist can be
         -- updated explicitly (rather than this becoming silent drift).
+        -- Sanitize the key + value so a hostile/buggy device can't inject
+        -- control bytes (newlines, forged level prefixes) into the log — see
+        -- SanitizeDeviceString and GitHub issue #58.
         dbg_warn("Unknown status key from firmware (not handled, not allowlisted): "
-            .. tostring(status) .. "=" .. tostring(value))
+            .. SanitizeDeviceString(status, 64) .. "=" .. SanitizeDeviceString(value, 128))
         return
     end
 
@@ -2542,6 +2648,7 @@ function ResetDriverState()
         fw_ifc_s = "",
         fw_rc = "",
     }
+    gTemperatureUnit = "F"
 
     dbg_info("Driver state reset")
 end
@@ -2676,12 +2783,21 @@ function OnDriverLateInit()
 end
 
 function InitializePropertiesFromState()
+    -- A3: read the suffix once from the (possibly-just-reset) gTemperatureUnit
+    -- so a fresh init shows the default ("F") rather than carrying the prior
+    -- session's unit forward. The "Temperature Unit" and "Firmware Versions"
+    -- resets here address Codex finding #57 (stale read-only properties after
+    -- ResetDriverState clears the accumulators but the displayed strings stay
+    -- whatever Composer last latched).
+    local suffix = TemperatureSuffix()
     C4:UpdateProperty("Operating Mode", GetModeString(gState.main_mode))
     C4:UpdateProperty("Flame Level", gState.flame_control)
     C4:UpdateProperty("Fan Level", gState.fan_control)
     C4:UpdateProperty("Light Level", gState.lamp_control)
-    C4:UpdateProperty("Temperature Setpoint", DecodeTemperature(gState.temperature_set) .. "F")
-    C4:UpdateProperty("Room Temperature", DecodeTemperature(gState.room_temperature) .. "F")
+    C4:UpdateProperty("Temperature Setpoint", DecodeTemperature(gState.temperature_set) .. suffix)
+    C4:UpdateProperty("Room Temperature", DecodeTemperature(gState.room_temperature) .. suffix)
+    C4:UpdateProperty("Temperature Unit", TemperatureUnitDisplay())
+    C4:UpdateProperty("Firmware Versions", FormatFirmwareVersions())
     C4:UpdateProperty("Thermostat Enabled", gState.thermo_control == "1" and "Yes" or "No")
     C4:UpdateProperty("Pilot Status", gState.pilot_control == "1" and "On" or "Off")
     C4:UpdateProperty("Aux Output", gState.aux_control == "1" and "On" or "Off")
