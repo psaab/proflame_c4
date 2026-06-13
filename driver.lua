@@ -12,8 +12,8 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026060302"
-DRIVER_DATE = "2026-06-03"
+DRIVER_VERSION = "2026061301"
+DRIVER_DATE = "2026-06-13"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
 -- drivers-common-public/module/websocket.lua (it scans 6100-6199 for the first
@@ -140,6 +140,10 @@ end)
 if gReconnectTimerId then
     pcall(function() gReconnectTimerId:Cancel() end)
     gReconnectTimerId = nil
+end
+if gConnectTimeoutTimerId then
+    pcall(function() gConnectTimeoutTimerId:Cancel() end)
+    gConnectTimeoutTimerId = nil
 end
 if gStatusRefreshTimerId then
     pcall(function() gStatusRefreshTimerId:Cancel() end)
@@ -337,6 +341,7 @@ gConnected = false
 gConnecting = false
 gHandshakeComplete = false
 gReconnectTimerId = nil
+gConnectTimeoutTimerId = nil
 gStatusRefreshTimerId = nil
 gTimerModeDelayTimer = nil
 gTimerStartDelayTimer = nil
@@ -8141,6 +8146,54 @@ function StopReconnectTimer()
     end
 end
 
+-- Connect-attempt watchdog (issue #71). Between ws:Start() and the first
+-- callback there is NO liveness timer: the vendored module only arms its
+-- ping/pong watchdog after the binding goes ONLINE (websocket.lua
+-- ConnectionChanged), and our reconnect timer is one-shot and refuses to
+-- fire while gConnecting is true. So if C4:NetConnect against an unreachable
+-- device never produces an OFFLINE ConnectionChanged, gConnecting stays true
+-- forever, OnWebSocketOffline never runs, nothing reschedules, and the UI
+-- sticks at "Connecting..." indefinitely. This timer guarantees forward
+-- progress: if neither Established nor Offline has cleared gConnecting by the
+-- timeout, force a teardown and reschedule. Armed in Connect(), cancelled in
+-- OnWebSocketEstablished / OnWebSocketOffline / Disconnect.
+function StartConnectTimeoutTimer()
+    StopConnectTimeoutTimer()
+    local seconds = tonumber(Properties["Connect Timeout (seconds)"]) or 30
+    -- The Composer property is RANGED_INTEGER min 5, so the watchdog can't be
+    -- disabled from the UI (Codex review of #72: a 0-disable would reopen the
+    -- exact stuck-in-Connecting bug this fixes). This guard is purely
+    -- defensive against a nil/garbage Properties value that slipped past the
+    -- `or 30` fallback (e.g. a negative literal) — never schedule a 0ms timer.
+    if seconds <= 0 then
+        return
+    end
+    gConnectTimeoutTimerId = C4:SetTimer(seconds * 1000, function(timer) OnConnectTimeout() end, false)
+end
+
+function StopConnectTimeoutTimer()
+    if gConnectTimeoutTimerId then
+        gConnectTimeoutTimerId:Cancel()
+        gConnectTimeoutTimerId = nil
+    end
+end
+
+function OnConnectTimeout()
+    gConnectTimeoutTimerId = nil
+    -- Only act if we're still mid-connect. A successful Established or a clean
+    -- Offline would have cancelled this timer; if it fired anyway and we're
+    -- already connected/idle, do nothing.
+    if gConnected or not gConnecting then
+        return
+    end
+    dbg_warn("Connect attempt timed out; tearing down and rescheduling")
+    TeardownWebSocket(false)
+    gConnecting = false
+    gHandshakeComplete = false
+    C4:UpdateProperty("Connection Status", "Disconnected")
+    ScheduleReconnect()
+end
+
 -- =============================================================================
 -- WEBSOCKET
 -- =============================================================================
@@ -8207,6 +8260,11 @@ function Connect()
     ws:SetProcessMessageFunction(OnWebSocketMessage)
     ws:SetOfflineFunction(OnWebSocketOffline)
     ws:SetClosedByRemoteFunction(OnWebSocketClosedByRemote)
+    -- Arm the connect-attempt watchdog (issue #71) before Start() so the whole
+    -- connecting window is covered. Cancelled by OnWebSocketEstablished (success)
+    -- or OnWebSocketOffline (clean failure); fires only if neither callback
+    -- arrives in time.
+    StartConnectTimeoutTimer()
     ws:Start()
 end
 
@@ -8264,6 +8322,7 @@ end
 
 function Disconnect()
     StopStatusRefreshTimer()
+    StopConnectTimeoutTimer()
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()
     if gSuppressTimerUpdates then
@@ -9037,6 +9096,7 @@ end
 -- parseHTTPPacket). At that point we own the app-protocol layer: send
 -- PROFLAMECONNECTION, refresh proxies, start the status-refresh timer.
 function OnWebSocketEstablished(ws)
+    StopConnectTimeoutTimer()
     gConnected = true
     gConnecting = false
     gHandshakeComplete = true
@@ -9064,6 +9124,7 @@ end
 -- module cleared ws.connected before firing this callback), so writing to
 -- the dead socket would just print noise.
 function OnWebSocketOffline(ws)
+    StopConnectTimeoutTimer()
     TeardownWebSocket(false)
     gConnected = false
     gConnecting = false
@@ -9836,6 +9897,7 @@ function ResetDriverState()
     -- the vendored WebSocket module and gets cleaned up by gWebSocket:Close()
     -- (called from Disconnect), so it's not in this list.
     StopReconnectTimer()
+    StopConnectTimeoutTimer()
     StopStatusRefreshTimer()
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()
