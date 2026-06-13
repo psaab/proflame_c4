@@ -78,7 +78,7 @@
       <property>
         <name>Connect Timeout (seconds)</name>
         <type>RANGED_INTEGER</type>
-        <minimum>0</minimum>
+        <minimum>5</minimum>
         <maximum>120</maximum>
         <default>30</default>
         <readonly>false</readonly>

@@ -8160,6 +8160,11 @@ end
 function StartConnectTimeoutTimer()
     StopConnectTimeoutTimer()
     local seconds = tonumber(Properties["Connect Timeout (seconds)"]) or 30
+    -- The Composer property is RANGED_INTEGER min 5, so the watchdog can't be
+    -- disabled from the UI (Codex review of #72: a 0-disable would reopen the
+    -- exact stuck-in-Connecting bug this fixes). This guard is purely
+    -- defensive against a nil/garbage Properties value that slipped past the
+    -- `or 30` fallback (e.g. a negative literal) — never schedule a 0ms timer.
     if seconds <= 0 then
         return
     end

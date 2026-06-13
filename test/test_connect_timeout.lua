@@ -74,7 +74,11 @@ Test.assert(watchdog ~= nil, "watchdog scheduled at 30s, one-shot")
 Test.assertEqual(gConnectTimeoutTimerId, watchdog, "gConnectTimeoutTimerId points at the watchdog handle")
 
 --------------------------------------------------------------------------------
--- 2. Connect Timeout = 0 disables the watchdog (no timer armed).
+-- 2. Defensive guard: a non-positive timeout arms no timer rather than
+--    scheduling a pathological 0ms one-shot. This value is NOT reachable from
+--    the UI (the property is RANGED_INTEGER min 5 per Codex review of #72 —
+--    the watchdog must not be disablable), but the code guards against a
+--    nil/garbage Properties value slipping past the `or 30` fallback.
 --------------------------------------------------------------------------------
 _timers = {}
 gWebSocket = nil
