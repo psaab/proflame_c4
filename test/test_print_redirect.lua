@@ -89,6 +89,32 @@ ApplyDebugLogSettings()
 local okNoRecurse = pcall(function() print("recursion", "guard", "check") end)
 Test.assert(okNoRecurse, "print under Print-and-Log mode does not recurse/overflow")
 
+--------------------------------------------------------------------------------
+-- 6. An ORDINARY driver log call must produce exactly ONE log entry — not a
+--    doubled/re-routed one. Regression guard for the Codex MODERATE finding on
+--    PR #77: the re-entrancy flag must be set by the dbg_* chokepoint (not only
+--    inside the print shadow), so that under "Print and Log" mode the logger's
+--    own console-mirror print() passes straight through instead of being
+--    re-routed back into dbg_debug. With the original (shadow-only) guard, a
+--    single dbg_info() produced two captured entries: the real "[info]" line
+--    plus a spurious re-routed "[debug] [info]" line.
+--------------------------------------------------------------------------------
+Properties["Debug Mode"] = "On"
+Properties["Debug Level"] = "Debug"  -- both info and debug pass, so a re-route would be visible
+ApplyDebugLogSettings()
+
+Test.clearLogCapture()
+dbg_info("ORDINARY_LOG_MARKER_64")
+local ordinaryLog = Test.getDebugLog()
+local markerCount = 0
+for _, line in ipairs(ordinaryLog) do
+    if line:find("ORDINARY_LOG_MARKER_64", 1, true) then
+        markerCount = markerCount + 1
+    end
+end
+Test.assertEqual(markerCount, 1,
+    "ordinary dbg_info() logs exactly once (no logger-mirror re-route through dbg_debug)")
+
 -- Use the captured builtin so this status line is not itself swallowed by the
 -- shadow under the test's gating.
 _builtin_print("test_print_redirect: all assertions passed")
