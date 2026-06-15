@@ -12,7 +12,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061501"
+DRIVER_VERSION = "2026061504"
 DRIVER_DATE = "2026-06-15"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
@@ -8529,9 +8529,12 @@ function BuildThermostatDynamicCapabilities()
         CAN_PRESET = "False",
         CAN_PRESET_SCHEDULE = "False",
         HOLD_MODES = FLAME_HOLD_MODES,
-        FAN_MODES = "Off,Low,Medium,High",
-        HVAC_MODES = "Off,Heat",
-        HVAC_STATES = "Off,Heat"
+        FAN_MODES = "Off,Low,Medium,High"
+        -- HVAC_MODES / HVAC_STATES intentionally omitted (issue #64): they are
+        -- constant for this heat-only device, already declared statically in
+        -- driver.xml (<hvac_modes>/<hvac_states>), and the allowed-mode subset is
+        -- emitted separately via ALLOWED_HVAC_MODES_CHANGED in
+        -- SendThermostatAllowedModes. They are not part of DYNAMIC_CAPABILITIES_CHANGED.
     }
 end
 
@@ -8615,12 +8618,12 @@ function ParseStatusMessage(data)
     if not data then return end
     if data == "PROFLAMEPONG" then
         -- PROFLAMEPING is gone (C1 Phase 2 dropped the app-level keepalive),
-        -- but the device occasionally still emits PROFLAMEPONG echoes from
-        -- a fresh probe / Composer button / previous-driver-state cleanup.
-        -- Surface the timestamp so the existing "Last Ping Response"
-        -- Composer field stays useful for diagnostics; we just no longer
-        -- generate the requests ourselves.
-        C4:UpdateProperty("Last Ping Response", os.date("%Y-%m-%d %H:%M:%S"))
+        -- so we never solicit a PROFLAMEPONG. The device also does not emit it
+        -- spontaneously (the 2026-06-02 probe saw 0 frames in a 10s silent
+        -- window), which made the old "Last Ping Response" property dead UI —
+        -- it was removed in #70. We still swallow any stray PROFLAMEPONG echo
+        -- here so it is not logged as an unknown frame.
+        dbg_debug("PROFLAMEPONG echo received")
         return
     end
     if data == "PROFLAMECONNECTIONOPEN" then

@@ -430,3 +430,25 @@ ScheduleReconnect = original_ScheduleReconnect
 HandleConnectionEvent = original_HandleConnectionEvent
 
 print("test_websocket_integration: lifecycle teardown assertions passed")
+
+--------------------------------------------------------------------------------
+-- Test 4: PROFLAMEPONG echo is swallowed, not dead-property UI (#70)
+--
+-- C1 Phase 2 dropped the hand-rolled PROFLAMEPING keepalive, so nothing
+-- solicits a PROFLAMEPONG, and the 2026-06-02 probe showed the device does
+-- not emit it spontaneously. The old "Last Ping Response" Composer property
+-- therefore never updated and was removed in #70. ParseStatusMessage must
+-- still gracefully swallow a stray PROFLAMEPONG (so it isn't logged as an
+-- unknown frame) WITHOUT touching any "Last Ping Response" property.
+--------------------------------------------------------------------------------
+
+Test.clearPropertyUpdates()
+-- Should not error.
+ParseStatusMessage("PROFLAMEPONG")
+local pong_updates = Test.getPropertyUpdates()
+Test.assertEqual(pong_updates["Last Ping Response"], nil,
+    "PROFLAMEPONG does NOT update the removed 'Last Ping Response' property")
+Test.assertEqual(next(pong_updates), nil,
+    "PROFLAMEPONG updates no Composer property at all")
+
+print("test_websocket_integration: PROFLAMEPONG-swallow assertions passed")
