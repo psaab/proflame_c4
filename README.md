@@ -5,6 +5,24 @@ Version 1.0 - December 17, 2025
 
 ---
 
+## Driver Updates
+
+This driver is **distributed via GitHub releases** (`psaab/proflame_c4`), not through Control4's online driver database. As a result, Control4's built-in **"Check For Driver Updates" / Update Manager menu will not find updates for it** — that menu only queries Control4's database. `driver.xml` sets `<auto_update>false</auto_update>` to avoid implying otherwise.
+
+Updates are handled by the driver's own GitHub updater, exposed as Composer **Actions** commands on the device:
+
+| Command | Effect |
+|---------|--------|
+| **Check for Update** | Report-only — queries the latest GitHub release and reports newer/up-to-date in the `Update Status` property. No download/install. |
+| **Install Latest Release** | Downloads `proflame_wifi_connect.c4z` from the latest release (when its tag is newer) and installs it via Composer's local SOAP endpoint. |
+| **Force Reinstall Latest Release** | Re-installs the latest release even when versions match (recovery/repair). May reinstall an older build if the latest release is behind the running one. |
+
+A report-only check also runs automatically ~10 s after the driver loads and then every **`Update Check Interval`** hours (default 24; set `0` to disable). **Installs are always manual.**
+
+> **Maintainer note:** for the updater to detect a new version, you must publish a GitHub release whose tag is newer than the running `DRIVER_VERSION` (e.g. `v2026061401`) with an asset named exactly **`proflame_wifi_connect.c4z`**. If releases aren't cut after merging, update detection silently goes stale even though the code on `main` has advanced.
+
+---
+
 ## Table of Contents
 1. [Proflame WiFi Protocol](#proflame-wifi-protocol)
 2. [Control4 Driver Architecture](#control4-driver-architecture)
