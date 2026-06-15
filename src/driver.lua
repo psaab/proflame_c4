@@ -8,8 +8,8 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061402"
-DRIVER_DATE = "2026-06-14"
+DRIVER_VERSION = "2026061501"
+DRIVER_DATE = "2026-06-15"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
 -- drivers-common-public/module/websocket.lua (it scans 6100-6199 for the first
@@ -219,8 +219,20 @@ if gWebSocket then
     gWebSocket = nil
 end
 
+-- Load-time log buffer. The "Driver loading" / "Updated Driver Version
+-- property" messages below run at the very top of the file, BEFORE the
+-- vendored logging module (which provides the `log` global) and our dbg_*
+-- helpers are defined. We can't route them through dbg_info() yet, so we
+-- stash them here and flush the buffer through dbg_info() right after
+-- log:setLogLevel() runs further down. This keeps our own code off raw
+-- print() while preserving the at-load ordering of these lifecycle notes.
+gLoadTimeLogBuffer = {}
+local function _logAtLoad(msg)
+    gLoadTimeLogBuffer[#gLoadTimeLogBuffer + 1] = tostring(msg)
+end
+
 -- Log that we're loading
-print("[Proflame] Driver loading - Version " .. DRIVER_VERSION .. " (" .. DRIVER_DATE .. ")")
+_logAtLoad("[Proflame] Driver loading - Version " .. DRIVER_VERSION .. " (" .. DRIVER_DATE .. ")")
 
 -- Force reset of gState to ensure clean state on driver reload
 gState = {
@@ -274,7 +286,7 @@ BUILD_TIMESTAMP = "20260603-000005"
 pcall(function()
     if C4 and C4.UpdateProperty then
         C4:UpdateProperty("Driver Version", DRIVER_VERSION .. " (" .. DRIVER_DATE .. ") [" .. BUILD_TIMESTAMP .. "]")
-        print("[Proflame] Updated Driver Version property at load time")
+        _logAtLoad("[Proflame] Updated Driver Version property at load time")
     end
 end)
 
@@ -448,6 +460,59 @@ end
 
 function dbg_all(msg)
     log:debug("%s", tostring(msg))
+end
+
+-- =============================================================================
+-- GLOBAL print() SHADOW (issue #69)
+--
+-- The vendored drivers-common-public/module/websocket.lua (and other vendor
+-- modules) call the bare global `print(...)` in several spots — :Start(),
+-- the keepalive timeout path, ConnectionChanged, etc. Those calls bypass the
+-- driver's Debug Mode / Debug Level Composer gating and the module's own
+-- DEBUG_WEBSOCKET flag, producing log noise during reconnect loops. We do NOT
+-- edit the vendored file (it must stay byte-identical to upstream for
+-- re-sync), so instead we shadow the global `print` here and forward its
+-- arguments through dbg_debug — which is gated by the configured log level.
+--
+-- `print` is resolved as a global at call time, so installing the shadow now
+-- (during driver load, before any vendored function runs at runtime) is
+-- sufficient to intercept every later vendored print().
+--
+-- Recursion guard: when Debug Mode = On the vendored logging module's
+-- _log() itself calls the global `print` to mirror output to the controller
+-- console. Without a guard, dbg_debug -> log:debug -> _log -> print (our
+-- shadow) -> dbg_debug ... would recurse forever. While we're inside the
+-- shadow we set _c4_in_print_shadow so the logger's own print() call falls
+-- straight through to the captured original print instead of re-entering.
+local _c4_print = print
+local _c4_in_print_shadow = false
+-- luacheck: globals print
+print = function(...)
+    if _c4_in_print_shadow then
+        -- Re-entry from the logger's own console mirror: emit via the real
+        -- print so we don't loop, and so Debug Mode's console output still
+        -- works.
+        return _c4_print(...)
+    end
+    -- Concatenate varargs (tostring-ing each, nil-safe) with spaces, matching
+    -- Lua's built-in print() field separator.
+    local n = select("#", ...)
+    local parts = {}
+    for i = 1, n do
+        parts[i] = tostring((select(i, ...)))
+    end
+    local msg = table.concat(parts, " ")
+    _c4_in_print_shadow = true
+    -- pcall so a logger hiccup (e.g. print called before `log` exists) can
+    -- never turn a stray print into a hard driver error.
+    pcall(function()
+        if type(dbg_debug) == "function" then
+            dbg_debug(msg)
+        else
+            _c4_print(msg)
+        end
+    end)
+    _c4_in_print_shadow = false
 end
 
 -- Maps the Composer "Debug Level" property values to vendor LogLevel constants.
@@ -628,6 +693,17 @@ end
 log:setLogName("Proflame")
 log:setLogMode("Print and Log")
 log:setLogLevel(DEBUG_DEBUG)
+
+-- Flush the load-time log buffer now that `log` and dbg_info exist. These are
+-- the "Driver loading" / "Updated Driver Version property" lifecycle notes
+-- captured at the top of the file before the logger was available (issue #69:
+-- our own code no longer depends on raw print).
+if gLoadTimeLogBuffer then
+    for _, _bufferedMsg in ipairs(gLoadTimeLogBuffer) do
+        dbg_info(_bufferedMsg)
+    end
+    gLoadTimeLogBuffer = nil
+end
 
 -- =============================================================================
 -- JSON HELPERS (thin wrappers over vendored JSON.lua)
@@ -2740,7 +2816,7 @@ function OnDriverInit()
         ResetDriverState()
         InitializePropertiesFromState()
     end)
-    if not success then print("OnDriverInit Error: " .. tostring(err)) end
+    if not success then dbg_err("OnDriverInit Error: " .. tostring(err)) end
 end
 
 -- Persistence key for the last DRIVER_VERSION the driver was loaded with.
@@ -2960,7 +3036,7 @@ function OnDriverLateInit()
             C4:UpdateProperty("Connection Status", "Not Configured")
         end
     end)
-    if not success then print("OnDriverLateInit Error: " .. tostring(err)) end
+    if not success then dbg_err("OnDriverLateInit Error: " .. tostring(err)) end
 end
 
 function InitializePropertiesFromState()
