@@ -151,6 +151,56 @@ if _srcFile then
         "src/driver.lua uses the idempotent reload-safe print capture")
 end
 
+--------------------------------------------------------------------------------
+-- 8. Vendored DIRECT log:* calls (bypassing dbg_*/_guarded_log) must NOT
+--    double-log (#81). A vendored module like github_updater aliases the shared
+--    `log` object and calls `log:warn(...)` directly. Before the fix, that
+--    call's console-mirror print() reached the shadow with the re-entrancy
+--    guard clear and was re-routed through dbg_debug, producing a duplicate
+--    "[DEBUG]: [WARN]..." line. Wrapping the log object's emit methods sets the
+--    guard for these callers too, so the mirror passes through (one entry).
+--------------------------------------------------------------------------------
+Properties["Debug Mode"] = "On"
+Properties["Debug Level"] = "Debug"
+ApplyDebugLogSettings()
+
+-- The wrap marker must be set on the (fresh-per-load) log instance.
+Test.assert(rawget(log, "_c4_guard_wrapped") == true, "log object emit methods are guard-wrapped")
+-- Idempotence (Codex review of #82): the marker makes the driver's wrap-guard
+-- condition (`not rawget(log,"_c4_guard_wrapped")`) false, so a re-execution of
+-- the wrap block within a load would NOT re-wrap. Capture the wrapped method and
+-- confirm the guard condition is false and the method identity is stable.
+local _wrappedWarn = log.warn
+Test.assert((not rawget(log, "_c4_guard_wrapped")) == false,
+    "re-wrap guard condition is false -> wrapper would not double-wrap within a load")
+Test.assertEqual(log.warn, _wrappedWarn, "log.warn identity is stable (not re-wrapped)")
+
+Test.clearLogCapture()
+log:warn("VENDOR_DIRECT_81")  -- exactly how github_updater.lua calls it
+local _vlog = Test.getDebugLog()
+local _vendorCount = 0
+local _sawWarn = false
+for _, line in ipairs(_vlog) do
+    if line:find("VENDOR_DIRECT_81", 1, true) then
+        _vendorCount = _vendorCount + 1
+        if line:find("WARN", 1, true) then _sawWarn = true end
+    end
+end
+Test.assertEqual(_vendorCount, 1,
+    "direct log:warn logs exactly once (no [DEBUG]:[WARN] double via the shadow)")
+Test.assert(_sawWarn, "the single entry is at WARN, not re-routed to DEBUG")
+
+-- The guard is restored (not left set) after a direct log call, so a subsequent
+-- genuine vendor print() still routes to dbg_debug (gated), not pass-through.
+Test.clearLogCapture()
+print("VENDOR_RAW_PRINT_81")  -- a bare vendor print(), guard must be clear now
+local _raw = Test.getDebugLog()
+local _rawSeen = false
+for _, line in ipairs(_raw) do
+    if line:find("VENDOR_RAW_PRINT_81", 1, true) then _rawSeen = true end
+end
+Test.assert(_rawSeen, "after a wrapped log call, a bare vendor print() still routes through dbg_debug")
+
 -- Use the captured builtin so this status line is not itself swallowed by the
 -- shadow under the test's gating.
 _builtin_print("test_print_redirect: all assertions passed")
