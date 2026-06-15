@@ -72,7 +72,7 @@ These are exposed as **clickable buttons in the device's Actions tab** in Compos
 |---------------|--------|
 | **Check for Update** | Report-only. Queries the latest GitHub release and reports newer/up-to-date in the `Update Status` property. Does not download or install. |
 | **Install Latest Release** | If the latest release tag is newer than the running version, downloads `proflame_wifi_connect.c4z` and installs it via Composer's local SOAP endpoint (`127.0.0.1:5020`, `UpdateProjectC4i`). |
-| **Force Reinstall Latest Release** | Re-downloads/re-installs the latest release even when versions match (recovery/repair). Can reinstall an older build if the latest release is behind the running one. |
+| **Force Reinstall Latest Release (Recovery)** | Re-downloads/re-installs the latest release even when versions match (recovery/repair). Can reinstall an older build if the latest release is behind the running one — the button is labeled "(Recovery)" to flag the downgrade risk. (Underlying command string remains `Force Reinstall Latest Release`.) |
 
 Detection also runs automatically: a report-only check fires ~10 s after driver load and then every `Update Check Interval` hours (default 24; set 0 to disable). **Installs are always manual.** A release must exist with a tag newer than the running `DRIVER_VERSION` and an asset named exactly `proflame_wifi_connect.c4z`, or nothing is detected.
 

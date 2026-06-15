@@ -15,7 +15,7 @@ Updates are handled by the driver's own GitHub updater, exposed as **clickable b
 |---------|--------|
 | **Check for Update** | Report-only — queries the latest GitHub release and reports newer/up-to-date in the `Update Status` property. No download/install. |
 | **Install Latest Release** | Downloads `proflame_wifi_connect.c4z` from the latest release (when its tag is newer) and installs it via Composer's local SOAP endpoint. |
-| **Force Reinstall Latest Release** | Re-installs the latest release even when versions match (recovery/repair). May reinstall an older build if the latest release is behind the running one. |
+| **Force Reinstall Latest Release (Recovery)** | Re-installs the latest release even when versions match (recovery/repair). May reinstall an older build if the latest release is behind the running one — the button is labeled "(Recovery)" to flag this. |
 
 A report-only check also runs automatically ~10 s after the driver loads and then every **`Update Check Interval`** hours (default 24; set `0` to disable). **Installs are always manual.**
 

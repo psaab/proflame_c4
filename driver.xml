@@ -415,7 +415,12 @@
         <command>Install Latest Release</command>
       </action>
       <action>
-        <name>Force Reinstall Latest Release</name>
+        <!-- Button label flags this as a recovery action: it reinstalls even
+             when versions match and can downgrade if the latest release is
+             behind the running build (Codex review of #74). The <command>
+             still routes to the existing "Force Reinstall Latest Release"
+             ExecuteCommand branch. -->
+        <name>Force Reinstall Latest Release (Recovery)</name>
         <command>Force Reinstall Latest Release</command>
       </action>
     </actions>
