@@ -12,8 +12,8 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061402"
-DRIVER_DATE = "2026-06-14"
+DRIVER_VERSION = "2026061503"
+DRIVER_DATE = "2026-06-15"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
 -- drivers-common-public/module/websocket.lua (it scans 6100-6199 for the first
@@ -8425,9 +8425,12 @@ function BuildThermostatDynamicCapabilities()
         CAN_PRESET = "False",
         CAN_PRESET_SCHEDULE = "False",
         HOLD_MODES = FLAME_HOLD_MODES,
-        FAN_MODES = "Off,Low,Medium,High",
-        HVAC_MODES = "Off,Heat",
-        HVAC_STATES = "Off,Heat"
+        FAN_MODES = "Off,Low,Medium,High"
+        -- HVAC_MODES / HVAC_STATES intentionally omitted (issue #64): they are
+        -- constant for this heat-only device, already declared statically in
+        -- driver.xml (<hvac_modes>/<hvac_states>), and the allowed-mode subset is
+        -- emitted separately via ALLOWED_HVAC_MODES_CHANGED in
+        -- SendThermostatAllowedModes. They are not part of DYNAMIC_CAPABILITIES_CHANGED.
     }
 end
 
