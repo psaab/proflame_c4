@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061504"
+DRIVER_VERSION = "2026061505"
 DRIVER_DATE = "2026-06-15"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
@@ -2590,6 +2590,36 @@ function ExecuteCommand(strCommand, tParams)
     elseif strCommand == "Force Reinstall Latest Release" then
         ForceReinstallLatestRelease()
         return true
+    elseif strCommand == "LUA_ACTION" then
+        -- Actions-tab BUTTON clicks (driver.xml <actions>) arrive here, NOT as
+        -- the command name. Per the DriverWorks docs, Composer always sends
+        -- strCommand = "LUA_ACTION" for an action and puts the action's <name>
+        -- in tParams.ACTION. Dispatch on that name to the same handlers the
+        -- programming commands use. These strings MUST match the <action><name>
+        -- values in driver.xml's <actions> block.
+        local action = tParams and tParams.ACTION
+        dbg_info("LUA_ACTION: " .. tostring(action))
+        if action == "Check for Update" then
+            CheckForUpdateNow()
+            return true
+        elseif action == "Install Latest Release" then
+            InstallLatestReleaseNow()
+            return true
+        elseif action == "Force Reinstall Latest Release (Recovery)" then
+            ForceReinstallLatestRelease()
+            return true
+        end
+        -- Unrecognized action: dump tParams so the log reveals the real key/
+        -- value structure if the ACTION-key assumption is ever wrong.
+        local dump = {}
+        if type(tParams) == "table" then
+            for k, v in pairs(tParams) do
+                dump[#dump + 1] = tostring(k) .. "=" .. tostring(v)
+            end
+        end
+        dbg_warn("Unhandled LUA_ACTION (action=" .. tostring(action)
+            .. "); tParams: {" .. table.concat(dump, ", ") .. "}")
+        return false
     end
 
     dbg_err("Unhandled ExecuteCommand: " .. tostring(strCommand))
