@@ -9,7 +9,7 @@ Version 1.0 - December 17, 2025
 
 This driver is **distributed via GitHub releases** (`psaab/proflame_c4`), not through Control4's online driver database. As a result, Control4's built-in **"Check For Driver Updates" / Update Manager menu will not find updates for it** — that menu only queries Control4's database. `driver.xml` sets `<auto_update>false</auto_update>` to avoid implying otherwise.
 
-Updates are handled by the driver's own GitHub updater, exposed as Composer **Actions** commands on the device:
+Updates are handled by the driver's own GitHub updater, exposed as **clickable buttons in the device's Actions tab** in Composer Pro (select the Proflame device → **Actions**):
 
 | Command | Effect |
 |---------|--------|
