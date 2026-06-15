@@ -12,8 +12,8 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061402"
-DRIVER_DATE = "2026-06-14"
+DRIVER_VERSION = "2026061502"
+DRIVER_DATE = "2026-06-15"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
 -- drivers-common-public/module/websocket.lua (it scans 6100-6199 for the first
@@ -8511,12 +8511,12 @@ function ParseStatusMessage(data)
     if not data then return end
     if data == "PROFLAMEPONG" then
         -- PROFLAMEPING is gone (C1 Phase 2 dropped the app-level keepalive),
-        -- but the device occasionally still emits PROFLAMEPONG echoes from
-        -- a fresh probe / Composer button / previous-driver-state cleanup.
-        -- Surface the timestamp so the existing "Last Ping Response"
-        -- Composer field stays useful for diagnostics; we just no longer
-        -- generate the requests ourselves.
-        C4:UpdateProperty("Last Ping Response", os.date("%Y-%m-%d %H:%M:%S"))
+        -- so we never solicit a PROFLAMEPONG. The device also does not emit it
+        -- spontaneously (the 2026-06-02 probe saw 0 frames in a 10s silent
+        -- window), which made the old "Last Ping Response" property dead UI —
+        -- it was removed in #70. We still swallow any stray PROFLAMEPONG echo
+        -- here so it is not logged as an unknown frame.
+        dbg_debug("PROFLAMEPONG echo received")
         return
     end
     if data == "PROFLAMECONNECTIONOPEN" then
