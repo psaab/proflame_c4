@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061507"
+DRIVER_VERSION = "2026061508"
 DRIVER_DATE = "2026-06-15"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
@@ -726,6 +726,45 @@ end
 log:setLogName("Proflame")
 log:setLogMode("Print and Log")
 log:setLogLevel(DEBUG_DEBUG)
+
+-- #81: also set the print-shadow re-entrancy guard (`_c4_in_logger`) at the
+-- `log` OBJECT so ANY caller that bypasses the driver's dbg_* -> _guarded_log
+-- chokepoint still marks the flag. The concrete offender is vendored
+-- `vendor/github_updater.lua` (it aliases `local log = log` and calls
+-- `log:warn`/`log:info`/etc. directly). Without this, the logger's console
+-- mirror print() for those direct calls reached the shadow with the flag clear
+-- and was re-routed through dbg_debug, double-prefixing the line as
+-- "[DEBUG]: [WARN]...". Wrapping the object's emit methods catches every caller
+-- (driver and vendored) because they all share this instance via dynamic
+-- method lookup.
+--
+-- Placement: AFTER `log` is created (logging bundle), AFTER github_updater's
+-- alias is captured (both above), and AFTER `_c4_print` is captured (#79) — all
+-- satisfied here. `log` is a fresh `Log:new()` on every chunk load (incl.
+-- Control4 hot reload), so each load wraps a clean instance; the rawset marker
+-- only guards against re-wrapping within a single load (no persistent-global
+-- double-wrap hazard like #79's print capture). restore-previous-value (not a
+-- bare `= false`) keeps nesting correct: dbg_info -> _guarded_log sets the flag
+-- -> the wrapped log:info must LEAVE it set until _guarded_log clears it.
+-- _guarded_log and dbg_* are intentionally unchanged (they retain their
+-- nil/pcall safety); for dbg_* the wrapper's set is a harmless no-op.
+if log and not rawget(log, "_c4_guard_wrapped") then
+    rawset(log, "_c4_guard_wrapped", true)
+    for _, _lvl in ipairs({ "fatal", "error", "warn", "info", "debug", "trace", "ultra", "log", "print" }) do
+        local _orig = log[_lvl]
+        if type(_orig) == "function" then
+            log[_lvl] = function(self, ...)
+                local _prev = _c4_in_logger
+                _c4_in_logger = true
+                local _ok, _err = pcall(_orig, self, ...)
+                _c4_in_logger = _prev
+                if not _ok and type(_c4_print) == "function" then
+                    _c4_print("Proflame log error: " .. tostring(_err))
+                end
+            end
+        end
+    end
+end
 
 -- Flush the load-time log buffer now that `log` and dbg_info exist. These are
 -- the "Driver loading" / "Updated Driver Version property" lifecycle notes
