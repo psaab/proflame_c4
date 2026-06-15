@@ -417,6 +417,21 @@ ReceivedAsync(n1, "", 302, {}, nil)
 Test.assert(rdir3_result and rdir3_result.error, "3xx without Location rejects")
 Test.assert(rdir3_result.error:find("no Location header"), "reason names the missing Location header")
 
+-- Redirect budget exhaustion (Codex review of #80): a chain longer than the
+-- 5-hop budget must reject with "redirect budget exhausted", not loop forever.
+local rbud = http_client:get("https://example.com/loop0")
+local rbud_result
+rbud:next(function(r) rbud_result = { body = r.body } end, function(e) rbud_result = { error = e.error } end)
+local hops = 0
+while rbud_result == nil and hops < 12 do
+    ReceivedAsync(#_urlgets, "", 302, { Location = "https://example.com/loop" .. (hops + 1) }, nil)
+    hops = hops + 1
+end
+Test.assert(rbud_result and rbud_result.error, "over-budget redirect chain rejects (no infinite loop)")
+Test.assert(rbud_result.error:find("redirect budget exhausted"),
+    "reason names budget exhaustion")
+Test.assertEqual(hops, 6, "followed exactly the 5-hop budget then refused the 6th")
+
 --------------------------------------------------------------------------------
 -- 17. DescribeUpdaterError flattens every rejection shape so the real cause is
 --     never lost as "unknown error" (the deferred.all numeric-table case was
