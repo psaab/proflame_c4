@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061506"
+DRIVER_VERSION = "2026061507"
 DRIVER_DATE = "2026-06-15"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
@@ -2932,6 +2932,30 @@ end
 -- the latest GitHub release happens to be behind the running build, so it can
 -- downgrade; that's the intended "give me exactly the latest published release"
 -- semantic.
+-- Stringify a deferred rejection from the github-updater chain. Rejections come
+-- in three shapes: a plain string; an http_client result table (`{error=...}`);
+-- or — when a download fails inside `deferred.all` — a NUMERIC-indexed table of
+-- per-item failures (`{[1]="HTTP GET ... status 302", ...}`, each itself a string
+-- or `{error=...}`). The original handler only knew the first two and collapsed
+-- the third to "unknown error", hiding the real cause (e.g. an unfollowed asset
+-- redirect). Flatten every shape so the Update Status / log show the reason.
+function DescribeUpdaterError(err)
+    if type(err) == "string" then return err end
+    if type(err) == "table" then
+        if type(err.error) == "string" then return err.error end
+        local parts = {}
+        for _, v in pairs(err) do
+            if type(v) == "table" and type(v.error) == "string" then
+                parts[#parts + 1] = v.error
+            else
+                parts[#parts + 1] = tostring(v)
+            end
+        end
+        if #parts > 0 then return table.concat(parts, "; ") end
+    end
+    return "unknown error (" .. type(err) .. ")"
+end
+
 function InstallLatestReleaseNow(force)
     if gUpdateInProgress then
         dbg_warn("Install Latest Release ignored: an install is already running")
@@ -2969,7 +2993,7 @@ function InstallLatestReleaseNow(force)
         end
     end, function(err)
         gUpdateInProgress = false
-        local msg = type(err) == "string" and err or (err and err.error) or "unknown error"
+        local msg = DescribeUpdaterError(err)
         UpdateUpdateStatusProperty("Failed: " .. tostring(msg))
         dbg_err("InstallLatestReleaseNow: failed - " .. tostring(msg))
     end)
@@ -3013,7 +3037,7 @@ function CheckForUpdateNow()
             dbg_info("CheckForUpdateNow: up to date (current=" .. DRIVER_VERSION .. ", latest=" .. tostring(latestTag) .. ")")
         end
     end, function(err)
-        local msg = type(err) == "string" and err or (err and err.error) or "unknown error"
+        local msg = DescribeUpdaterError(err)
         UpdateUpdateStatusProperty("Update check failed: " .. tostring(msg))
         dbg_err("CheckForUpdateNow: failed - " .. tostring(msg))
     end)
