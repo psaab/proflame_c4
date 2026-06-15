@@ -153,6 +153,10 @@ if gUpdateCheckTimerId then
     pcall(function() gUpdateCheckTimerId:Cancel() end)
     gUpdateCheckTimerId = nil
 end
+if gInitialUpdateCheckTimerId then
+    pcall(function() gInitialUpdateCheckTimerId:Cancel() end)
+    gInitialUpdateCheckTimerId = nil
+end
 if gTimerModeDelayTimer then
     pcall(function() gTimerModeDelayTimer:Cancel() end)
     gTimerModeDelayTimer = nil
@@ -348,6 +352,7 @@ gReconnectTimerId = nil
 gConnectTimeoutTimerId = nil
 gStatusRefreshTimerId = nil
 gUpdateCheckTimerId = nil
+gInitialUpdateCheckTimerId = nil
 gTimerModeDelayTimer = nil
 gTimerStartDelayTimer = nil
 gTimerSuppressClearTimer = nil
@@ -4049,16 +4054,28 @@ function GitHubUpdater:getLatestRelease(repo, includePrereleases)
     return reject("repo name is required")
   end
   return http:get("https://api.github.com/repos/" .. repo .. "/releases", DEFAULT_HEADERS):next(function(response)
+    -- DIVERGENCE FROM TEMPLATE: scan ALL releases and return the highest parsed
+    -- version, not the first array entry. GitHub orders /releases by creation
+    -- date, not by version — so a re-published older release or an out-of-order
+    -- tag would otherwise be reported as "latest" and a real newer release
+    -- missed (Codex review of PR #73, HIGH). Picking max-version is correct
+    -- regardless of array order.
+    local best
     for _, release in pairs(response.body or {}) do
       local releaseVersion, err = version(release.tag_name)
       if IsEmpty(err) then
         if not release.draft and (toboolean(includePrereleases) or not release.prerelease) then
           release.version = releaseVersion
-          return release
+          if best == nil or release.version > best.version then
+            best = release
+          end
         end
       else
         log:warn("repo %s release '%s' has an invalid tag version '%s'", repo, release.name, release.tag_name)
       end
+    end
+    if best ~= nil then
+      return best
     end
     return reject(string.format("repo %s does not have any valid releases", repo))
   end, function(response)
@@ -10054,6 +10071,14 @@ end
 -- or installing anything. This is the safe "is there an update?" probe; the
 -- user still runs "Install Latest Release" to actually apply it.
 function CheckForUpdateNow()
+    -- Don't stomp the install path's status messages or interleave with it
+    -- (Codex review of PR #73). A report-only check while an install is running
+    -- would overwrite "Force-reinstalling..."/"Installed:" with a stale
+    -- "Up to date"/"Update available" at a confusing moment. Skip silently.
+    if gUpdateInProgress then
+        dbg_info("CheckForUpdateNow skipped: an install is in progress")
+        return
+    end
     UpdateUpdateStatusProperty("Checking GitHub for the latest release...")
     dbg_info("CheckForUpdateNow: starting")
     local d = github_updater:getLatestRelease(GITHUB_UPDATER_REPO, false)
@@ -10096,10 +10121,17 @@ function StartUpdateCheckTimer()
     dbg_info("Periodic update check scheduled every " .. hours .. "h")
 end
 
+-- Cancels both the repeating check timer and the post-load one-shot (Codex
+-- review of PR #73: the anonymous 10s startup check otherwise fires after a
+-- teardown/reload inside its window and writes Update Status post-destroy).
 function StopUpdateCheckTimer()
     if gUpdateCheckTimerId then
         gUpdateCheckTimerId:Cancel()
         gUpdateCheckTimerId = nil
+    end
+    if gInitialUpdateCheckTimerId then
+        gInitialUpdateCheckTimerId:Cancel()
+        gInitialUpdateCheckTimerId = nil
     end
 end
 
@@ -10143,7 +10175,12 @@ function OnDriverLateInit()
         -- no-op cleanly if Update Check Interval is 0.
         StartUpdateCheckTimer()
         if (tonumber(Properties["Update Check Interval (hours)"]) or 0) > 0 then
-            C4:SetTimer(10000, function() CheckForUpdateNow() end, false)
+            -- Tracked (not anonymous) so teardown/reload within the 10s window
+            -- can cancel it — see StopUpdateCheckTimer.
+            gInitialUpdateCheckTimerId = C4:SetTimer(10000, function(timer)
+                gInitialUpdateCheckTimerId = nil
+                CheckForUpdateNow()
+            end, false)
         end
 
         local ipAddress = Properties["IP Address"] or ""

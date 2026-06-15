@@ -290,4 +290,63 @@ InstallLatestReleaseNow = orig_install
 CheckForUpdateNow = orig_check
 ForceReinstallLatestRelease = orig_force
 
+--------------------------------------------------------------------------------
+-- 14. getLatestRelease picks the HIGHEST-versioned release, not the first array
+--     entry (Codex HIGH). Deliver releases out of creation order and assert the
+--     newest tag wins, surfaced through CheckForUpdateNow.
+--------------------------------------------------------------------------------
+local maxver_status
+UpdateUpdateStatusProperty = function(text) maxver_status = text end
+local base = tonumber(DRIVER_VERSION)
+local older_tag  = "v" .. tostring(base - 1)
+local newest_tag = "v" .. tostring(base + 5)
+local middle_tag = "v" .. tostring(base + 2)
+
+CheckForUpdateNow()
+local mv_ticket
+for i, g in ipairs(_urlgets) do
+    if g.url:find("/releases$") then mv_ticket = i end
+end
+-- Newest is deliberately NOT first in the array.
+ReceivedAsync(mv_ticket, JsonEncode({
+    { tag_name = older_tag,  draft = false, prerelease = false, assets = {} },
+    { tag_name = newest_tag, draft = false, prerelease = false, assets = {} },
+    { tag_name = middle_tag, draft = false, prerelease = false, assets = {} },
+}), 200, {}, nil)
+Test.assert(maxver_status:find("Update available"), "out-of-order array still finds an update")
+Test.assert(maxver_status:find(newest_tag, 1, true),
+    "highest-versioned tag (" .. newest_tag .. ") selected, not array-first")
+Test.assert(not maxver_status:find(older_tag, 1, true), "did not report the older first-in-array tag")
+
+-- A draft/prerelease newest must be ignored in favor of the highest stable.
+maxver_status = nil
+CheckForUpdateNow()
+local mv_ticket2
+for i, g in ipairs(_urlgets) do
+    if g.url:find("/releases$") then mv_ticket2 = i end
+end
+ReceivedAsync(mv_ticket2, JsonEncode({
+    { tag_name = "v" .. tostring(base + 9), draft = true,  prerelease = false, assets = {} },
+    { tag_name = "v" .. tostring(base + 8), draft = false, prerelease = true,  assets = {} },
+    { tag_name = newest_tag,                draft = false, prerelease = false, assets = {} },
+}), 200, {}, nil)
+Test.assert(maxver_status:find(newest_tag, 1, true),
+    "draft/prerelease higher tags ignored; highest STABLE selected")
+
+UpdateUpdateStatusProperty = original_UpdateUpdateStatusProperty
+
+--------------------------------------------------------------------------------
+-- 15. CheckForUpdateNow is a no-op while an install is in progress (Codex
+--     MEDIUM): it must not fire a request or overwrite the install's status.
+--------------------------------------------------------------------------------
+local guard_status = "(install message)"
+UpdateUpdateStatusProperty = function(text) guard_status = text end
+local urlgets_before = #_urlgets
+gUpdateInProgress = true
+CheckForUpdateNow()
+Test.assertEqual(#_urlgets, urlgets_before, "in-progress check fires no GitHub request")
+Test.assertEqual(guard_status, "(install message)", "in-progress check does not overwrite Update Status")
+gUpdateInProgress = false
+UpdateUpdateStatusProperty = original_UpdateUpdateStatusProperty
+
 print("test_github_updater OK")
