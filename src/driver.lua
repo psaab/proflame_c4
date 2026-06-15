@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061401"
+DRIVER_VERSION = "2026061402"
 DRIVER_DATE = "2026-06-14"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored

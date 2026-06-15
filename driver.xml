@@ -9,7 +9,7 @@
   <manufacturer>SIT Group / Proflame</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026061401</version>
+  <version>2026061402</version>
   <created>12/02/2025 12:00 PM</created>
   <modified>06/03/2026 12:00 AM</modified>
   <!-- auto_update governs Control4's NATIVE driver-update path, which queries
@@ -399,6 +399,31 @@
         <description>Cancel the auto-off timer; while on, safety policy turns the fireplace off</description>
       </command>
     </commands>
+    <!-- Actions render as clickable buttons in the device's Actions tab in
+         Composer Pro. Each <command> is the string sent to ExecuteCommand when
+         the button is clicked (these names already have ExecuteCommand branches,
+         so no Lua change is needed). <commands> entries alone only appear in
+         Programming, not as buttons — hence these explicit actions for the
+         GitHub-updater commands so the update path is one click away. -->
+    <actions>
+      <action>
+        <name>Check for Update</name>
+        <command>Check for Update</command>
+      </action>
+      <action>
+        <name>Install Latest Release</name>
+        <command>Install Latest Release</command>
+      </action>
+      <action>
+        <!-- Button label flags this as a recovery action: it reinstalls even
+             when versions match and can downgrade if the latest release is
+             behind the running build (Codex review of #74). The <command>
+             still routes to the existing "Force Reinstall Latest Release"
+             ExecuteCommand branch. -->
+        <name>Force Reinstall Latest Release (Recovery)</name>
+        <command>Force Reinstall Latest Release</command>
+      </action>
+    </actions>
     <script file="driver.lua" encryption="0" jit="1"></script>
   </config>
   <events>
