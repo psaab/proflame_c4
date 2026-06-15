@@ -12,7 +12,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061505"
+DRIVER_VERSION = "2026061506"
 DRIVER_DATE = "2026-06-15"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
@@ -455,7 +455,17 @@ end
 -- impl) missed this path: an ordinary dbg_info() call mirrors via print with the
 -- flag clear, so the mirror line was wrongly re-routed back through dbg_debug
 -- (doubled at Debug level, swallowed below it).
-_c4_print = print  -- captured before the shadow replaces global print
+-- Capture the REAL builtin `print` exactly ONCE, even across hot reloads.
+-- Control4 re-runs this whole chunk when the driver reloads (driver update,
+-- controller restart). `_c4_print` and `print` are file-level globals that
+-- survive the reload, so on the 2nd load `print` is ALREADY our shadow. A naive
+-- `_c4_print = print` would then capture the shadow itself, and the shadow's
+-- pass-through (`return _c4_print(...)`) would call back into the shadow —
+-- infinite recursion / stack-overflow that wedges all logging until the next
+-- power cycle (manifested as "debug logging stops working / won't come back").
+-- The `X = X or print` idiom keeps the real builtin captured on the first load
+-- and never overwrites it with the shadow on reloads.
+_c4_print = _c4_print or print
 _c4_in_logger = false
 local function _guarded_log(level, msg)
     _c4_in_logger = true
