@@ -286,6 +286,36 @@ dispatched = nil
 Test.assertEqual(ExecuteCommand("Force Reinstall Latest Release", {}), true, "Force Reinstall returns true")
 Test.assertEqual(dispatched, "force", "Force Reinstall dispatched")
 
+-- Actions-tab BUTTON clicks: Control4 sends strCommand="LUA_ACTION" with the
+-- action's <name> in tParams.ACTION (NOT the command name). These must dispatch
+-- to the same handlers and return true (regression guard for the "Unhandled
+-- ExecuteCommand: LUA_ACTION" bug). The ACTION strings must match driver.xml's
+-- <action><name> values.
+dispatched = nil
+Test.assertEqual(ExecuteCommand("LUA_ACTION", { ACTION = "Check for Update" }), true,
+    "LUA_ACTION 'Check for Update' returns true")
+Test.assertEqual(dispatched, "check", "LUA_ACTION 'Check for Update' dispatched")
+
+dispatched = nil
+Test.assertEqual(ExecuteCommand("LUA_ACTION", { ACTION = "Install Latest Release" }), true,
+    "LUA_ACTION 'Install Latest Release' returns true")
+Test.assertEqual(dispatched, "install", "LUA_ACTION 'Install Latest Release' dispatched")
+
+dispatched = nil
+Test.assertEqual(ExecuteCommand("LUA_ACTION", { ACTION = "Force Reinstall Latest Release (Recovery)" }), true,
+    "LUA_ACTION 'Force Reinstall (Recovery)' returns true")
+Test.assertEqual(dispatched, "force", "LUA_ACTION 'Force Reinstall (Recovery)' dispatched")
+
+-- An unrecognized action must NOT crash and must return false (the diagnostic
+-- branch dumps tParams).
+dispatched = nil
+Test.assertEqual(ExecuteCommand("LUA_ACTION", { ACTION = "No Such Action" }), false,
+    "unrecognized LUA_ACTION returns false")
+Test.assertEqual(dispatched, nil, "unrecognized LUA_ACTION dispatches nothing")
+
+-- Missing tParams/ACTION must be handled gracefully (no crash, returns false).
+Test.assertEqual(ExecuteCommand("LUA_ACTION", nil), false, "LUA_ACTION with nil tParams returns false")
+
 InstallLatestReleaseNow = orig_install
 CheckForUpdateNow = orig_check
 ForceReinstallLatestRelease = orig_force
