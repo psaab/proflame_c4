@@ -12,8 +12,8 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061301"
-DRIVER_DATE = "2026-06-13"
+DRIVER_VERSION = "2026061401"
+DRIVER_DATE = "2026-06-14"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
 -- drivers-common-public/module/websocket.lua (it scans 6100-6199 for the first
@@ -148,6 +148,14 @@ end
 if gStatusRefreshTimerId then
     pcall(function() gStatusRefreshTimerId:Cancel() end)
     gStatusRefreshTimerId = nil
+end
+if gUpdateCheckTimerId then
+    pcall(function() gUpdateCheckTimerId:Cancel() end)
+    gUpdateCheckTimerId = nil
+end
+if gInitialUpdateCheckTimerId then
+    pcall(function() gInitialUpdateCheckTimerId:Cancel() end)
+    gInitialUpdateCheckTimerId = nil
 end
 if gTimerModeDelayTimer then
     pcall(function() gTimerModeDelayTimer:Cancel() end)
@@ -343,6 +351,8 @@ gHandshakeComplete = false
 gReconnectTimerId = nil
 gConnectTimeoutTimerId = nil
 gStatusRefreshTimerId = nil
+gUpdateCheckTimerId = nil
+gInitialUpdateCheckTimerId = nil
 gTimerModeDelayTimer = nil
 gTimerStartDelayTimer = nil
 gTimerSuppressClearTimer = nil
@@ -4044,16 +4054,28 @@ function GitHubUpdater:getLatestRelease(repo, includePrereleases)
     return reject("repo name is required")
   end
   return http:get("https://api.github.com/repos/" .. repo .. "/releases", DEFAULT_HEADERS):next(function(response)
+    -- DIVERGENCE FROM TEMPLATE: scan ALL releases and return the highest parsed
+    -- version, not the first array entry. GitHub orders /releases by creation
+    -- date, not by version — so a re-published older release or an out-of-order
+    -- tag would otherwise be reported as "latest" and a real newer release
+    -- missed (Codex review of PR #73, HIGH). Picking max-version is correct
+    -- regardless of array order.
+    local best
     for _, release in pairs(response.body or {}) do
       local releaseVersion, err = version(release.tag_name)
       if IsEmpty(err) then
         if not release.draft and (toboolean(includePrereleases) or not release.prerelease) then
           release.version = releaseVersion
-          return release
+          if best == nil or release.version > best.version then
+            best = release
+          end
         end
       else
         log:warn("repo %s release '%s' has an invalid tag version '%s'", repo, release.name, release.tag_name)
       end
+    end
+    if best ~= nil then
+      return best
     end
     return reject(string.format("repo %s does not have any valid releases", repo))
   end, function(response)
@@ -9051,6 +9073,8 @@ function OnPropertyChanged(strProperty)
         if gConnected and gHandshakeComplete then
             StartStatusRefreshTimer()  -- Restart with new interval (or stop if 0)
         end
+    elseif strProperty == "Update Check Interval (hours)" then
+        StartUpdateCheckTimer()  -- Restart with new interval (or stop if 0)
     end
 end
 
@@ -9684,6 +9708,12 @@ function ExecuteCommand(strCommand, tParams)
     elseif strCommand == "Install Latest Release" then
         InstallLatestReleaseNow()
         return true
+    elseif strCommand == "Check for Update" then
+        CheckForUpdateNow()
+        return true
+    elseif strCommand == "Force Reinstall Latest Release" then
+        ForceReinstallLatestRelease()
+        return true
     end
 
     dbg_err("Unhandled ExecuteCommand: " .. tostring(strCommand))
@@ -9978,17 +10008,26 @@ end
 -- DRIVER_VERSION is older than the latest release tag, writes it to
 -- C4Z_ROOT, then drives Composer's local SOAP endpoint to install it.
 -- Status updates surface in the "Update Status" property.
-function InstallLatestReleaseNow()
+--
+-- `force` (the "Force Reinstall Latest Release" command) passes forceUpdate=true
+-- to updateAll so the latest release is re-downloaded and re-installed even when
+-- its tag equals the running DRIVER_VERSION — for recovery/repair of a corrupt
+-- or partially-applied install. Note this also re-installs an OLDER release if
+-- the latest GitHub release happens to be behind the running build, so it can
+-- downgrade; that's the intended "give me exactly the latest published release"
+-- semantic.
+function InstallLatestReleaseNow(force)
     if gUpdateInProgress then
         dbg_warn("Install Latest Release ignored: an install is already running")
         UpdateUpdateStatusProperty("Install already running")
         return
     end
     gUpdateInProgress = true
-    UpdateUpdateStatusProperty("Checking GitHub for the latest release...")
-    dbg_info("InstallLatestReleaseNow: starting")
+    local what = force and "Force-reinstalling the latest release..." or "Checking GitHub for the latest release..."
+    UpdateUpdateStatusProperty(what)
+    dbg_info("InstallLatestReleaseNow: starting (force=" .. tostring(force and true or false) .. ")")
 
-    local d = github_updater:updateAll(GITHUB_UPDATER_REPO, GITHUB_UPDATER_FILENAMES, false, false)
+    local d = github_updater:updateAll(GITHUB_UPDATER_REPO, GITHUB_UPDATER_FILENAMES, false, force and true or false)
     d:next(function(updated)
         gUpdateInProgress = false
         if not updated or #updated == 0 then
@@ -10000,7 +10039,8 @@ function InstallLatestReleaseNow()
             --       the filter dropped every entry before download
             -- We can't disambiguate from the resolve value alone, but the
             -- common case is (a). Surface a message that doesn't claim a
-            -- specific cause when none is provable.
+            -- specific cause when none is provable. (force=true never resolves
+            -- empty for case (a) since forceUpdate skips the version compare.)
             UpdateUpdateStatusProperty(
                 "No install applied (current: " .. DRIVER_VERSION
                     .. "). If a release exists with a newer tag, verify its asset is named "
@@ -10017,6 +10057,82 @@ function InstallLatestReleaseNow()
         UpdateUpdateStatusProperty("Failed: " .. tostring(msg))
         dbg_err("InstallLatestReleaseNow: failed - " .. tostring(msg))
     end)
+end
+
+-- "Force Reinstall Latest Release" command — re-install the latest published
+-- release even if its tag matches the running version. See InstallLatestReleaseNow.
+function ForceReinstallLatestRelease()
+    InstallLatestReleaseNow(true)
+end
+
+-- Report-only update check ("Check for Update" command + the periodic timer).
+-- Queries the latest GitHub release and reports whether it's newer than the
+-- running DRIVER_VERSION in the "Update Status" property, WITHOUT downloading
+-- or installing anything. This is the safe "is there an update?" probe; the
+-- user still runs "Install Latest Release" to actually apply it.
+function CheckForUpdateNow()
+    -- Don't stomp the install path's status messages or interleave with it
+    -- (Codex review of PR #73). A report-only check while an install is running
+    -- would overwrite "Force-reinstalling..."/"Installed:" with a stale
+    -- "Up to date"/"Update available" at a confusing moment. Skip silently.
+    if gUpdateInProgress then
+        dbg_info("CheckForUpdateNow skipped: an install is in progress")
+        return
+    end
+    UpdateUpdateStatusProperty("Checking GitHub for the latest release...")
+    dbg_info("CheckForUpdateNow: starting")
+    local d = github_updater:getLatestRelease(GITHUB_UPDATER_REPO, false)
+    d:next(function(latest)
+        local latestVer = latest and latest.version
+        local latestTag = (latest and latest.tag_name) or (latestVer and tostring(latestVer)) or "?"
+        local currentVer = version_lib(DRIVER_VERSION)
+        if latestVer and currentVer and latestVer > currentVer then
+            UpdateUpdateStatusProperty(
+                "Update available: " .. tostring(latestTag)
+                    .. " (current " .. DRIVER_VERSION .. ") — run Install Latest Release"
+            )
+            dbg_info("CheckForUpdateNow: update available " .. tostring(latestTag) .. " > " .. DRIVER_VERSION)
+        else
+            UpdateUpdateStatusProperty("Up to date (" .. DRIVER_VERSION .. ", latest release " .. tostring(latestTag) .. ")")
+            dbg_info("CheckForUpdateNow: up to date (current=" .. DRIVER_VERSION .. ", latest=" .. tostring(latestTag) .. ")")
+        end
+    end, function(err)
+        local msg = type(err) == "string" and err or (err and err.error) or "unknown error"
+        UpdateUpdateStatusProperty("Update check failed: " .. tostring(msg))
+        dbg_err("CheckForUpdateNow: failed - " .. tostring(msg))
+    end)
+end
+
+-- Periodic update-check timer. Repeatedly runs the report-only CheckForUpdateNow
+-- so "Update Status" reflects whether a newer release exists without the user
+-- having to trigger the command. Install stays manual. Default 24h; 0 disables.
+-- Independent of the device connection (it talks to GitHub, not the fireplace),
+-- so it is NOT stopped by Disconnect — only by reload cleanup / OnDriverDestroyed
+-- / an interval change.
+function StartUpdateCheckTimer()
+    StopUpdateCheckTimer()
+    local hours = tonumber(Properties["Update Check Interval (hours)"]) or 0
+    if hours <= 0 then
+        dbg_info("Periodic update check disabled (Update Check Interval = 0)")
+        return
+    end
+    local intervalMs = hours * 60 * 60 * 1000
+    gUpdateCheckTimerId = C4:SetTimer(intervalMs, function(timer) CheckForUpdateNow() end, true)
+    dbg_info("Periodic update check scheduled every " .. hours .. "h")
+end
+
+-- Cancels both the repeating check timer and the post-load one-shot (Codex
+-- review of PR #73: the anonymous 10s startup check otherwise fires after a
+-- teardown/reload inside its window and writes Update Status post-destroy).
+function StopUpdateCheckTimer()
+    if gUpdateCheckTimerId then
+        gUpdateCheckTimerId:Cancel()
+        gUpdateCheckTimerId = nil
+    end
+    if gInitialUpdateCheckTimerId then
+        gInitialUpdateCheckTimerId:Cancel()
+        gInitialUpdateCheckTimerId = nil
+    end
 end
 
 -- Top-level async response dispatcher. C4 invokes this for every urlGet/Post
@@ -10038,20 +10154,35 @@ function OnDriverLateInit()
     -- Surface upgrades/downgrades + first-install in the log.
     pcall(LogDriverVersionTransition)
 
-    -- Update checking is now manual-trigger only via the "Install Latest
-    -- Release" Composer command (see ExecuteCommand). No periodic polling
-    -- happens during driver load.
+    -- Install is always manual (the "Install Latest Release" / "Force Reinstall
+    -- Latest Release" commands). Update *detection* runs on a report-only timer
+    -- (Update Check Interval, default 24h) plus a one-shot check shortly after
+    -- load so "Update Status" reflects availability without user action. The
+    -- "Check for Update" command triggers the same report-only probe on demand.
 
     dbg_info("OnDriverLateInit - Build: " .. BUILD_TIMESTAMP)
     local success, err = pcall(function()
         C4:UpdateProperty("Driver Version", DRIVER_VERSION .. " (" .. DRIVER_DATE .. ") [" .. BUILD_TIMESTAMP .. "]")
-        
+
         -- Ensure clean state before connecting
         Disconnect()
-        
+
         -- DELAYED EXTRAS SETUP TO ENSURE PROXY IS READY
         C4:SetTimer(2000, function() SetupExtras() end, false)
-        
+
+        -- Start the periodic update-check timer (report-only) and run one check
+        -- ~10s after load so the user sees update availability promptly. Both
+        -- no-op cleanly if Update Check Interval is 0.
+        StartUpdateCheckTimer()
+        if (tonumber(Properties["Update Check Interval (hours)"]) or 0) > 0 then
+            -- Tracked (not anonymous) so teardown/reload within the 10s window
+            -- can cancel it — see StopUpdateCheckTimer.
+            gInitialUpdateCheckTimerId = C4:SetTimer(10000, function(timer)
+                gInitialUpdateCheckTimerId = nil
+                CheckForUpdateNow()
+            end, false)
+        end
+
         local ipAddress = Properties["IP Address"] or ""
         if ipAddress ~= "" then
             -- Delay connection slightly to ensure network is ready
@@ -10095,6 +10226,7 @@ end
 function OnDriverDestroyed()
     dbg_info("OnDriverDestroyed - cleaning up")
     StopReconnectTimer()
+    StopUpdateCheckTimer()  -- device-independent; Disconnect() doesn't stop it
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()
     CancelTurnOffRetryTimer()

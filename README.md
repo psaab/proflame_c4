@@ -5,6 +5,24 @@ Version 1.0 - December 17, 2025
 
 ---
 
+## Driver Updates
+
+This driver is **distributed via GitHub releases** (`psaab/proflame_c4`), not through Control4's online driver database. As a result, Control4's built-in **"Check For Driver Updates" / Update Manager menu will not find updates for it** — that menu only queries Control4's database. `driver.xml` sets `<auto_update>false</auto_update>` to avoid implying otherwise.
+
+Updates are handled by the driver's own GitHub updater, exposed as Composer **Actions** commands on the device:
+
+| Command | Effect |
+|---------|--------|
+| **Check for Update** | Report-only — queries the latest GitHub release and reports newer/up-to-date in the `Update Status` property. No download/install. |
+| **Install Latest Release** | Downloads `proflame_wifi_connect.c4z` from the latest release (when its tag is newer) and installs it via Composer's local SOAP endpoint. |
+| **Force Reinstall Latest Release** | Re-installs the latest release even when versions match (recovery/repair). May reinstall an older build if the latest release is behind the running one. |
+
+A report-only check also runs automatically ~10 s after the driver loads and then every **`Update Check Interval`** hours (default 24; set `0` to disable). **Installs are always manual.**
+
+> **Maintainer note:** for the updater to detect a new version, you must publish a GitHub release whose tag is newer than the running `DRIVER_VERSION` (e.g. `v2026061401`) with an asset named exactly **`proflame_wifi_connect.c4z`**. If releases aren't cut after merging, update detection silently goes stale even though the code on `main` has advanced.
+
+---
+
 ## Table of Contents
 1. [Proflame WiFi Protocol](#proflame-wifi-protocol)
 2. [Control4 Driver Architecture](#control4-driver-architecture)
@@ -558,15 +576,21 @@ To add a test, drop a file matching `test/test_*.lua` that starts with `require(
 
 ### Updating the driver from inside Composer
 
-The driver exposes an `Install Latest Release` Composer command and an `Update Status` read-only property. Click the command in Composer to:
+The driver exposes three Composer **Actions** commands plus an `Update Status` read-only property. See the [Driver Updates](#driver-updates) section near the top for the operator summary; the mechanics:
 
-1. Query `https://api.github.com/repos/psaab/proflame_c4/releases/latest` for the latest release
-2. Compare the release tag to the installed `DRIVER_VERSION` via the vendored semver comparator
-3. If newer: download the matching `.c4z` asset, write it to `C4Z_ROOT/`, and drive Composer's local SOAP endpoint at `127.0.0.1:5020` to invoke `UpdateProjectC4i` — Composer tears down the running driver instance and loads the new one
+1. Query `https://api.github.com/repos/psaab/proflame_c4/releases` and select the **highest-versioned** non-draft, non-prerelease entry via the vendored semver comparator (the array is scanned for max version, not assumed newest-first).
+2. Compare that release's tag to the installed `DRIVER_VERSION`.
+3. On **Install Latest Release**, if newer: download the matching `proflame_wifi_connect.c4z` asset, write it to `C4Z_ROOT/`, and drive Composer's local SOAP endpoint at `127.0.0.1:5020` to invoke `UpdateProjectC4i` — Composer tears down the running driver instance and loads the new one.
 
-`Update Status` reflects progress and surfaces every failure mode as a human-readable string: `Idle`, `Checking GitHub for the latest release...`, `Installed: <files> (controller may reload driver)`, `Failed: <reason>`, or `Install already running` for repeat clicks while an install is in flight.
+The three commands:
 
-The button is **opt-in** and **manual** — no background polling, no auto-check on driver load. If the click fires but no progress appears within 60 seconds, an internal watchdog clears the in-flight state and surfaces a timeout error.
+- **Check for Update** — report-only; runs steps 1–2 and writes the result to `Update Status` without downloading or installing.
+- **Install Latest Release** — runs steps 1–3; installs only when the latest release is newer.
+- **Force Reinstall Latest Release** — runs step 3 unconditionally (`forceUpdate=true`), reinstalling the latest release even when versions match (recovery/repair; may reinstall an older build if the latest release is behind the running one).
+
+`Update Status` reflects progress and surfaces every mode as a human-readable string: `Idle`, `Checking GitHub for the latest release...`, `Force-reinstalling the latest release...`, `Update available: <tag> (current <ver>) …`, `Up to date (<ver>, latest release <tag>)`, `Installed: <files> (controller may reload driver)`, `No install applied (current: <ver>) …`, `Failed: <reason>`, `Update check failed: <reason>`, or `Install already running` for repeat clicks while an install is in flight.
+
+**Installs are always manual.** Update *detection* runs automatically: a report-only check fires ~10 s after driver load and then every **`Update Check Interval`** hours (default 24; `0` disables). If an install click fires but no progress appears within 60 seconds, an internal HTTP watchdog clears the in-flight state and surfaces a timeout error.
 
 ### Composer Command Smoke Test
 

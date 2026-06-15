@@ -9,10 +9,17 @@
   <manufacturer>SIT Group / Proflame</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026061301</version>
+  <version>2026061401</version>
   <created>12/02/2025 12:00 PM</created>
   <modified>06/03/2026 12:00 AM</modified>
-  <auto_update>true</auto_update>
+  <!-- auto_update governs Control4's NATIVE driver-update path, which queries
+       Control4's online driver database. This driver is self-distributed via
+       GitHub releases and is not in that database, so the native path can never
+       find updates; leaving auto_update=true falsely implies the built-in
+       "Check For Driver Updates" menu works here. Real updates come through the
+       driver's own GitHub updater — the "Install Latest Release" / "Check for
+       Update" / "Force Reinstall Latest Release" commands. See README / spec. -->
+  <auto_update>false</auto_update>
   <minimum_auto_update_version>1</minimum_auto_update_version>
   <proxies>
     <proxy proxybindingid="5001" name="Proflame Fireplace" small_image="icons/device_sm.png" large_image="icons/device_lg.png" image_source="c4z">thermostatV2</proxy>
@@ -241,11 +248,27 @@
         <default>Idle</default>
         <readonly>true</readonly>
       </property>
+      <property>
+        <name>Update Check Interval (hours)</name>
+        <type>RANGED_INTEGER</type>
+        <minimum>0</minimum>
+        <maximum>168</maximum>
+        <default>24</default>
+        <readonly>false</readonly>
+      </property>
     </properties>
     <commands>
       <command>
         <name>Install Latest Release</name>
         <description>Check GitHub for a newer driver release and (if found) download + install it via Composer. Updates the Update Status property with progress.</description>
+      </command>
+      <command>
+        <name>Check for Update</name>
+        <description>Report-only: query the latest GitHub release and show in Update Status whether a newer version is available. Does NOT download or install.</description>
+      </command>
+      <command>
+        <name>Force Reinstall Latest Release</name>
+        <description>Re-download and re-install the latest GitHub release even if its version matches the running driver (recovery/repair). May reinstall an older build if the latest release is behind the current one.</description>
       </command>
       <command>
         <name>Turn On</name>

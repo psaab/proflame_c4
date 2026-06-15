@@ -3,7 +3,7 @@
 ## Document Version
 - **Version**: 2.0
 - **Date**: May 2026
-- **Driver Version**: 2026061301 (2026-06-13)
+- **Driver Version**: 2026061401 (2026-06-14)
 
 ---
 
@@ -58,8 +58,21 @@ This driver enables Control4 home automation systems to control Proflame WiFi-en
 | Default Flame Level | INTEGER | 6 | Initial flame level (1-6) |
 | Default Timer | INTEGER | 180 | Auto-off timer used only by Turn On; 0 disables timer arming and causes timer safety to force the fireplace off |
 | Command Format (non-Turn-Off) | LIST | Legacy Only | Outbound format for non-Turn-Off device commands |
+| Update Check Interval | INTEGER | 24 | Report-only GitHub release check (hours, 0-168); 0 disables. Surfaces availability in Update Status; install stays manual |
 | Debug Mode | LIST | On | Enable/disable debug logging |
 | Debug Level | LIST | Debug | Error, Warning, Info, Debug, Trace |
+
+### 1.5 Driver Updates
+
+This driver is **self-distributed via GitHub releases** (`psaab/proflame_c4`), so Control4's native "Check For Driver Updates" / Update Manager menu will **not** detect updates — that menu only queries Control4's online driver database, which does not contain this driver (`<auto_update>` is therefore set `false`). Updates flow through the driver's own GitHub updater, exposed as Composer **Actions** commands:
+
+| Command | Effect |
+|---------|--------|
+| **Check for Update** | Report-only. Queries the latest GitHub release and reports newer/up-to-date in the `Update Status` property. Does not download or install. |
+| **Install Latest Release** | If the latest release tag is newer than the running version, downloads `proflame_wifi_connect.c4z` and installs it via Composer's local SOAP endpoint (`127.0.0.1:5020`, `UpdateProjectC4i`). |
+| **Force Reinstall Latest Release** | Re-downloads/re-installs the latest release even when versions match (recovery/repair). Can reinstall an older build if the latest release is behind the running one. |
+
+Detection also runs automatically: a report-only check fires ~10 s after driver load and then every `Update Check Interval` hours (default 24; set 0 to disable). **Installs are always manual.** A release must exist with a tag newer than the running `DRIVER_VERSION` and an asset named exactly `proflame_wifi_connect.c4z`, or nothing is detected.
 
 ---
 
@@ -1628,6 +1641,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026061401 | 2026-06-14 | Update-detection UX. Updates are GitHub-release based (the driver's own updater), not Control4's native menu — but no release had been cut since `v2026051731` so the existing `Install Latest Release` command correctly found nothing newer. Cut release `v2026061301`, then added: a **Check for Update** command (report-only — queries the latest release and reports newer/up-to-date in `Update Status` without installing); a **Force Reinstall Latest Release** command (`forceUpdate=true`, reinstalls even when versions match, for recovery); a periodic report-only auto-check (`StartUpdateCheckTimer`/`StopUpdateCheckTimer` + `gUpdateCheckTimerId`, new `Update Check Interval (hours)` property, default 24, 0 disables) plus a one-shot check ~10 s after load; and flipped the misleading `<auto_update>true</auto_update>` to `false` (the native Control4 update menu cannot see a GitHub-distributed driver). `InstallLatestReleaseNow` gained a `force` parameter. New `Update Check Interval (hours)` is cancelled in reload cleanup and `OnDriverDestroyed`; the update timer is independent of the device connection so `Disconnect` does not stop it. |
 | 2026061301 | 2026-06-13 | Connect-attempt watchdog (issue #71). After the C1 Phase 2 cutover, the gap between `ws:Start()` and the first vendored callback had no liveness timer: the vendored ping/pong watchdog only arms after the binding goes `ONLINE`, and the one-shot reconnect timer refuses to fire while `gConnecting` is true. So a `Connect()` against an unreachable device whose `C4:NetConnect` never produced an `OFFLINE` `ConnectionChanged` left `gConnecting` stuck true forever — UI pinned at "Connecting…" with no retry. Added `StartConnectTimeoutTimer`/`StopConnectTimeoutTimer`/`OnConnectTimeout` plus a `gConnectTimeoutTimerId` global: armed in `Connect()` before `Start()`, cancelled in `OnWebSocketEstablished` (success) / `OnWebSocketOffline` (clean failure) / `Disconnect`; on expiry it forces `TeardownWebSocket(false)`, clears `gConnecting`, sets Connection Status `Disconnected`, and `ScheduleReconnect()`. New `Connect Timeout (seconds)` `RANGED_INTEGER` Composer property (min 5, max 120, default 30) mirroring `Reconnect Delay (seconds)`. Not disablable from the UI — a 0-disable would reopen the exact stuck-in-Connecting bug this fixes (Codex review of #72). Reload cleanup and `ResetDriverState` cancel the new timer. |
 | 2026060302 | 2026-06-03 | Tier C1 Phase 2: cutover to the vendored Snap One WebSocket. Deleted the 9 hand-rolled WS helpers (`GenerateWebSocketKey`, `BuildWebSocketHandshake`, `ParseHttpHeaders`, `ExpectedWebSocketAccept`, `ValidateHandshakeResponse`, `CreateWebSocketFrame`, `ParseWebSocketFrame`, `SendWebSocketMessage`, `SendPing`, `SendPong`) plus the Tier-A PROFLAMEPING infrastructure (`StartPingTimer`, `StopPingTimer`, `OnPingTimer`, `gPingTimerId`, the `Ping Interval (seconds)` Composer property). Removed the static `<connection id="6001">` TCP binding from `driver.xml` and the `NETWORK_BINDING_ID = 6001` Lua constant — the vendored `websocket.lua` now allocates the network binding dynamically (scanning 6100-6199 via `C4:GetBindingAddress`). `Connect()` builds a `ws://<ip>:<port>/` URL and calls `WebSocket:new(url)`; four new callbacks (`OnWebSocketEstablished`, `OnWebSocketMessage`, `OnWebSocketOffline`, `OnWebSocketClosedByRemote`) take over the lifecycle. Our top-level `OnConnectionStatusChanged` and `ReceivedFromNetwork` now delegate to `OCS[idBinding]` / `RFN[idBinding]` when the binding matches `gWebSocket.netBinding` so the vendored handshake and frame parsers actually run. WS-level ping/pong (opcode 0x09/0x0A, 30s interval, 10s pong response timeout) supersedes the 5s PROFLAMEPING app-protocol keepalive — the 2026-06-03 probe confirmed the device replies to RFC 6455 control frames (`tools/probes/evidence/characterize-20260603T024355Z.json` `ws_ping.ws_pong_received=true`). New `test/test_websocket_integration.lua` replays the captured 5-frame probe transcript through `OnWebSocketMessage` to assert all 79 status keys dispatch correctly. **Structural surface change** — `driver.xml` connection binding removed. |
 | 2026060301 | 2026-06-03 | Tier C1 Phase 1: vendored Snap One `drivers-common-public` `{global/lib, global/timer, global/handlers, module/metrics, module/websocket}` into `vendor/drivers-common-public/` preserving upstream subdirectory layout. Files are byte-identical to upstream master `64663d5deacaec25327418d207dc4b0e5e0f27ab`. Bundle script extended with `bundle_one_noreturn` for vendor files that register their API via top-level globals (no trailing `return`); a small `require` shim in `src/driver.lua` maps the upstream `require('drivers-common-public.…')` calls to the bundled globals so the side-effect top-level executable code in each vendor file works under the bundled single-file deployment. Phase 1 is INERT: the 9 hand-rolled WebSocket helpers in `src/driver.lua` (lines 928-1148) and the static `<connection><binding id="6001">` in `driver.xml` are unchanged; nothing in this driver calls `WebSocket:new()` yet. Phase 2 will replace the hand-rolled helpers and drop the static binding so `websocket.lua` can allocate it dynamically via `C4:CreateNetworkConnection`. |

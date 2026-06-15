@@ -39,16 +39,28 @@ function GitHubUpdater:getLatestRelease(repo, includePrereleases)
     return reject("repo name is required")
   end
   return http:get("https://api.github.com/repos/" .. repo .. "/releases", DEFAULT_HEADERS):next(function(response)
+    -- DIVERGENCE FROM TEMPLATE: scan ALL releases and return the highest parsed
+    -- version, not the first array entry. GitHub orders /releases by creation
+    -- date, not by version — so a re-published older release or an out-of-order
+    -- tag would otherwise be reported as "latest" and a real newer release
+    -- missed (Codex review of PR #73, HIGH). Picking max-version is correct
+    -- regardless of array order.
+    local best
     for _, release in pairs(response.body or {}) do
       local releaseVersion, err = version(release.tag_name)
       if IsEmpty(err) then
         if not release.draft and (toboolean(includePrereleases) or not release.prerelease) then
           release.version = releaseVersion
-          return release
+          if best == nil or release.version > best.version then
+            best = release
+          end
         end
       else
         log:warn("repo %s release '%s' has an invalid tag version '%s'", repo, release.name, release.tag_name)
       end
+    end
+    if best ~= nil then
+      return best
     end
     return reject(string.format("repo %s does not have any valid releases", repo))
   end, function(response)

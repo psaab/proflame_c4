@@ -146,4 +146,207 @@ Test.assert(
 github_updater.updateAll = original_updateAll
 UpdateUpdateStatusProperty = original_UpdateUpdateStatusProperty
 
+--------------------------------------------------------------------------------
+-- 8. Check for Update (report-only): newer release tag -> "Update available".
+--    Drives the real getLatestRelease deferred via a faked /releases response,
+--    so it exercises the version-compare path end to end without installing.
+--------------------------------------------------------------------------------
+local check_status
+UpdateUpdateStatusProperty = function(text) check_status = text end
+
+-- Compose a release tag strictly newer than the running DRIVER_VERSION by
+-- bumping the trailing 2-digit sequence (the version scheme is YYYYMMDDss).
+local newer_tag = "v" .. tostring(tonumber(DRIVER_VERSION) + 1)
+
+CheckForUpdateNow()
+Test.assertEqual(check_status, "Checking GitHub for the latest release...", "check sets initial status")
+local check_ticket
+for i, g in ipairs(_urlgets) do
+    if g.url:find("/releases$") then check_ticket = i end  -- last /releases GET
+end
+Test.assert(check_ticket, "Check for Update fired GET against /releases")
+ReceivedAsync(check_ticket, JsonEncode({
+    { tag_name = newer_tag, draft = false, prerelease = false, assets = {} }
+}), 200, {}, nil)
+Test.assert(check_status:find("Update available"), "newer release -> 'Update available'")
+Test.assert(check_status:find(newer_tag, 1, true), "message names the newer tag")
+Test.assert(check_status:find(DRIVER_VERSION, 1, true), "message names the current version")
+
+--------------------------------------------------------------------------------
+-- 9. Check for Update: latest tag == current -> "Up to date" (no install).
+--------------------------------------------------------------------------------
+check_status = nil
+CheckForUpdateNow()
+local check_ticket2
+for i, g in ipairs(_urlgets) do
+    if g.url:find("/releases$") then check_ticket2 = i end
+end
+ReceivedAsync(check_ticket2, JsonEncode({
+    { tag_name = "v" .. DRIVER_VERSION, draft = false, prerelease = false, assets = {} }
+}), 200, {}, nil)
+Test.assert(check_status:find("Up to date"), "equal tag -> 'Up to date'")
+Test.assert(check_status:find(DRIVER_VERSION, 1, true), "up-to-date message names the version")
+
+--------------------------------------------------------------------------------
+-- 10. Check for Update failure surfaces a check-specific message (and never
+--     claims an install happened).
+--------------------------------------------------------------------------------
+check_status = nil
+CheckForUpdateNow()
+local check_ticket3
+for i, g in ipairs(_urlgets) do
+    if g.url:find("/releases$") then check_ticket3 = i end
+end
+ReceivedAsync(check_ticket3, "boom", 500, {}, nil)
+Test.assert(check_status:find("Update check failed"), "5xx -> 'Update check failed'")
+Test.assert(not check_status:find("Installed"), "failed check never reports an install")
+
+UpdateUpdateStatusProperty = original_UpdateUpdateStatusProperty
+
+--------------------------------------------------------------------------------
+-- 11. Force Reinstall passes forceUpdate=true to updateAll.
+--------------------------------------------------------------------------------
+gUpdateInProgress = false
+local forced_args
+local orig_updateAll2 = github_updater.updateAll
+github_updater.updateAll = function(self, repo, files, pre, force)
+    forced_args = { repo = repo, pre = pre, force = force }
+    return deferred.new():resolve({ "proflame_wifi_connect.c4z" })
+end
+local force_status
+local orig_status_fn = UpdateUpdateStatusProperty
+UpdateUpdateStatusProperty = function(text) force_status = text end
+
+ForceReinstallLatestRelease()
+Test.assertEqual(forced_args.force, true, "Force Reinstall passes forceUpdate=true")
+Test.assertEqual(forced_args.repo, GITHUB_UPDATER_REPO, "force install targets the configured repo")
+Test.assert(force_status:find("Installed"), "force install resolves to an Installed message")
+
+github_updater.updateAll = orig_updateAll2
+UpdateUpdateStatusProperty = orig_status_fn
+
+--------------------------------------------------------------------------------
+-- 12. Periodic update-check timer: interval>0 schedules a repeating timer at
+--     hours*3600s; 0 disables; Stop cancels.
+--------------------------------------------------------------------------------
+local _utimers
+local orig_SetTimer2 = C4.SetTimer
+function C4:SetTimer(delay_ms, fn, repeating)
+    local handle = { delay_ms = delay_ms, fn = fn, repeating = repeating, cancelled = false }
+    handle.Cancel = function(self) self.cancelled = true end
+    table.insert(_utimers, handle)
+    return handle
+end
+
+_utimers = {}
+gUpdateCheckTimerId = nil
+Properties["Update Check Interval (hours)"] = "24"
+StartUpdateCheckTimer()
+Test.assertEqual(#_utimers, 1, "interval=24 schedules one timer")
+Test.assertEqual(_utimers[1].delay_ms, 24 * 60 * 60 * 1000, "interval is 24h in ms")
+Test.assertEqual(_utimers[1].repeating, true, "update-check timer repeats")
+
+-- 0 disables and stops any existing timer.
+_utimers = {}
+local prev = gUpdateCheckTimerId
+Properties["Update Check Interval (hours)"] = "0"
+StartUpdateCheckTimer()
+Test.assertEqual(#_utimers, 0, "interval=0 schedules no timer")
+Test.assert(prev.cancelled, "switching to 0 cancels the previous timer")
+Test.assertEqual(gUpdateCheckTimerId, nil, "handle cleared when disabled")
+
+-- StopUpdateCheckTimer is idempotent on nil.
+StopUpdateCheckTimer()
+Test.assertEqual(gUpdateCheckTimerId, nil, "Stop idempotent on nil")
+
+C4.SetTimer = orig_SetTimer2
+
+--------------------------------------------------------------------------------
+-- 13. ExecuteCommand dispatch wiring for the three update commands. Guards the
+--     elseif/return-true control flow (each must invoke its function AND return
+--     true, not fall through to the "Unhandled ExecuteCommand" error path).
+--------------------------------------------------------------------------------
+local dispatched
+local orig_install = InstallLatestReleaseNow
+local orig_check = CheckForUpdateNow
+local orig_force = ForceReinstallLatestRelease
+InstallLatestReleaseNow = function() dispatched = "install" end
+CheckForUpdateNow = function() dispatched = "check" end
+ForceReinstallLatestRelease = function() dispatched = "force" end
+
+dispatched = nil
+Test.assertEqual(ExecuteCommand("Install Latest Release", {}), true, "Install Latest Release returns true")
+Test.assertEqual(dispatched, "install", "Install Latest Release dispatched")
+
+dispatched = nil
+Test.assertEqual(ExecuteCommand("Check for Update", {}), true, "Check for Update returns true")
+Test.assertEqual(dispatched, "check", "Check for Update dispatched")
+
+dispatched = nil
+Test.assertEqual(ExecuteCommand("Force Reinstall Latest Release", {}), true, "Force Reinstall returns true")
+Test.assertEqual(dispatched, "force", "Force Reinstall dispatched")
+
+InstallLatestReleaseNow = orig_install
+CheckForUpdateNow = orig_check
+ForceReinstallLatestRelease = orig_force
+
+--------------------------------------------------------------------------------
+-- 14. getLatestRelease picks the HIGHEST-versioned release, not the first array
+--     entry (Codex HIGH). Deliver releases out of creation order and assert the
+--     newest tag wins, surfaced through CheckForUpdateNow.
+--------------------------------------------------------------------------------
+local maxver_status
+UpdateUpdateStatusProperty = function(text) maxver_status = text end
+local base = tonumber(DRIVER_VERSION)
+local older_tag  = "v" .. tostring(base - 1)
+local newest_tag = "v" .. tostring(base + 5)
+local middle_tag = "v" .. tostring(base + 2)
+
+CheckForUpdateNow()
+local mv_ticket
+for i, g in ipairs(_urlgets) do
+    if g.url:find("/releases$") then mv_ticket = i end
+end
+-- Newest is deliberately NOT first in the array.
+ReceivedAsync(mv_ticket, JsonEncode({
+    { tag_name = older_tag,  draft = false, prerelease = false, assets = {} },
+    { tag_name = newest_tag, draft = false, prerelease = false, assets = {} },
+    { tag_name = middle_tag, draft = false, prerelease = false, assets = {} },
+}), 200, {}, nil)
+Test.assert(maxver_status:find("Update available"), "out-of-order array still finds an update")
+Test.assert(maxver_status:find(newest_tag, 1, true),
+    "highest-versioned tag (" .. newest_tag .. ") selected, not array-first")
+Test.assert(not maxver_status:find(older_tag, 1, true), "did not report the older first-in-array tag")
+
+-- A draft/prerelease newest must be ignored in favor of the highest stable.
+maxver_status = nil
+CheckForUpdateNow()
+local mv_ticket2
+for i, g in ipairs(_urlgets) do
+    if g.url:find("/releases$") then mv_ticket2 = i end
+end
+ReceivedAsync(mv_ticket2, JsonEncode({
+    { tag_name = "v" .. tostring(base + 9), draft = true,  prerelease = false, assets = {} },
+    { tag_name = "v" .. tostring(base + 8), draft = false, prerelease = true,  assets = {} },
+    { tag_name = newest_tag,                draft = false, prerelease = false, assets = {} },
+}), 200, {}, nil)
+Test.assert(maxver_status:find(newest_tag, 1, true),
+    "draft/prerelease higher tags ignored; highest STABLE selected")
+
+UpdateUpdateStatusProperty = original_UpdateUpdateStatusProperty
+
+--------------------------------------------------------------------------------
+-- 15. CheckForUpdateNow is a no-op while an install is in progress (Codex
+--     MEDIUM): it must not fire a request or overwrite the install's status.
+--------------------------------------------------------------------------------
+local guard_status = "(install message)"
+UpdateUpdateStatusProperty = function(text) guard_status = text end
+local urlgets_before = #_urlgets
+gUpdateInProgress = true
+CheckForUpdateNow()
+Test.assertEqual(#_urlgets, urlgets_before, "in-progress check fires no GitHub request")
+Test.assertEqual(guard_status, "(install message)", "in-progress check does not overwrite Update Status")
+gUpdateInProgress = false
+UpdateUpdateStatusProperty = original_UpdateUpdateStatusProperty
+
 print("test_github_updater OK")
