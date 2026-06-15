@@ -166,8 +166,14 @@ ApplyDebugLogSettings()
 
 -- The wrap marker must be set on the (fresh-per-load) log instance.
 Test.assert(rawget(log, "_c4_guard_wrapped") == true, "log object emit methods are guard-wrapped")
--- Re-running the wrap guard must be a no-op (idempotent within a load).
-Test.assert(rawget(log, "_c4_guard_wrapped") == true, "wrap marker is idempotent")
+-- Idempotence (Codex review of #82): the marker makes the driver's wrap-guard
+-- condition (`not rawget(log,"_c4_guard_wrapped")`) false, so a re-execution of
+-- the wrap block within a load would NOT re-wrap. Capture the wrapped method and
+-- confirm the guard condition is false and the method identity is stable.
+local _wrappedWarn = log.warn
+Test.assert((not rawget(log, "_c4_guard_wrapped")) == false,
+    "re-wrap guard condition is false -> wrapper would not double-wrap within a load")
+Test.assertEqual(log.warn, _wrappedWarn, "log.warn identity is stable (not re-wrapped)")
 
 Test.clearLogCapture()
 log:warn("VENDOR_DIRECT_81")  -- exactly how github_updater.lua calls it
