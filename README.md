@@ -69,9 +69,10 @@ The driver strictly validates the upgrade response per RFC 6455 §4.2.2 — stat
 **Compatibility note:** the removal in version `2026060108` flipped default-Off installs (the majority) from lenient-101 fallback to strict-only validation. This is a deliberate tradeoff backed by the probe evidence on `FW: 625.04.673` — older or non-standard firmware variants that returned a non-compliant 101 would have been silently accepted before that version and will now refuse to connect. If a deployment regresses against an unverified firmware revision, re-run `tools/probes/handshake_and_ping.py` to confirm strict compliance before deploying the driver to that controller.
 
 ### Keep-Alive Protocol
-- **Ping Message**: `PROFLAMEPING` (sent every 5 seconds)
-- **Pong Response**: `PROFLAMEPONG` (device responds)
+- **WebSocket Ping/Pong**: RFC 6455 control frames (opcode `0x09`/`0x0A`), handled by the vendored Snap One WebSocket module (30s interval). The hand-rolled app-level `PROFLAMEPING`/`PROFLAMEPONG` keepalive was removed in C1 Phase 2.
 - **Connection Request**: `PROFLAMECONNECTION` (triggers full status dump)
+
+> Note: the device does not spontaneously emit `PROFLAMEPONG` (the 2026-06-02 probe saw 0 frames in a 10s silent window), so the old read-only "Last Ping Response" Composer property was dead UI and was removed in `2026061502` (#70). Any stray `PROFLAMEPONG` echo is still swallowed so it is not logged as an unknown frame.
 
 ### Command Format
 **CRITICAL**: JSON commands must have NO SPACES after colons or commas. The device silently ignores malformed commands.
