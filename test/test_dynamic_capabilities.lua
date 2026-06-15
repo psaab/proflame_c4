@@ -28,7 +28,9 @@ Test.assertEqual(
 Test.assertEqual(caps.HAS_EXTRAS, "true", "HAS_EXTRAS retained")
 Test.assertEqual(caps.CAN_PRESET, "False", "CAN_PRESET retained")
 Test.assertEqual(caps.CAN_PRESET_SCHEDULE, "False", "CAN_PRESET_SCHEDULE retained")
-Test.assert(caps.HOLD_MODES ~= nil, "HOLD_MODES retained")
+-- Assert the actual value (not just presence) so a regression that blanks or
+-- alters a surviving key is caught too (Codex review of #76, LOW nit).
+Test.assertEqual(caps.HOLD_MODES, "Low Flame,Medium Flame,High Flame", "HOLD_MODES retained")
 Test.assertEqual(caps.FAN_MODES, "Off,Low,Medium,High", "FAN_MODES retained")
 
 --------------------------------------------------------------------------------
