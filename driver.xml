@@ -97,12 +97,6 @@
         <readonly>true</readonly>
       </property>
       <property>
-        <name>Last Ping Response</name>
-        <type>STRING</type>
-        <default/>
-        <readonly>true</readonly>
-      </property>
-      <property>
         <name>Operating Mode</name>
         <type>STRING</type>
         <default/>
