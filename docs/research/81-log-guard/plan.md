@@ -1,8 +1,15 @@
 # Plan-of-action — #81: vendored direct `log:*` calls bypass the print-shadow re-entrancy guard
 
 - **Issue:** #81 (cosmetic double-log: vendored module log lines appear as `[DEBUG]: …[WARN ]: …`)
-- **Revision:** r1
+- **Revision:** r2 (addresses Codex plan-review PLAN-REVISE)
 - **Branch:** `fix/81-log-guard-vendored`
+
+## r2 changelog (from Codex hostile plan-review)
+1. Coverage corrected: the **only** vendored direct `log:*` caller is `vendor/github_updater.lua` (lines 37, 59, 78, 134, 165, 185). `websocket.lua` and `metrics.lua` use bare `print(...)`, which already routes through the shadow → `dbg_debug` (gated, single — intended). Not offenders.
+2. Recommendation flipped to **Option A (additive)** — keep `_guarded_log` (retains its nil/pcall safety + the #77/#79-tested `dbg_*` path); just add the log-method wrapper for the vendored case. Lower risk for a cosmetic fix.
+3. Wrapper teardown uses **restore-previous-value** (not unconditional `false`) so nesting (dbg_* → `_guarded_log` sets guard → wrapped `log:level`) is correct and future-proof.
+4. Wrap list completed to every emit method: `fatal, error, warn, info, debug, trace, ultra, log, print`.
+5. R4 corrected: no confirmed load-time `log:*` offender (`Metrics:new` does not log); only a theoretical residual window remains.
 
 ## 1. Problem statement
 
@@ -25,43 +32,48 @@ The guard is attached to the **wrong layer**: `_guarded_log` only wraps the driv
 
 ## 4. Design — path options
 
-### Option A (additive, lowest diff)
-Keep `_guarded_log` and `dbg_*` exactly as-is. Additionally wrap the `log` object's level methods to also set `_c4_in_logger`. Vendored direct calls are now covered.
-- Pros: does not touch the #77/#79-tested `dbg_*` path; smallest diff.
-- Cons: two mechanisms set the same flag (redundant); a reviewer will rightly flag the duplication; `dbg_*` calls set the flag twice (nested, harmless).
+### Option A (additive — RECOMMENDED)
+Keep `_guarded_log` and `dbg_*` exactly as-is (preserving their nil/pcall safety and the #77/#79-tested path). Additionally wrap the `log` object's emit methods so each ALSO sets `_c4_in_logger` (restore-previous-value). This extends guard coverage to the vendored `github_updater.lua` direct `log:*` calls.
+- Pros: does not touch the tested `dbg_*`/`_guarded_log` path; retains nil/pcall safety; smallest behavioral risk.
+- Cons: for `dbg_*` calls both `_guarded_log` and the wrapper set the flag — but with restore-previous-value this is a harmless no-op (prev already true). Documented as intentional defense-in-depth, not a bug.
 
-### Option B (single mechanism — RECOMMENDED)
-Move the guard entirely to the `log` object. Wrap `log.error/warn/info/debug/trace/fatal/log` so each sets `_c4_in_logger` around the real method (pcall-protected). Revert `dbg_*` to direct `log:level(...)` calls and **remove `_guarded_log`**. The wrapper is the single guard point covering both driver and vendored callers.
-- Pros: one mechanism, complete coverage, net-simpler end state, no redundancy.
-- Cons: touches the `dbg_*` bodies (reverting #77's `_guarded_log` indirection) — but the #77/#79 behavioral invariants are preserved by the wrapper and re-asserted by the existing tests.
+### Option B (single mechanism — REJECTED for this fix)
+Remove `_guarded_log`, revert `dbg_*` to direct `log:level(...)`, make the wrapper the sole guard.
+- Cleaner end state, BUT Codex flagged it trades away `_guarded_log`'s nil/pcall crash-safety (`src/driver.lua:466-472`) for early-init `dbg_*` calls. For a **cosmetic** fix that risk isn't worth it. Deferred as possible future cleanup, not part of #81.
 
-**Recommendation: Option B.** #77's `_guarded_log` was an incomplete fix (covered only our calls); the proper layer is the log object, which subsumes it. The end state is simpler and complete.
+**Recommendation: Option A.** Lowest-risk path that fully closes #81; keeps the proven #77/#79 logging path intact.
 
-### Wrapper sketch (Option B), placed right after the logging bundle sets up `log`:
+### Wrapper sketch (Option A), placed right after the load-time `log:setLogLevel(...)`:
 ```lua
--- #81: set the print-shadow re-entrancy guard at the log object so EVERY log
--- call (driver dbg_* AND vendored modules' direct log:warn/info/etc.) marks
--- _c4_in_logger, ensuring the logger's console-mirror print() lands in the
--- shadow's pass-through branch instead of being re-routed through dbg_debug
--- (which double-prefixed vendored lines "[DEBUG]: [WARN]..."). `log` is a fresh
--- Log:new() on every chunk load (incl. reload), so each load wraps a clean
--- object; the rawset marker guards against re-wrapping within one load.
+-- #81: also set the print-shadow re-entrancy guard at the log OBJECT so any
+-- caller that bypasses dbg_*/_guarded_log — notably vendored modules that call
+-- log:warn/info/etc. DIRECTLY (vendor/github_updater.lua) — still marks
+-- _c4_in_logger. Then the logger's console-mirror print() lands in the shadow's
+-- pass-through branch instead of being re-routed through dbg_debug (which
+-- double-prefixed vendored lines "[DEBUG]: [WARN]..."). `log` is a fresh
+-- Log:new() on every chunk load (incl. Control4 hot reload), so each load wraps
+-- a clean instance; the rawset marker guards against re-wrapping within a load.
+-- restore-previous-value (not a bare `= false`) keeps nesting correct, e.g.
+-- dbg_info -> _guarded_log (sets guard) -> wrapped log:info (keeps it set).
 if log and not rawget(log, "_c4_guard_wrapped") then
     rawset(log, "_c4_guard_wrapped", true)
-    for _, _lvl in ipairs({ "error", "warn", "info", "debug", "trace", "fatal", "log" }) do
+    for _, _lvl in ipairs({ "fatal", "error", "warn", "info", "debug", "trace", "ultra", "log", "print" }) do
         local _orig = log[_lvl]
         if type(_orig) == "function" then
             log[_lvl] = function(self, ...)
+                local _prev = _c4_in_logger
                 _c4_in_logger = true
                 local _ok, _err = pcall(_orig, self, ...)
-                _c4_in_logger = false
-                if not _ok then _c4_print("Proflame log error: " .. tostring(_err)) end
+                _c4_in_logger = _prev
+                if not _ok and type(_c4_print) == "function" then
+                    _c4_print("Proflame log error: " .. tostring(_err))
+                end
             end
         end
     end
 end
 ```
-`dbg_*` simplify back to e.g. `function dbg_warn(msg) log:warn("%s", tostring(msg)) end`.
+`_guarded_log` and `dbg_*` are UNCHANGED.
 
 ## 5. Ordering / reload safety
 
@@ -73,9 +85,10 @@ end
 
 - **R1: double-wrap within a load** → guarded by the `rawget` marker.
 - **R2: regression of #77 (ordinary `dbg_info` logs once) / #79 (reload `_c4_print`)** → preserved: `dbg_info → log:info(wrapped, guard set) → mirror → shadow pass-through → one entry`. Re-asserted by `test_print_redirect.lua` §6/§7 (must stay green).
-- **R3: a vendored module that captured a bare function ref (`local w = log.warn`) before wrap would bypass** → none found; vendored code calls via the object (`log:warn`). Note as a residual.
-- **R4: load-time vendored log calls before the wrap (e.g. `Metrics:new`)** → those happen during bundle execution before the wrap; they'd still double-log at load only. Minor / acceptable; the offenders (#81's examples) are runtime.
+- **R3: a vendored module that captured a bare function ref (`local w = log.warn`) before wrap would bypass** → grep confirms NONE; the only vendored `local log = log` alias (`github_updater.lua:8`) calls via the object (`log:warn`), so method lookup is dynamic through the wrapped instance. Residual only if a future upstream sync adds a bare-ref capture.
+- **R4: load-time vendored `log:*` before the wrap** → **no confirmed case** (Codex: `handlers.lua` calls `Metrics:new` at load but `Metrics:new` does not log; `github_updater`'s `log:*` calls are all inside methods invoked at runtime). Only a theoretical residual window remains; accepted.
 - **R5: performance** → one pcall per log call; negligible.
+- **R6: wrapper return value** → the wrapped emit methods (`warn/info/...`/`_log`) return nothing meaningful and no caller uses their return; the wrapper intentionally returns nothing. (Non-emit methods like `getLogLevel` are NOT wrapped.)
 
 ## 7. Test plan
 
@@ -100,4 +113,4 @@ Single-file change in `src/driver.lua` (+ test + version/docs). Revert the commi
 
 ## 11. Recommendation
 
-Ship **Option B** (single guard at the log object; remove `_guarded_log`). It fully closes #81, is reload-safe by construction (fresh per-load object), and leaves a simpler logging path than the current #77 state.
+Ship **Option A** (additive log-object wrapper; keep `_guarded_log`). It fully closes #81 (the `github_updater.lua` direct `log:*` double-log), is reload-safe by construction (fresh per-load `Log:new()` instance + marker), uses restore-previous-value for correct nesting, and leaves the proven #77/#79 `dbg_*` path untouched — the lowest-risk path for a cosmetic fix. The single-mechanism Option B is deferred as optional future cleanup (it would trade away `_guarded_log`'s nil/pcall safety).
