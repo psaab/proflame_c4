@@ -379,4 +379,59 @@ Test.assertEqual(guard_status, "(install message)", "in-progress check does not 
 gUpdateInProgress = false
 UpdateUpdateStatusProperty = original_UpdateUpdateStatusProperty
 
+--------------------------------------------------------------------------------
+-- 16. http_client follows 3xx redirects (C4:urlGet does not). GitHub release
+--     asset URLs 302-redirect to storage; without following, the download fails
+--     with "status 302" and the install reports "unknown error".
+--------------------------------------------------------------------------------
+local rdir = http_client:get("https://example.com/releases/download/asset.c4z")
+local t1 = #_urlgets
+Test.assertEqual(_urlgets[t1].url, "https://example.com/releases/download/asset.c4z", "initial request fired")
+-- Deliver a 302 with a Location header; the client must auto-issue a 2nd GET.
+ReceivedAsync(t1, "", 302, { Location = "https://storage.example.com/real-asset.c4z" }, nil)
+local t2 = #_urlgets
+Test.assertEqual(t2, t1 + 1, "302 triggered a follow-up request")
+Test.assertEqual(_urlgets[t2].url, "https://storage.example.com/real-asset.c4z", "followed the Location URL")
+local rdir_result
+rdir:next(function(r) rdir_result = r end, function(e) rdir_result = { error = e and e.error } end)
+ReceivedAsync(t2, "REAL_ASSET_BYTES", 200, {}, nil)
+Test.assert(rdir_result ~= nil, "redirect chain settled")
+Test.assertEqual(rdir_result.body, "REAL_ASSET_BYTES", "resolved with the final (post-redirect) body")
+
+-- Lower-case header key must also be honored.
+local rdir2 = http_client:get("https://example.com/a")
+local u1 = #_urlgets
+ReceivedAsync(u1, "", 301, { location = "https://example.com/b" }, nil)
+Test.assertEqual(_urlgets[#_urlgets].url, "https://example.com/b", "case-insensitive Location header followed")
+local rdir2_result
+rdir2:next(function(r) rdir2_result = r end, function(e) rdir2_result = { error = e and e.error } end)
+ReceivedAsync(#_urlgets, "B", 200, {}, nil)
+Test.assertEqual(rdir2_result.body, "B", "lowercase-location redirect resolved")
+
+-- A 3xx with no Location header must reject with a clear reason (not hang).
+local rdir3 = http_client:get("https://example.com/noloc")
+local n1 = #_urlgets
+local rdir3_result
+rdir3:next(function(r) rdir3_result = { body = r.body } end, function(e) rdir3_result = { error = e.error } end)
+ReceivedAsync(n1, "", 302, {}, nil)
+Test.assert(rdir3_result and rdir3_result.error, "3xx without Location rejects")
+Test.assert(rdir3_result.error:find("no Location header"), "reason names the missing Location header")
+
+--------------------------------------------------------------------------------
+-- 17. DescribeUpdaterError flattens every rejection shape so the real cause is
+--     never lost as "unknown error" (the deferred.all numeric-table case was
+--     what produced the user's "InstallLatestReleaseNow: failed - unknown error").
+--------------------------------------------------------------------------------
+Test.assertEqual(DescribeUpdaterError("boom"), "boom", "string passes through")
+Test.assertEqual(DescribeUpdaterError({ error = "oops" }), "oops", "{error=...} table unwrapped")
+Test.assertEqual(
+    DescribeUpdaterError({ [1] = "HTTP GET x status 302" }),
+    "HTTP GET x status 302",
+    "numeric-indexed (deferred.all) table flattened")
+local joined = DescribeUpdaterError({ [1] = { error = "a" }, [2] = { error = "b" } })
+Test.assert(joined:find("a", 1, true) and joined:find("b", 1, true),
+    "numeric table of {error=...} entries joined")
+Test.assert(DescribeUpdaterError(nil):find("unknown error", 1, true),
+    "nil falls back to a non-crashing 'unknown error'")
+
 print("test_github_updater OK")
