@@ -138,6 +138,19 @@ _c4_print = _c4_print or print
 Test.assert(_c4_print == _builtin_print, "reload capture idiom keeps the real builtin")
 Test.assert(_c4_print ~= print, "still the real builtin after a simulated reload capture")
 
+-- Source-level guard (Codex review of #79): the runtime invariant above can't
+-- distinguish the idempotent capture from an unconditional `_c4_print = print`
+-- on a single load (both capture the builtin the first time). Assert the source
+-- of truth actually uses the reload-safe idiom so a regression is caught without
+-- a hang-prone dofile-twice.
+local _srcFile = io.open("src/driver.lua", "r")
+if _srcFile then
+    local _src = _srcFile:read("*a")
+    _srcFile:close()
+    Test.assert(_src:find("_c4_print = _c4_print or print", 1, true) ~= nil,
+        "src/driver.lua uses the idempotent reload-safe print capture")
+end
+
 -- Use the captured builtin so this status line is not itself swallowed by the
 -- shadow under the test's gating.
 _builtin_print("test_print_redirect: all assertions passed")
