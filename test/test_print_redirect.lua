@@ -115,6 +115,29 @@ end
 Test.assertEqual(markerCount, 1,
     "ordinary dbg_info() logs exactly once (no logger-mirror re-route through dbg_debug)")
 
+--------------------------------------------------------------------------------
+-- 7. Reload safety: `_c4_print` must hold the REAL builtin print, never the
+--    shadow. Control4 re-runs the whole driver chunk on a hot reload (driver
+--    update / controller restart); `_c4_print` and `print` are globals that
+--    survive. If the capture were `_c4_print = print` (unconditional), the 2nd
+--    load would capture the shadow itself and the shadow's pass-through
+--    (`return _c4_print(...)`) would tail-call into itself forever — an infinite
+--    loop that wedges ALL logging until a power cycle (symptom: "debug logging
+--    stops working and toggling Debug Level won't bring it back"). The fix is
+--    the idempotent `_c4_print = _c4_print or print`. `_builtin_print` here is
+--    the genuine builtin captured at the top of this file, before driver.lua
+--    loaded.
+--------------------------------------------------------------------------------
+Test.assert(print ~= _builtin_print, "global print is the shadow after load")
+Test.assert(_c4_print == _builtin_print, "_c4_print captured the REAL builtin print")
+Test.assert(_c4_print ~= print, "_c4_print is NOT the shadow (pass-through can't recurse)")
+
+-- Re-run the exact capture idiom driver.lua executes on reload and confirm it
+-- keeps the real builtin instead of recapturing the (now-installed) shadow.
+_c4_print = _c4_print or print
+Test.assert(_c4_print == _builtin_print, "reload capture idiom keeps the real builtin")
+Test.assert(_c4_print ~= print, "still the real builtin after a simulated reload capture")
+
 -- Use the captured builtin so this status line is not itself swallowed by the
 -- shadow under the test's gating.
 _builtin_print("test_print_redirect: all assertions passed")
