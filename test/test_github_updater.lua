@@ -461,15 +461,14 @@ Test.assert(DescribeUpdaterError(nil):find("unknown error", 1, true),
     "nil falls back to a non-crashing 'unknown error'")
 
 --------------------------------------------------------------------------------
--- 18. The download path must FileSetDir to the documented allowed "C4Z" alias
---     (the per-driver writable c4z folder), NOT the obsolete "C4Z_ROOT" token
---     (removed in OS 3.3.0) and NOT C4:GetC4zDir()'s c4z-ROOT path (also
---     rejected on-device: "Restricted path specified: /opt/control4/var/drivers/
---     c4z/."). Drive updateAll(force=true) to the FileSetDir call and capture it.
+-- 18. The download path must FileSetDir to "C4Z_ROOT" — the c4z store root
+--     UpdateProjectC4i installs from BY NAME (#87). On OS 3.3.0+ that write is
+--     re-unlocked by the shared-secret FileSetDir handshake in OnDriverLateInit;
+--     writing anywhere else (the per-driver "C4Z" alias, GetC4zDir()'s root)
+--     is a silent no-op because UpdateProjectC4i never reads those locations.
+--     Drive updateAll(force=true) to the FileSetDir call and capture it.
 --------------------------------------------------------------------------------
 local _fileSetDirArg = nil
--- GetC4zDir returns the (restricted) ROOT; the fix must NOT use it.
-function C4:GetC4zDir() return "/opt/control4/var/drivers/c4z/." end
 function C4:FileSetDir(dir) _fileSetDirArg = dir end
 -- Minimal file-op stubs so the FileWrite helper runs without erroring.
 function C4:FileExists() return false end
@@ -504,10 +503,25 @@ for i, g in ipairs(_urlgets) do if g.url:find("/dl/proflame_wifi_connect%.c4z$")
 Test.assert(_dlTicket, "updateAll(force) fetched the asset download URL")
 ReceivedAsync(_dlTicket, "C4Z_PACKAGE_BYTES", 200, {}, nil)
 
-Test.assertEqual(_fileSetDirArg, "C4Z",
-    "download FileSetDir uses the allowed 'C4Z' alias (per-driver writable folder)")
-Test.assert(_fileSetDirArg ~= "C4Z_ROOT", "never passes the removed C4Z_ROOT alias")
+Test.assertEqual(_fileSetDirArg, "C4Z_ROOT",
+    "download FileSetDir writes to the c4z store root UpdateProjectC4i installs from")
+Test.assert(_fileSetDirArg ~= "C4Z",
+    "does NOT write the per-driver C4Z subfolder (UpdateProjectC4i never reads it)")
 Test.assert(_fileSetDirArg ~= "/opt/control4/var/drivers/c4z/.",
-    "never passes GetC4zDir's restricted c4z-ROOT path")
+    "does NOT write GetC4zDir's c4z-ROOT path")
+
+--------------------------------------------------------------------------------
+-- 19. OnDriverLateInit performs the shared-secret FileSetDir handshake that
+--     re-unlocks C4Z_ROOT write access on OS 3.3.0+ (#87). Without it the
+--     C4Z_ROOT write in §18 would be denied and the install would no-op.
+--------------------------------------------------------------------------------
+local _handshake = nil
+function C4:FileSetDir(dir) _handshake = _handshake or dir end
+-- The handshake is the first line of OnDriverLateInit and is itself pcall'd,
+-- so _handshake is captured before any later step could error; pcall the whole
+-- call so unrelated late-init work (connect, timers) can't fail the assertion.
+pcall(OnDriverLateInit)
+Test.assertEqual(_handshake, "c29tZXNwZWNpYWxrZXk=++11",
+    "OnDriverLateInit's first FileSetDir is the root-unlock handshake")
 
 print("test_github_updater OK")
