@@ -12,7 +12,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061601"
+DRIVER_VERSION = "2026061602"
 DRIVER_DATE = "2026-06-16"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
@@ -3884,6 +3884,11 @@ function FileRead(filename)
     return content
 end
 
+-- NOTE: this lib_helpers FileWrite is SHADOWED at runtime by the
+-- drivers-common-public global/lib.lua FileWrite (bundled later), which
+-- discards C4:FileWrite's result and returns nothing. So the updater must not
+-- trust FileWrite's return value to detect a failed write — github_updater.lua
+-- verifies the write landed by re-reading instead (#87 / Codex review).
 function FileWrite(filename, content, overwrite)
     content = tostring(content) or ""
     local pos = 0
@@ -4320,14 +4325,47 @@ function GitHubUpdater:downloadOutdatedDrivers(dir, repo, driverFilenames, inclu
         if downloadSize < 1 then
           return reject(string.format("asset %s download is empty", asset.name))
         end
-        C4:FileSetDir(dir)
-        local currentContents = C4:FileExists(asset.name) and FileRead(asset.name) or nil
-        if FileWrite(asset.name, response.body, true) == -1 then
-          -- Restore the previous contents if the write failed
-          if currentContents ~= nil then
-            FileWrite(asset.name, currentContents, true)
+        -- Switch to the c4z store ROOT and FAIL LOUDLY if that's denied (AGY
+        -- review). On OS 3.3.0+ a denied FileSetDir throws ("Restricted path
+        -- specified"); the OnDriverLateInit handshake is what unlocks it. If we
+        -- didn't guard this, a denial would leave the active dir at a writable
+        -- sandbox, the write + size-verify below would both pass against THAT
+        -- dir, and we'd trigger UpdateProjectC4i — which reads C4Z_ROOT and
+        -- reinstalls the unchanged old .c4z (the exact silent no-op). Guarding
+        -- here also means the delete-then-write never runs on a denial, so the
+        -- installed root .c4z is left intact. Mirrors the frigate reference.
+        local okSetDir = pcall(function() C4:FileSetDir(dir) end)
+        if not okSetDir then
+          return reject(string.format(
+            "FileSetDir(%s) denied — the C4Z_ROOT write handshake is not active; cannot install %s",
+            tostring(dir), asset.name))
+        end
+        FileWrite(asset.name, response.body, true)
+        -- Do NOT trust FileWrite's return value: the drivers-common-public
+        -- global FileWrite (which shadows lib_helpers') discards C4:FileWrite's
+        -- result, so a partial/failed write returns "success". Verify the write
+        -- actually landed by checking the ON-DISK SIZE (#87) — a number, so no
+        -- binary-read marshalling concerns (a length compare of the re-read
+        -- binary .c4z could false-reject a good write, breaking updates the
+        -- other way). The handle is closed OUTSIDE the pcall so a throw in
+        -- FileGetSize can't leak it (AGY review).
+        local persistedSize = nil
+        local f = nil
+        pcall(function()
+          if C4:FileExists(asset.name) then
+            f = C4:FileOpen(asset.name)
+            if f ~= nil and f ~= -1 then
+              persistedSize = C4:FileGetSize(f)
+            end
           end
-          return reject(string.format("failed to download asset %s", asset.name))
+        end)
+        if f ~= nil and f ~= -1 then
+          pcall(function() C4:FileClose(f) end)
+        end
+        if persistedSize ~= downloadSize then
+          return reject(string.format(
+            "failed to write asset %s to %s (on-disk %s vs %d bytes)",
+            asset.name, tostring(dir), tostring(persistedSize), downloadSize))
         end
         log:info("Downloaded asset %s (%d bytes)", asset.name, downloadSize)
         return asset.name
@@ -4358,19 +4396,21 @@ function GitHubUpdater:updateAll(repo, driverFilenames, includePrereleases, forc
     end
   end
 
-  -- DIVERGENCE FROM TEMPLATE: the upstream control4-driver-template passes the
-  -- literal "C4Z_ROOT" to C4:FileSetDir. That was the old root-of-the-c4z-store
-  -- alias, REMOVED in OS 3.3.0's FileSetDir security tightening — on 3.3.0+ it
-  -- fails with "Restricted path specified: C4Z_ROOT".
+  -- Write the downloaded .c4z to the c4z store ROOT ("C4Z_ROOT"), exactly as
+  -- the upstream control4-driver-template does. UpdateProjectC4i (below)
+  -- installs the .c4z from that root BY NAME, so the file must land there.
   --
-  -- Per the DriverWorks FileSetDir docs the ALLOWED aliases are SANDBOX/LOGGING/
-  -- MEDIA/C4Z, where "C4Z" -> /opt/control4/var/drivers/c4z/<driver_name> (this
-  -- driver's own, writable c4z folder). NOTE: C4:GetC4zDir() returns the c4z
-  -- ROOT (/opt/control4/var/drivers/c4z/.), which is NOT writable by a sandboxed
-  -- driver — on-device that path was ALSO rejected ("Restricted path specified:
-  -- /opt/control4/var/drivers/c4z/."). So we use the documented "C4Z" ALIAS,
-  -- the allowed per-driver location, not GetC4zDir's root path.
-  local c4zDir = "C4Z"
+  -- OS 3.3.0+ tightened FileSetDir and removed root write access for unsigned
+  -- community drivers, which made "C4Z_ROOT" fail with "Restricted path
+  -- specified". The #83/#85 workarounds chased that error by writing to the
+  -- per-driver "C4Z" alias (/opt/control4/var/drivers/c4z/<driver_name>) and to
+  -- GetC4zDir() — but UpdateProjectC4i never reads those locations, so the
+  -- install silently reloaded the OLD version (confirmed on-device 2026-06-16).
+  -- The correct fix is NOT a different write path: it's the shared-secret
+  -- FileSetDir handshake done in OnDriverLateInit (#87), which re-unlocks root
+  -- access so this "C4Z_ROOT" write works again — the proven pattern used by
+  -- every other self-updating community driver (finitelabs, black-ops, et al.).
+  local c4zDir = "C4Z_ROOT"
   return self
     :downloadOutdatedDrivers(c4zDir, repo, installedDriverFilenames, includePrereleases, forceUpdate)
     :next(function(downloadedDriverFilenames)
@@ -10544,6 +10584,20 @@ function ReceivedAsync(ticket, body, responseCode, headers, err)
 end
 
 function OnDriverLateInit()
+    -- Shared-secret FileSetDir handshake (#87). On OS 3.3.0+, FileSetDir is
+    -- restricted to the allow-listed aliases (SANDBOX/LOGGING/MEDIA/C4Z) for
+    -- unsigned community drivers — including loss of write access to the c4z
+    -- store ROOT. This one-time handshake re-unlocks legacy root FileSetDir
+    -- access for the rest of this driver load, which the self-updater needs:
+    -- UpdateProjectC4i installs the downloaded .c4z from C4Z_ROOT by name, so
+    -- the file MUST be written there (not the per-driver C4Z subfolder, which
+    -- UpdateProjectC4i never reads — that mismatch is why prior installs were
+    -- silent no-ops that just reloaded the old version). The literal key is
+    -- the established community-standard unlock string, used verbatim by many
+    -- self-updating C4 drivers (finitelabs, black-ops-drivers, et al.). Must
+    -- precede any C4Z_ROOT file op; harmless if the restriction isn't present.
+    pcall(function() C4:FileSetDir("c29tZXNwZWNpYWxrZXk=++11") end)
+
     -- Re-apply debug log mode/level from Composer properties; the top-level
     -- log:setLogName/Mode/Level above set the defaults used during driver load.
     ApplyDebugLogSettings()

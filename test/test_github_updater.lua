@@ -461,23 +461,27 @@ Test.assert(DescribeUpdaterError(nil):find("unknown error", 1, true),
     "nil falls back to a non-crashing 'unknown error'")
 
 --------------------------------------------------------------------------------
--- 18. The download path must FileSetDir to the documented allowed "C4Z" alias
---     (the per-driver writable c4z folder), NOT the obsolete "C4Z_ROOT" token
---     (removed in OS 3.3.0) and NOT C4:GetC4zDir()'s c4z-ROOT path (also
---     rejected on-device: "Restricted path specified: /opt/control4/var/drivers/
---     c4z/."). Drive updateAll(force=true) to the FileSetDir call and capture it.
+-- 18. The download path must FileSetDir to "C4Z_ROOT" — the c4z store root
+--     UpdateProjectC4i installs from BY NAME (#87). On OS 3.3.0+ that write is
+--     re-unlocked by the shared-secret FileSetDir handshake in OnDriverLateInit;
+--     writing anywhere else (the per-driver "C4Z" alias, GetC4zDir()'s root)
+--     is a silent no-op because UpdateProjectC4i never reads those locations.
+--     Drive updateAll(force=true) to the FileSetDir call and capture it.
 --------------------------------------------------------------------------------
 local _fileSetDirArg = nil
--- GetC4zDir returns the (restricted) ROOT; the fix must NOT use it.
-function C4:GetC4zDir() return "/opt/control4/var/drivers/c4z/." end
 function C4:FileSetDir(dir) _fileSetDirArg = dir end
--- Minimal file-op stubs so the FileWrite helper runs without erroring.
-function C4:FileExists() return false end
+-- File-op stubs that model a SUCCESSFUL write: capture the bytes handed to
+-- C4:FileWrite and report their length via FileGetSize so the updater's
+-- verify-by-size (#87) sees a persisted file matching the download size.
+local _written18 = nil
+function C4:FileExists() return _written18 ~= nil end
 function C4:FileOpen() return 1 end
 function C4:FileSetPos() end
-function C4:FileWrite() end
+function C4:FileWrite(file, len, content) _written18 = content end
+function C4:FileGetSize() return _written18 and string.len(_written18) or 0 end
 function C4:FileClose() end
 function C4:FileDelete() end
+local _u18_reject = nil
 -- Stub the SOAP TCP client (runs after the download; we only assert FileSetDir).
 function C4:CreateTCPClient()
     local c = {}
@@ -489,6 +493,7 @@ end
 
 local _newer = "v" .. tostring(tonumber(DRIVER_VERSION) + 10)
 github_updater:updateAll(GITHUB_UPDATER_REPO, GITHUB_UPDATER_FILENAMES, false, true)
+    :next(function() end, function(e) _u18_reject = e end)
 -- deliver the /releases response (a newer release carrying our asset)
 local _relTicket
 for i, g in ipairs(_urlgets) do if g.url:find("/releases$") then _relTicket = i end end
@@ -498,16 +503,102 @@ ReceivedAsync(_relTicket, JsonEncode({
       assets = { { name = "proflame_wifi_connect.c4z",
                    browser_download_url = "https://example.com/dl/proflame_wifi_connect.c4z" } } },
 }), 200, {}, nil)
--- deliver the asset download response -> triggers FileSetDir + FileWrite
+-- deliver the asset download response -> triggers FileSetDir + FileWrite + verify
 local _dlTicket
 for i, g in ipairs(_urlgets) do if g.url:find("/dl/proflame_wifi_connect%.c4z$") then _dlTicket = i end end
 Test.assert(_dlTicket, "updateAll(force) fetched the asset download URL")
 ReceivedAsync(_dlTicket, "C4Z_PACKAGE_BYTES", 200, {}, nil)
 
-Test.assertEqual(_fileSetDirArg, "C4Z",
-    "download FileSetDir uses the allowed 'C4Z' alias (per-driver writable folder)")
-Test.assert(_fileSetDirArg ~= "C4Z_ROOT", "never passes the removed C4Z_ROOT alias")
+Test.assertEqual(_fileSetDirArg, "C4Z_ROOT",
+    "download FileSetDir writes to the c4z store root UpdateProjectC4i installs from")
+Test.assert(_fileSetDirArg ~= "C4Z",
+    "does NOT write the per-driver C4Z subfolder (UpdateProjectC4i never reads it)")
 Test.assert(_fileSetDirArg ~= "/opt/control4/var/drivers/c4z/.",
-    "never passes GetC4zDir's restricted c4z-ROOT path")
+    "does NOT write GetC4zDir's c4z-ROOT path")
+Test.assertEqual(_u18_reject, nil,
+    "a write that persists (size matches) does NOT reject — happy path verified")
+
+--------------------------------------------------------------------------------
+-- 19. OnDriverLateInit performs the shared-secret FileSetDir handshake that
+--     re-unlocks C4Z_ROOT write access on OS 3.3.0+ (#87). Without it the
+--     C4Z_ROOT write in §18 would be denied and the install would no-op.
+--------------------------------------------------------------------------------
+local _handshake = nil
+function C4:FileSetDir(dir) _handshake = _handshake or dir end
+-- The handshake is the first line of OnDriverLateInit and is itself pcall'd,
+-- so _handshake is captured before any later step could error; pcall the whole
+-- call so unrelated late-init work (connect, timers) can't fail the assertion.
+pcall(OnDriverLateInit)
+Test.assertEqual(_handshake, "c29tZXNwZWNpYWxrZXk=++11",
+    "OnDriverLateInit's first FileSetDir is the root-unlock handshake")
+
+--------------------------------------------------------------------------------
+-- 20. If the C4Z_ROOT write does NOT persist (e.g. the handshake is inactive
+--     and the root write is denied), the updater must REJECT — not log a
+--     download success and fire UpdateProjectC4i, which would silently
+--     reinstall the unchanged old .c4z. We model a denied write (the file
+--     never appears on reread) and assert updateAll rejects (#87 / Codex).
+--------------------------------------------------------------------------------
+function C4:FileSetDir() end
+function C4:FileExists() return false end  -- write never persists (size check fails)
+function C4:FileOpen() return 1 end
+function C4:FileWrite() end
+function C4:FileGetSize() return 0 end
+
+local _base = #_urlgets
+local _u20_reject = nil
+github_updater:updateAll(GITHUB_UPDATER_REPO, GITHUB_UPDATER_FILENAMES, false, true)
+    :next(function() _u20_reject = false end, function(e) _u20_reject = e or "rejected" end)
+local _rel20
+for i = _base + 1, #_urlgets do if _urlgets[i].url:find("/releases$") then _rel20 = i end end
+Test.assert(_rel20, "updateAll(force) queried /releases (§20)")
+ReceivedAsync(_rel20, JsonEncode({
+    { tag_name = _newer, draft = false, prerelease = false,
+      assets = { { name = "proflame_wifi_connect.c4z",
+                   browser_download_url = "https://example.com/dl/proflame_wifi_connect.c4z" } } },
+}), 200, {}, nil)
+local _dl20
+for i = _base + 1, #_urlgets do if _urlgets[i].url:find("/dl/proflame_wifi_connect%.c4z$") then _dl20 = i end end
+Test.assert(_dl20, "updateAll(force) fetched the asset (§20)")
+ReceivedAsync(_dl20, "C4Z_PACKAGE_BYTES", 200, {}, nil)
+Test.assert(_u20_reject ~= nil and _u20_reject ~= false,
+    "a C4Z_ROOT write that does not persist rejects instead of reporting success")
+
+--------------------------------------------------------------------------------
+-- 21. If FileSetDir to C4Z_ROOT is DENIED (throws — the handshake is inactive),
+--     the updater must reject BEFORE writing, not fall through to a writable
+--     sandbox dir where the write + size-verify would both falsely pass while
+--     UpdateProjectC4i reinstalls the unchanged old .c4z (AGY review #1).
+--------------------------------------------------------------------------------
+function C4:FileSetDir(d)
+    if d == "C4Z_ROOT" then error("Restricted path specified: C4Z_ROOT") end
+end
+-- Make the write+verify look perfectly successful, so the ONLY thing that can
+-- stop a silent no-op is the FileSetDir guard.
+local _written21 = nil
+function C4:FileExists() return _written21 ~= nil end
+function C4:FileOpen() return 1 end
+function C4:FileWrite(file, len, content) _written21 = content end
+function C4:FileGetSize() return _written21 and string.len(_written21) or 0 end
+function C4:FileClose() end
+
+local _base21 = #_urlgets
+local _u21_reject = nil
+github_updater:updateAll(GITHUB_UPDATER_REPO, GITHUB_UPDATER_FILENAMES, false, true)
+    :next(function() _u21_reject = false end, function(e) _u21_reject = e or "rejected" end)
+local _rel21
+for i = _base21 + 1, #_urlgets do if _urlgets[i].url:find("/releases$") then _rel21 = i end end
+Test.assert(_rel21, "updateAll(force) queried /releases (§21)")
+ReceivedAsync(_rel21, JsonEncode({
+    { tag_name = _newer, draft = false, prerelease = false,
+      assets = { { name = "proflame_wifi_connect.c4z",
+                   browser_download_url = "https://example.com/dl/proflame_wifi_connect.c4z" } } },
+}), 200, {}, nil)
+local _dl21
+for i = _base21 + 1, #_urlgets do if _urlgets[i].url:find("/dl/proflame_wifi_connect%.c4z$") then _dl21 = i end end
+Test.assert(_dl21, "updateAll(force) fetched the asset (§21)")
+ReceivedAsync(_dl21, "C4Z_PACKAGE_BYTES", 200, {}, nil)
+Test.assert(_u21_reject ~= nil and _u21_reject ~= false,
+    "a denied FileSetDir(C4Z_ROOT) rejects before writing — no silent fallback no-op")
 
 print("test_github_updater OK")
