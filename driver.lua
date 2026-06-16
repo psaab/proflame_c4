@@ -4325,31 +4325,46 @@ function GitHubUpdater:downloadOutdatedDrivers(dir, repo, driverFilenames, inclu
         if downloadSize < 1 then
           return reject(string.format("asset %s download is empty", asset.name))
         end
-        C4:FileSetDir(dir)
+        -- Switch to the c4z store ROOT and FAIL LOUDLY if that's denied (AGY
+        -- review). On OS 3.3.0+ a denied FileSetDir throws ("Restricted path
+        -- specified"); the OnDriverLateInit handshake is what unlocks it. If we
+        -- didn't guard this, a denial would leave the active dir at a writable
+        -- sandbox, the write + size-verify below would both pass against THAT
+        -- dir, and we'd trigger UpdateProjectC4i — which reads C4Z_ROOT and
+        -- reinstalls the unchanged old .c4z (the exact silent no-op). Guarding
+        -- here also means the delete-then-write never runs on a denial, so the
+        -- installed root .c4z is left intact. Mirrors the frigate reference.
+        local okSetDir = pcall(function() C4:FileSetDir(dir) end)
+        if not okSetDir then
+          return reject(string.format(
+            "FileSetDir(%s) denied — the C4Z_ROOT write handshake is not active; cannot install %s",
+            tostring(dir), asset.name))
+        end
         FileWrite(asset.name, response.body, true)
         -- Do NOT trust FileWrite's return value: the drivers-common-public
         -- global FileWrite (which shadows lib_helpers') discards C4:FileWrite's
-        -- result, so a denied C4Z_ROOT write returns "success". Verify the
-        -- write actually landed by checking the ON-DISK SIZE (#87). Without
-        -- this, a failed root write is a silent no-op: the updater logs
-        -- "Downloaded…" and triggers UpdateProjectC4i, which reinstalls the
-        -- unchanged old .c4z. We compare FileGetSize (a number) rather than
-        -- re-reading the binary .c4z — FileRead's binary-safety on the C4
-        -- runtime is unverified, and a false length mismatch on a good write
-        -- would break updates the other way (Codex review).
+        -- result, so a partial/failed write returns "success". Verify the write
+        -- actually landed by checking the ON-DISK SIZE (#87) — a number, so no
+        -- binary-read marshalling concerns (a length compare of the re-read
+        -- binary .c4z could false-reject a good write, breaking updates the
+        -- other way). The handle is closed OUTSIDE the pcall so a throw in
+        -- FileGetSize can't leak it (AGY review).
         local persistedSize = nil
+        local f = nil
         pcall(function()
           if C4:FileExists(asset.name) then
-            local f = C4:FileOpen(asset.name)
-            if type(f) == "number" and f ~= -1 then
+            f = C4:FileOpen(asset.name)
+            if f ~= nil and f ~= -1 then
               persistedSize = C4:FileGetSize(f)
-              C4:FileClose(f)
             end
           end
         end)
+        if f ~= nil and f ~= -1 then
+          pcall(function() C4:FileClose(f) end)
+        end
         if persistedSize ~= downloadSize then
           return reject(string.format(
-            "failed to write asset %s to %s (on-disk %s vs %d bytes — is the C4Z_ROOT FileSetDir handshake active?)",
+            "failed to write asset %s to %s (on-disk %s vs %d bytes)",
             asset.name, tostring(dir), tostring(persistedSize), downloadSize))
         end
         log:info("Downloaded asset %s (%d bytes)", asset.name, downloadSize)

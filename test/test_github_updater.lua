@@ -564,4 +564,41 @@ ReceivedAsync(_dl20, "C4Z_PACKAGE_BYTES", 200, {}, nil)
 Test.assert(_u20_reject ~= nil and _u20_reject ~= false,
     "a C4Z_ROOT write that does not persist rejects instead of reporting success")
 
+--------------------------------------------------------------------------------
+-- 21. If FileSetDir to C4Z_ROOT is DENIED (throws — the handshake is inactive),
+--     the updater must reject BEFORE writing, not fall through to a writable
+--     sandbox dir where the write + size-verify would both falsely pass while
+--     UpdateProjectC4i reinstalls the unchanged old .c4z (AGY review #1).
+--------------------------------------------------------------------------------
+function C4:FileSetDir(d)
+    if d == "C4Z_ROOT" then error("Restricted path specified: C4Z_ROOT") end
+end
+-- Make the write+verify look perfectly successful, so the ONLY thing that can
+-- stop a silent no-op is the FileSetDir guard.
+local _written21 = nil
+function C4:FileExists() return _written21 ~= nil end
+function C4:FileOpen() return 1 end
+function C4:FileWrite(file, len, content) _written21 = content end
+function C4:FileGetSize() return _written21 and string.len(_written21) or 0 end
+function C4:FileClose() end
+
+local _base21 = #_urlgets
+local _u21_reject = nil
+github_updater:updateAll(GITHUB_UPDATER_REPO, GITHUB_UPDATER_FILENAMES, false, true)
+    :next(function() _u21_reject = false end, function(e) _u21_reject = e or "rejected" end)
+local _rel21
+for i = _base21 + 1, #_urlgets do if _urlgets[i].url:find("/releases$") then _rel21 = i end end
+Test.assert(_rel21, "updateAll(force) queried /releases (§21)")
+ReceivedAsync(_rel21, JsonEncode({
+    { tag_name = _newer, draft = false, prerelease = false,
+      assets = { { name = "proflame_wifi_connect.c4z",
+                   browser_download_url = "https://example.com/dl/proflame_wifi_connect.c4z" } } },
+}), 200, {}, nil)
+local _dl21
+for i = _base21 + 1, #_urlgets do if _urlgets[i].url:find("/dl/proflame_wifi_connect%.c4z$") then _dl21 = i end end
+Test.assert(_dl21, "updateAll(force) fetched the asset (§21)")
+ReceivedAsync(_dl21, "C4Z_PACKAGE_BYTES", 200, {}, nil)
+Test.assert(_u21_reject ~= nil and _u21_reject ~= false,
+    "a denied FileSetDir(C4Z_ROOT) rejects before writing — no silent fallback no-op")
+
 print("test_github_updater OK")
