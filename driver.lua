@@ -10238,8 +10238,9 @@ function UpdateUpdateStatusProperty(text)
 end
 
 -- Trigger the full template github_updater. Downloads any .c4z whose
--- DRIVER_VERSION is older than the latest release tag, writes it to
--- C4Z_ROOT, then drives Composer's local SOAP endpoint to install it.
+-- DRIVER_VERSION is older than the latest release tag, writes it to the c4z
+-- directory (resolved via C4:GetC4zDir() — the old "C4Z_ROOT" alias was removed
+-- in OS 3.3.0), then drives Composer's local SOAP endpoint to install it.
 -- Status updates surface in the "Update Status" property.
 --
 -- `force` (the "Force Reinstall Latest Release" command) passes forceUpdate=true
