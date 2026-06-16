@@ -470,13 +470,18 @@ Test.assert(DescribeUpdaterError(nil):find("unknown error", 1, true),
 --------------------------------------------------------------------------------
 local _fileSetDirArg = nil
 function C4:FileSetDir(dir) _fileSetDirArg = dir end
--- Minimal file-op stubs so the FileWrite helper runs without erroring.
-function C4:FileExists() return false end
+-- File-op stubs that model a SUCCESSFUL write: capture the bytes handed to
+-- C4:FileWrite and serve them back through FileRead so the updater's
+-- verify-by-reread (#87) sees a persisted file matching the download size.
+local _written18 = nil
+function C4:FileExists() return _written18 ~= nil end
 function C4:FileOpen() return 1 end
 function C4:FileSetPos() end
-function C4:FileWrite() end
+function C4:FileWrite(file, len, content) _written18 = content end
 function C4:FileClose() end
 function C4:FileDelete() end
+FileRead = function() return _written18 end
+local _u18_reject = nil
 -- Stub the SOAP TCP client (runs after the download; we only assert FileSetDir).
 function C4:CreateTCPClient()
     local c = {}
@@ -488,6 +493,7 @@ end
 
 local _newer = "v" .. tostring(tonumber(DRIVER_VERSION) + 10)
 github_updater:updateAll(GITHUB_UPDATER_REPO, GITHUB_UPDATER_FILENAMES, false, true)
+    :next(function() end, function(e) _u18_reject = e end)
 -- deliver the /releases response (a newer release carrying our asset)
 local _relTicket
 for i, g in ipairs(_urlgets) do if g.url:find("/releases$") then _relTicket = i end end
@@ -497,7 +503,7 @@ ReceivedAsync(_relTicket, JsonEncode({
       assets = { { name = "proflame_wifi_connect.c4z",
                    browser_download_url = "https://example.com/dl/proflame_wifi_connect.c4z" } } },
 }), 200, {}, nil)
--- deliver the asset download response -> triggers FileSetDir + FileWrite
+-- deliver the asset download response -> triggers FileSetDir + FileWrite + verify
 local _dlTicket
 for i, g in ipairs(_urlgets) do if g.url:find("/dl/proflame_wifi_connect%.c4z$") then _dlTicket = i end end
 Test.assert(_dlTicket, "updateAll(force) fetched the asset download URL")
@@ -509,6 +515,8 @@ Test.assert(_fileSetDirArg ~= "C4Z",
     "does NOT write the per-driver C4Z subfolder (UpdateProjectC4i never reads it)")
 Test.assert(_fileSetDirArg ~= "/opt/control4/var/drivers/c4z/.",
     "does NOT write GetC4zDir's c4z-ROOT path")
+Test.assertEqual(_u18_reject, nil,
+    "a write that persists (size matches) does NOT reject — happy path verified")
 
 --------------------------------------------------------------------------------
 -- 19. OnDriverLateInit performs the shared-secret FileSetDir handshake that
@@ -523,5 +531,37 @@ function C4:FileSetDir(dir) _handshake = _handshake or dir end
 pcall(OnDriverLateInit)
 Test.assertEqual(_handshake, "c29tZXNwZWNpYWxrZXk=++11",
     "OnDriverLateInit's first FileSetDir is the root-unlock handshake")
+
+--------------------------------------------------------------------------------
+-- 20. If the C4Z_ROOT write does NOT persist (e.g. the handshake is inactive
+--     and the root write is denied), the updater must REJECT — not log a
+--     download success and fire UpdateProjectC4i, which would silently
+--     reinstall the unchanged old .c4z. We model a denied write (the file
+--     never appears on reread) and assert updateAll rejects (#87 / Codex).
+--------------------------------------------------------------------------------
+function C4:FileSetDir() end
+function C4:FileExists() return false end  -- write never persists
+function C4:FileOpen() return 1 end
+function C4:FileWrite() end
+FileRead = function() return nil end       -- verify reread finds nothing
+
+local _base = #_urlgets
+local _u20_reject = nil
+github_updater:updateAll(GITHUB_UPDATER_REPO, GITHUB_UPDATER_FILENAMES, false, true)
+    :next(function() _u20_reject = false end, function(e) _u20_reject = e or "rejected" end)
+local _rel20
+for i = _base + 1, #_urlgets do if _urlgets[i].url:find("/releases$") then _rel20 = i end end
+Test.assert(_rel20, "updateAll(force) queried /releases (§20)")
+ReceivedAsync(_rel20, JsonEncode({
+    { tag_name = _newer, draft = false, prerelease = false,
+      assets = { { name = "proflame_wifi_connect.c4z",
+                   browser_download_url = "https://example.com/dl/proflame_wifi_connect.c4z" } } },
+}), 200, {}, nil)
+local _dl20
+for i = _base + 1, #_urlgets do if _urlgets[i].url:find("/dl/proflame_wifi_connect%.c4z$") then _dl20 = i end end
+Test.assert(_dl20, "updateAll(force) fetched the asset (§20)")
+ReceivedAsync(_dl20, "C4Z_PACKAGE_BYTES", 200, {}, nil)
+Test.assert(_u20_reject ~= nil and _u20_reject ~= false,
+    "a C4Z_ROOT write that does not persist rejects instead of reporting success")
 
 print("test_github_updater OK")

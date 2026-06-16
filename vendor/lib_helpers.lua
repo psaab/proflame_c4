@@ -112,6 +112,11 @@ function FileRead(filename)
     return content
 end
 
+-- NOTE: this lib_helpers FileWrite is SHADOWED at runtime by the
+-- drivers-common-public global/lib.lua FileWrite (bundled later), which
+-- discards C4:FileWrite's result and returns nothing. So the updater must not
+-- trust FileWrite's return value to detect a failed write — github_updater.lua
+-- verifies the write landed by re-reading instead (#87 / Codex review).
 function FileWrite(filename, content, overwrite)
     content = tostring(content) or ""
     local pos = 0

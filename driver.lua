@@ -3884,6 +3884,11 @@ function FileRead(filename)
     return content
 end
 
+-- NOTE: this lib_helpers FileWrite is SHADOWED at runtime by the
+-- drivers-common-public global/lib.lua FileWrite (bundled later), which
+-- discards C4:FileWrite's result and returns nothing. So the updater must not
+-- trust FileWrite's return value to detect a failed write — github_updater.lua
+-- verifies the write landed by re-reading instead (#87 / Codex review).
 function FileWrite(filename, content, overwrite)
     content = tostring(content) or ""
     local pos = 0
@@ -4322,12 +4327,22 @@ function GitHubUpdater:downloadOutdatedDrivers(dir, repo, driverFilenames, inclu
         end
         C4:FileSetDir(dir)
         local currentContents = C4:FileExists(asset.name) and FileRead(asset.name) or nil
-        if FileWrite(asset.name, response.body, true) == -1 then
-          -- Restore the previous contents if the write failed
+        FileWrite(asset.name, response.body, true)
+        -- Do NOT trust FileWrite's return value: the drivers-common-public
+        -- global FileWrite (which shadows lib_helpers') discards C4:FileWrite's
+        -- result, so a denied C4Z_ROOT write returns "success". Verify the
+        -- write actually landed by re-reading it (#87). Without this, a failed
+        -- root write is a silent no-op: the updater logs "Downloaded…" and
+        -- triggers UpdateProjectC4i, which reinstalls the unchanged old .c4z.
+        local written = C4:FileExists(asset.name) and FileRead(asset.name) or nil
+        if written == nil or string.len(written) ~= downloadSize then
+          -- Restore the previous contents if the write failed/clobbered.
           if currentContents ~= nil then
             FileWrite(asset.name, currentContents, true)
           end
-          return reject(string.format("failed to download asset %s", asset.name))
+          return reject(string.format(
+            "failed to write asset %s to %s (wrote %s of %d bytes — is the C4Z_ROOT FileSetDir handshake active?)",
+            asset.name, tostring(dir), written and tostring(string.len(written)) or "nil", downloadSize))
         end
         log:info("Downloaded asset %s (%d bytes)", asset.name, downloadSize)
         return asset.name
