@@ -12,7 +12,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061603"
+DRIVER_VERSION = "2026061604"
 DRIVER_DATE = "2026-06-16"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
@@ -8850,11 +8850,16 @@ end
 function ParseStatusMessage(data)
     if not data then return end
     if data == "PROFLAMEPONG" then
-        -- Reply to our app-level PROFLAMEPING keepalive (B4/#86). The
-        -- watchdog reset already happened in OnWebSocketMessage (any inbound
-        -- frame counts as liveness), so here we just swallow it so it is not
-        -- logged as an unknown frame. The old "Last Ping Response" property
-        -- was removed in #70 and is not reinstated.
+        -- Reply to our app-level PROFLAMEPING keepalive (B4/#86). The watchdog
+        -- reset already happened in OnWebSocketMessage (any inbound frame
+        -- counts as liveness); here we surface the round-trip liveness time in
+        -- Composer (#89). #70 removed the old "Last Ping Response" property as
+        -- dead UI because nothing solicited a pong after C1 Phase 2 — but the
+        -- restored keepalive sends PROFLAMEPING and the device answers
+        -- PROFLAMEPONG, so it's live again, now as "Last Keepalive Response".
+        pcall(function()
+            C4:UpdateProperty("Last Keepalive Response", os.date("%Y-%m-%d %H:%M:%S"))
+        end)
         dbg_debug("PROFLAMEPONG received")
         return
     end

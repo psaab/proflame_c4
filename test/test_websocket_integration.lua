@@ -432,24 +432,25 @@ HandleConnectionEvent = original_HandleConnectionEvent
 print("test_websocket_integration: lifecycle teardown assertions passed")
 
 --------------------------------------------------------------------------------
--- Test 4: PROFLAMEPONG echo is swallowed, not dead-property UI (#70)
+-- Test 4: PROFLAMEPONG updates the "Last Keepalive Response" timestamp (#89)
 --
 -- B4/#86 restored the app-level PROFLAMEPING keepalive, so the device once
--- again replies PROFLAMEPONG. The keepalive watchdog reset keys off ANY
--- inbound frame (OnWebSocketMessage), so ParseStatusMessage just swallows the
--- PROFLAMEPONG itself — and the old "Last Ping Response" Composer property
--- removed in #70 is NOT reinstated. ParseStatusMessage must swallow a
--- PROFLAMEPONG (so it isn't logged as an unknown frame) WITHOUT touching any
--- "Last Ping Response" property.
+-- again replies PROFLAMEPONG. #89 re-surfaces the round-trip liveness time in
+-- Composer as "Last Keepalive Response" (the property #70 removed as dead UI
+-- when the keepalive was gone — live again now). ParseStatusMessage must
+-- update that timestamp on a PROFLAMEPONG, must NOT touch the old
+-- "Last Ping Response" name, and must not error.
 --------------------------------------------------------------------------------
 
 Test.clearPropertyUpdates()
 -- Should not error.
 ParseStatusMessage("PROFLAMEPONG")
 local pong_updates = Test.getPropertyUpdates()
+Test.assert(pong_updates["Last Keepalive Response"] ~= nil,
+    "PROFLAMEPONG stamps the 'Last Keepalive Response' property")
+Test.assert(tostring(pong_updates["Last Keepalive Response"]):match("%d%d%d%d%-%d%d%-%d%d"),
+    "'Last Keepalive Response' is a date-stamped string")
 Test.assertEqual(pong_updates["Last Ping Response"], nil,
-    "PROFLAMEPONG does NOT update the removed 'Last Ping Response' property")
-Test.assertEqual(next(pong_updates), nil,
-    "PROFLAMEPONG updates no Composer property at all")
+    "PROFLAMEPONG does NOT update the old (removed) 'Last Ping Response' name")
 
-print("test_websocket_integration: PROFLAMEPONG-swallow assertions passed")
+print("test_websocket_integration: PROFLAMEPONG-stamp assertions passed")
