@@ -69,10 +69,13 @@ The driver strictly validates the upgrade response per RFC 6455 §4.2.2 — stat
 **Compatibility note:** the removal in version `2026060108` flipped default-Off installs (the majority) from lenient-101 fallback to strict-only validation. This is a deliberate tradeoff backed by the probe evidence on `FW: 625.04.673` — older or non-standard firmware variants that returned a non-compliant 101 would have been silently accepted before that version and will now refuse to connect. If a deployment regresses against an unverified firmware revision, re-run `tools/probes/handshake_and_ping.py` to confirm strict compliance before deploying the driver to that controller.
 
 ### Keep-Alive Protocol
-- **WebSocket Ping/Pong**: RFC 6455 control frames (opcode `0x09`/`0x0A`), handled by the vendored Snap One WebSocket module (30s interval). The hand-rolled app-level `PROFLAMEPING`/`PROFLAMEPONG` keepalive was removed in C1 Phase 2.
-- **Connection Request**: `PROFLAMECONNECTION` (triggers full status dump)
+- **App-level keepalive (active):** the driver sends a `PROFLAMEPING` text frame every **`Keepalive Interval (seconds)`** (default 15, range 0–25, `0` disables) and the device replies `PROFLAMEPONG`. This is what holds the connection open.
+- **RFC 6455 WS-level ping is DISABLED** for this device. The vendored Snap One WebSocket module *can* send a 30s control-frame ping (opcode `0x09`/`0x0A`), but the Proflame dongle (FW 625.04.673) **closes the connection ~30s after connect** when that ping is the only client traffic — it enforces an inbound-idle session timeout and does not treat the control-frame ping as activity. `Connect()` sets `ws.ping_interval = 0`, and the vendored module skips arming the ping timer when the interval is `0`.
+- **Half-open watchdog:** any inbound frame resets a miss counter; three consecutive keepalive intervals with no device traffic at all force a reconnect.
+- **Connection Request**: `PROFLAMECONNECTION` (triggers full status dump).
+- **Liveness in Composer:** the read-only **`Last Keepalive Response`** property is timestamped each time a `PROFLAMEPONG` arrives (default `Never`).
 
-> Note: the device does not spontaneously emit `PROFLAMEPONG` (the 2026-06-02 probe saw 0 frames in a 10s silent window), so the old read-only "Last Ping Response" Composer property was dead UI and was removed in `2026061502` (#70). Any stray `PROFLAMEPONG` echo is still swallowed so it is not logged as an unknown frame.
+> History: C1 Phase 2 (#68) replaced the original 5s `PROFLAMEPING` keepalive with the vendored 30s WS-level ping — which caused a continuous ~30s reconnect loop on-device (`WebSocket close frame received from device` → `Connection Lost` → reconnect, every 30–45s). B4/#86 disabled the WS ping and restored the app-level keepalive (now on a tunable property with a watchdog); #89 re-added the `Last Keepalive Response` property, which #70 had earlier removed as dead UI *while the keepalive was gone*. The 2026-06-02 "0 frames in a silent window" probe note no longer applies — the device replies `PROFLAMEPONG` to the restored ping.
 
 ### Command Format
 **CRITICAL**: JSON commands must have NO SPACES after colons or commas. The device silently ignores malformed commands.
@@ -151,7 +154,7 @@ The device sends status updates as JSON with indexed status/value pairs:
   <name>Proflame WiFi Fireplace</name>
   <control>lua_gen</control>
   <controlmethod>IP</controlmethod>
-  <version>2026051731</version>
+  <version>2026061604</version>
   
   <proxies>
     <proxy proxybindingid="5001" name="Proflame Fireplace">thermostatV2</proxy>
@@ -581,7 +584,11 @@ The driver exposes three Composer **Actions** commands plus an `Update Status` r
 
 1. Query `https://api.github.com/repos/psaab/proflame_c4/releases` and select the **highest-versioned** non-draft, non-prerelease entry via the vendored semver comparator (the array is scanned for max version, not assumed newest-first).
 2. Compare that release's tag to the installed `DRIVER_VERSION`.
-3. On **Install Latest Release**, if newer: download the matching `proflame_wifi_connect.c4z` asset, write it to the allowed `C4Z` `FileSetDir` alias (the per-driver c4z folder; the old `C4Z_ROOT` alias and `GetC4zDir()`'s c4z-root path are both restricted on OS 3.3.0+), and drive Composer's local SOAP endpoint at `127.0.0.1:5020` to invoke `UpdateProjectC4i` — Composer tears down the running driver instance and loads the new one. (On OS 3.3.0+ the in-driver install step may still be limited by driver-security restrictions; if it fails, `Update Status` points to the reliable manual install.)
+3. On **Install Latest Release**, if newer: download the matching `proflame_wifi_connect.c4z` asset, write it to the c4z store **root** via `C4:FileSetDir("C4Z_ROOT")`, and drive Composer's local SOAP endpoint at `127.0.0.1:5020` to invoke `UpdateProjectC4i` — which installs the `.c4z` **from that root, by name**, tearing down the running driver instance and loading the new one.
+
+   **OS 3.3.0+ handshake.** On OS 3.3.0+, `FileSetDir("C4Z_ROOT")` is restricted for unsigned community drivers, so `OnDriverLateInit` first performs the community-standard shared-secret handshake `C4:FileSetDir("c29tZXNwZWNpYWxrZXk=++11")`, which re-unlocks legacy root access for the rest of the driver load (the same mechanism every other self-updating C4 driver uses). The earlier #83/#85 attempts that wrote to the per-driver `C4Z` alias / `GetC4zDir()` were a dead end: `UpdateProjectC4i` only reads the root, so it silently reinstalled the old `.c4z`. The updater now also **verifies the write persisted** (compares on-disk `FileGetSize` to the download size) and **rejects loudly** if `FileSetDir` is denied or the write didn't land — so a failed install surfaces a real error in `Update Status` instead of a false success. **Confirmed working on-device** (2026061602 → 2026061603 via the button, no manual install).
+
+   > **Bootstrap caveat:** the version that *adds* the handshake can't install itself via the (still-handshake-less) running driver — it must be installed manually in Composer **once** (Driver → Add or Update Driver… → select the `.c4z`; then System Design → right-click the device → Update Driver). After that, the Actions buttons self-update normally.
 
 The three commands:
 
@@ -680,6 +687,9 @@ All outbound control writes use `BuildDeviceControlCommandPlan`. The `Command Fo
 Manual command-format verification should record the selected format and status echo for `main_mode`, `flame_control`, `fan_control`, `lamp_control`, `temperature_set`, `timer_set`, and `timer_status`.
 
 ### WebSocket Frame Builder
+
+> **Historical / removed.** RFC 6455 framing, masking, fragmentation, and the upgrade handshake are now owned by the vendored Snap One WebSocket module (`vendor/drivers-common-public/module/websocket.lua`), cut over in C1 Phase 2 (#67/#68). The hand-rolled `CreateWebSocketFrame`/`ParseWebSocketFrame`/handshake helpers below were deleted then — they're kept here only as a reference for how the wire format works.
+
 ```lua
 function CreateWebSocketFrame(payload, opcode)
     -- Client-to-device WebSocket frames are masked per RFC 6455.
@@ -706,3 +716,4 @@ end
 
 ## Document History
 - **v1.0** (2025-12-17): Initial specification based on driver development
+- **2026-06-16**: Fixed the ~30s connection-drop loop — disabled the device-hostile RFC 6455 WS-level ping and restored the app-level `PROFLAMEPING` keepalive on a tunable `Keepalive Interval` property with a half-open watchdog (#86). Fixed the self-updater silent no-op — the OS 3.3.0+ shared-secret `FileSetDir` handshake plus a `C4Z_ROOT` write and verified-persist install (#87); confirmed self-updating on-device. Re-added the `Last Keepalive Response` Composer property (#89).
