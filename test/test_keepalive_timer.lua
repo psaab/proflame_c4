@@ -125,8 +125,27 @@ Test.assertEqual(_reconnects, 0, "watchdog does not reconnect synchronously")
 Test.assertEqual(#_timers, 1, "watchdog scheduled one deferred timer")
 Test.assertEqual(_timers[1].delay_ms, 1, "deferred reconnect is a 1ms one-shot")
 Test.assertEqual(_timers[1].repeating, false, "deferred reconnect is not repeating")
-_timers[1].fn()
+Test.assert(gKeepaliveReconnectTimerId ~= nil, "deferred reconnect handle is tracked")
+local deferred_handle = _timers[1]
+deferred_handle.fn()
 Test.assertEqual(_reconnects, 1, "deferred one-shot fires the reconnect")
+Test.assertEqual(gKeepaliveReconnectTimerId, nil, "one-shot clears its own handle on fire")
+
+--------------------------------------------------------------------------------
+-- 6b. A teardown inside the 1ms defer window cancels the pending reconnect, so
+--     it can't fire Reconnect() against a connection that has already gone away
+--     (or come back). StopKeepaliveTimer is the shared teardown chokepoint.
+--------------------------------------------------------------------------------
+_timers = {}
+gConnected = true
+gHandshakeComplete = true
+gMissedKeepalives = 2
+OnKeepaliveTimer()  -- trips watchdog, schedules the deferred one-shot
+local pending = gKeepaliveReconnectTimerId
+Test.assert(pending ~= nil, "deferred reconnect scheduled")
+StopKeepaliveTimer()
+Test.assert(pending.cancelled, "teardown cancels the pending deferred reconnect")
+Test.assertEqual(gKeepaliveReconnectTimerId, nil, "deferred reconnect handle cleared on teardown")
 
 -- Inbound traffic resets the counter so a live device never trips the watchdog.
 gMissedKeepalives = 2

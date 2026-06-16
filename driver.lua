@@ -141,6 +141,10 @@ if gKeepaliveTimerId then
     pcall(function() gKeepaliveTimerId:Cancel() end)
     gKeepaliveTimerId = nil
 end
+if gKeepaliveReconnectTimerId then
+    pcall(function() gKeepaliveReconnectTimerId:Cancel() end)
+    gKeepaliveReconnectTimerId = nil
+end
 pcall(function()
     local port = 88
     if Properties and Properties["Port"] then port = tonumber(Properties["Port"]) or 88 end
@@ -373,6 +377,7 @@ gReconnectTimerId = nil
 gConnectTimeoutTimerId = nil
 gStatusRefreshTimerId = nil
 gKeepaliveTimerId = nil
+gKeepaliveReconnectTimerId = nil
 gMissedKeepalives = 0
 gUpdateCheckTimerId = nil
 gInitialUpdateCheckTimerId = nil
@@ -8403,6 +8408,15 @@ function StopKeepaliveTimer()
         gKeepaliveTimerId:Cancel()
         gKeepaliveTimerId = nil
     end
+    -- Also drop any pending deferred-reconnect one-shot (B4/#86, AGY review):
+    -- if a natural Offline or a user Disconnect lands inside the watchdog's
+    -- 1ms defer window, the orphaned one-shot would otherwise still fire
+    -- Reconnect() and tear down a freshly re-established connection. Every
+    -- teardown path (Disconnect / OnWebSocketOffline / destroy) calls this.
+    if gKeepaliveReconnectTimerId then
+        gKeepaliveReconnectTimerId:Cancel()
+        gKeepaliveReconnectTimerId = nil
+    end
 end
 
 function OnKeepaliveTimer()
@@ -8415,7 +8429,13 @@ function OnKeepaliveTimer()
         -- → Disconnect → StopKeepaliveTimer would cancel gKeepaliveTimerId,
         -- i.e. the very timer currently firing; C4's self-cancel-during-fire
         -- semantics aren't documented, so hop to a fresh 1ms one-shot first.
-        C4:SetTimer(1, function(timer) Reconnect() end, false)
+        -- Track the handle so a teardown inside the 1ms window can cancel it
+        -- (StopKeepaliveTimer); clear it as the one-shot's first act so the
+        -- nested StopKeepaliveTimer doesn't try to cancel its own firing timer.
+        gKeepaliveReconnectTimerId = C4:SetTimer(1, function(timer)
+            gKeepaliveReconnectTimerId = nil
+            Reconnect()
+        end, false)
         return
     end
     SendWebSocketMessage("PROFLAMEPING")
