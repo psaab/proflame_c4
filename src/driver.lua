@@ -8,8 +8,8 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061508"
-DRIVER_DATE = "2026-06-15"
+DRIVER_VERSION = "2026061509"
+DRIVER_DATE = "2026-06-16"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
 -- drivers-common-public/module/websocket.lua (it scans 6100-6199 for the first
@@ -3033,7 +3033,14 @@ function InstallLatestReleaseNow(force)
     end, function(err)
         gUpdateInProgress = false
         local msg = DescribeUpdaterError(err)
-        UpdateUpdateStatusProperty("Failed: " .. tostring(msg))
+        -- Graceful degradation: in-driver auto-install can be blocked by the
+        -- controller firmware (e.g. OS 3.3.0+ FileSetDir restrictions on the c4z
+        -- store). Always point the user at the reliable manual path so a failure
+        -- isn't a dead end.
+        UpdateUpdateStatusProperty("Failed: " .. tostring(msg)
+            .. " — if this persists, install manually: download "
+            .. table.concat(GITHUB_UPDATER_FILENAMES, ", ")
+            .. " from the GitHub release and update the driver in Composer")
         dbg_err("InstallLatestReleaseNow: failed - " .. tostring(msg))
     end)
 end

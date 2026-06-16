@@ -449,4 +449,51 @@ Test.assert(joined:find("a", 1, true) and joined:find("b", 1, true),
 Test.assert(DescribeUpdaterError(nil):find("unknown error", 1, true),
     "nil falls back to a non-crashing 'unknown error'")
 
+--------------------------------------------------------------------------------
+-- 18. The download path must FileSetDir to C4:GetC4zDir()'s real path, NOT the
+--     obsolete "C4Z_ROOT" token (removed in OS 3.3.0 -> "Restricted path
+--     specified: C4Z_ROOT"). Drive updateAll(force=true) far enough to reach
+--     the FileSetDir call and capture its argument.
+--------------------------------------------------------------------------------
+local _C4Z_SENTINEL = "/opt/control4/var/drivers/c4z"
+local _fileSetDirArg = nil
+function C4:GetC4zDir() return _C4Z_SENTINEL end
+function C4:FileSetDir(dir) _fileSetDirArg = dir end
+-- Minimal file-op stubs so the FileWrite helper runs without erroring.
+function C4:FileExists() return false end
+function C4:FileOpen() return 1 end
+function C4:FileSetPos() end
+function C4:FileWrite() end
+function C4:FileClose() end
+function C4:FileDelete() end
+-- Stub the SOAP TCP client (runs after the download; we only assert FileSetDir).
+function C4:CreateTCPClient()
+    local c = {}
+    function c:OnConnect() return c end
+    function c:OnError() return c end
+    function c:Connect() return c end
+    return c
+end
+
+local _newer = "v" .. tostring(tonumber(DRIVER_VERSION) + 10)
+github_updater:updateAll(GITHUB_UPDATER_REPO, GITHUB_UPDATER_FILENAMES, false, true)
+-- deliver the /releases response (a newer release carrying our asset)
+local _relTicket
+for i, g in ipairs(_urlgets) do if g.url:find("/releases$") then _relTicket = i end end
+Test.assert(_relTicket, "updateAll(force) queried /releases")
+ReceivedAsync(_relTicket, JsonEncode({
+    { tag_name = _newer, draft = false, prerelease = false,
+      assets = { { name = "proflame_wifi_connect.c4z",
+                   browser_download_url = "https://example.com/dl/proflame_wifi_connect.c4z" } } },
+}), 200, {}, nil)
+-- deliver the asset download response -> triggers FileSetDir + FileWrite
+local _dlTicket
+for i, g in ipairs(_urlgets) do if g.url:find("/dl/proflame_wifi_connect%.c4z$") then _dlTicket = i end end
+Test.assert(_dlTicket, "updateAll(force) fetched the asset download URL")
+ReceivedAsync(_dlTicket, "C4Z_PACKAGE_BYTES", 200, {}, nil)
+
+Test.assertEqual(_fileSetDirArg, _C4Z_SENTINEL,
+    "download FileSetDir uses C4:GetC4zDir() path, not the obsolete C4Z_ROOT")
+Test.assert(_fileSetDirArg ~= "C4Z_ROOT", "never passes the removed C4Z_ROOT alias")
+
 print("test_github_updater OK")
