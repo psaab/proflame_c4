@@ -12,7 +12,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061509"
+DRIVER_VERSION = "2026061510"
 DRIVER_DATE = "2026-06-16"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
@@ -9919,33 +9919,33 @@ function ExecuteCommand(strCommand, tParams)
         return true
     elseif strCommand == "LUA_ACTION" then
         -- Actions-tab BUTTON clicks (driver.xml <actions>) arrive here, NOT as
-        -- the command name. Per the DriverWorks docs, Composer always sends
-        -- strCommand = "LUA_ACTION" for an action and puts the action's <name>
-        -- in tParams.ACTION. Dispatch on that name to the same handlers the
-        -- programming commands use. These strings MUST match the <action><name>
-        -- values in driver.xml's <actions> block.
+        -- the command name. Composer sends strCommand = "LUA_ACTION" and puts
+        -- the action's <command> value in tParams.ACTION. (Observed on-device:
+        -- the DriverWorks docs say it's the <name>, but it's actually the
+        -- <command> — e.g. the "Force Reinstall Latest Release (Recovery)"
+        -- button (its <name>) sends ACTION = "Force Reinstall Latest Release"
+        -- (its <command>).) Those <command> values are exactly the programming
+        -- command strings handled above, so just re-dispatch through
+        -- ExecuteCommand — no parallel action list to drift out of sync.
         local action = tParams and tParams.ACTION
-        dbg_info("LUA_ACTION: " .. tostring(action))
-        if action == "Check for Update" then
-            CheckForUpdateNow()
-            return true
-        elseif action == "Install Latest Release" then
-            InstallLatestReleaseNow()
-            return true
-        elseif action == "Force Reinstall Latest Release (Recovery)" then
-            ForceReinstallLatestRelease()
-            return true
+        -- Defensive: if a firmware variant ever sends the <name> instead of the
+        -- <command>, normalize the one action whose name differs from command.
+        if action == "Force Reinstall Latest Release (Recovery)" then
+            action = "Force Reinstall Latest Release"
         end
-        -- Unrecognized action: dump tParams so the log reveals the real key/
-        -- value structure if the ACTION-key assumption is ever wrong.
+        if type(action) == "string" and action ~= "" and action ~= "LUA_ACTION" then
+            dbg_info("LUA_ACTION -> " .. action)
+            return ExecuteCommand(action, tParams)
+        end
+        -- No usable ACTION: dump tParams so the log reveals the real structure.
         local dump = {}
         if type(tParams) == "table" then
             for k, v in pairs(tParams) do
                 dump[#dump + 1] = tostring(k) .. "=" .. tostring(v)
             end
         end
-        dbg_warn("Unhandled LUA_ACTION (action=" .. tostring(action)
-            .. "); tParams: {" .. table.concat(dump, ", ") .. "}")
+        dbg_warn("Unhandled LUA_ACTION (no usable ACTION); tParams: {"
+            .. table.concat(dump, ", ") .. "}")
         return false
     end
 
