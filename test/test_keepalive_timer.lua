@@ -148,9 +148,26 @@ Test.assert(pending.cancelled, "teardown cancels the pending deferred reconnect"
 Test.assertEqual(gKeepaliveReconnectTimerId, nil, "deferred reconnect handle cleared on teardown")
 
 -- Inbound traffic resets the counter so a live device never trips the watchdog.
+gKeepaliveReconnectTimerId = nil
 gMissedKeepalives = 2
 OnWebSocketMessage(nil, "PROFLAMEPONG")
 Test.assertEqual(gMissedKeepalives, 0, "any inbound app frame resets the miss counter")
+
+--------------------------------------------------------------------------------
+-- 6c. An inbound frame arriving inside the 1ms defer window aborts the pending
+--     watchdog reconnect — the link just proved healthy, so it must not be
+--     torn down (Codex review).
+--------------------------------------------------------------------------------
+_timers = {}
+gConnected = true
+gHandshakeComplete = true
+gMissedKeepalives = 2
+OnKeepaliveTimer()  -- trips watchdog, schedules the deferred one-shot
+local racing = gKeepaliveReconnectTimerId
+Test.assert(racing ~= nil, "deferred reconnect scheduled")
+OnWebSocketMessage(nil, "PROFLAMEPONG")  -- healthy frame within the 1ms window
+Test.assert(racing.cancelled, "inbound frame cancels the pending watchdog reconnect")
+Test.assertEqual(gKeepaliveReconnectTimerId, nil, "pending reconnect handle cleared by inbound frame")
 
 SendWebSocketMessage = original_SendWebSocketMessage
 Reconnect = original_Reconnect

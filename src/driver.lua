@@ -2156,6 +2156,12 @@ function OnWebSocketMessage(ws, data)
     -- module surfaces here counts. (The WS ping is disabled for this device,
     -- so there are no control-frame pongs handled inside the vendor module.)
     gMissedKeepalives = 0
+    -- ...and abort a watchdog reconnect still pending in its 1ms defer window
+    -- (Codex review): the link just proved healthy, so don't tear it down.
+    if gKeepaliveReconnectTimerId then
+        gKeepaliveReconnectTimerId:Cancel()
+        gKeepaliveReconnectTimerId = nil
+    end
     HandleProflameMessage(data)
 end
 
