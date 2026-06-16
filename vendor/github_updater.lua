@@ -191,8 +191,16 @@ function GitHubUpdater:updateAll(repo, driverFilenames, includePrereleases, forc
     end
   end
 
+  -- DIVERGENCE FROM TEMPLATE: the upstream control4-driver-template passes the
+  -- literal "C4Z_ROOT" to C4:FileSetDir. That was the old root-of-the-c4z-store
+  -- alias, REMOVED in OS 3.3.0's FileSetDir security tightening — on 3.3.0+ it
+  -- fails with "Restricted path specified: C4Z_ROOT". Use the sanctioned
+  -- C4:GetC4zDir() (>=2.10.0), which returns the real directory where .c4z files
+  -- reside (an allowed full path FileSetDir accepts for backwards-compat); fall
+  -- back to the documented "C4Z" alias if GetC4zDir is somehow unavailable.
+  local c4zDir = (type(C4.GetC4zDir) == "function" and C4:GetC4zDir()) or "C4Z"
   return self
-    :downloadOutdatedDrivers("C4Z_ROOT", repo, installedDriverFilenames, includePrereleases, forceUpdate)
+    :downloadOutdatedDrivers(c4zDir, repo, installedDriverFilenames, includePrereleases, forceUpdate)
     :next(function(downloadedDriverFilenames)
       --- @type Deferred<string[], table<number, string>>
       local d = deferred.new()
