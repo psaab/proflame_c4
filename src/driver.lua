@@ -2647,27 +2647,32 @@ function ExecuteCommand(strCommand, tParams)
         -- <command> — e.g. the "Force Reinstall Latest Release (Recovery)"
         -- button (its <name>) sends ACTION = "Force Reinstall Latest Release"
         -- (its <command>).) Those <command> values are exactly the programming
-        -- command strings handled above, so just re-dispatch through
-        -- ExecuteCommand — no parallel action list to drift out of sync.
+        -- command strings handled above, so we re-dispatch through
+        -- ExecuteCommand — but only for the allowlisted update actions.
         local action = tParams and tParams.ACTION
         -- Defensive: if a firmware variant ever sends the <name> instead of the
         -- <command>, normalize the one action whose name differs from command.
         if action == "Force Reinstall Latest Release (Recovery)" then
             action = "Force Reinstall Latest Release"
         end
-        if type(action) == "string" and action ~= "" and action ~= "LUA_ACTION" then
+        -- Allowlist the update-action <command> values declared in driver.xml's
+        -- <actions> (Codex review of #84): re-dispatch is restricted to these, so
+        -- a stray LUA_ACTION can't reach arbitrary device commands (e.g. Turn On),
+        -- and any unknown action keeps the diagnostic dump below.
+        if type(action) == "string" and LUA_ACTION_COMMANDS[action] then
             dbg_info("LUA_ACTION -> " .. action)
             return ExecuteCommand(action, tParams)
         end
-        -- No usable ACTION: dump tParams so the log reveals the real structure.
+        -- Unrecognized/empty ACTION: dump tParams so the log reveals the real
+        -- structure if the ACTION-key assumption is ever wrong again.
         local dump = {}
         if type(tParams) == "table" then
             for k, v in pairs(tParams) do
                 dump[#dump + 1] = tostring(k) .. "=" .. tostring(v)
             end
         end
-        dbg_warn("Unhandled LUA_ACTION (no usable ACTION); tParams: {"
-            .. table.concat(dump, ", ") .. "}")
+        dbg_warn("Unhandled LUA_ACTION (action=" .. tostring(action)
+            .. "); tParams: {" .. table.concat(dump, ", ") .. "}")
         return false
     end
 
@@ -2950,6 +2955,18 @@ end
 -- we hard-code the filename of our .c4z install.
 GITHUB_UPDATER_REPO = "psaab/proflame_c4"
 GITHUB_UPDATER_FILENAMES = { "proflame_wifi_connect.c4z" }
+
+-- Allowlist of <command> values that an Actions-tab LUA_ACTION may re-dispatch
+-- to (Codex review of #84). These are the <command> values of the update
+-- entries in driver.xml's <actions> block; restricting re-dispatch to them keeps
+-- a stray LUA_ACTION from reaching arbitrary device commands. Keep in sync with
+-- driver.xml <actions> if more buttons are ever added. (Defined as a global so
+-- it's available wherever ExecuteCommand runs.)
+LUA_ACTION_COMMANDS = {
+    ["Check for Update"] = true,
+    ["Install Latest Release"] = true,
+    ["Force Reinstall Latest Release"] = true,
+}
 
 -- Tracks an in-flight Install Latest Release attempt so the Composer property
 -- can show progress.
