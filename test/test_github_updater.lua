@@ -471,16 +471,16 @@ Test.assert(DescribeUpdaterError(nil):find("unknown error", 1, true),
 local _fileSetDirArg = nil
 function C4:FileSetDir(dir) _fileSetDirArg = dir end
 -- File-op stubs that model a SUCCESSFUL write: capture the bytes handed to
--- C4:FileWrite and serve them back through FileRead so the updater's
--- verify-by-reread (#87) sees a persisted file matching the download size.
+-- C4:FileWrite and report their length via FileGetSize so the updater's
+-- verify-by-size (#87) sees a persisted file matching the download size.
 local _written18 = nil
 function C4:FileExists() return _written18 ~= nil end
 function C4:FileOpen() return 1 end
 function C4:FileSetPos() end
 function C4:FileWrite(file, len, content) _written18 = content end
+function C4:FileGetSize() return _written18 and string.len(_written18) or 0 end
 function C4:FileClose() end
 function C4:FileDelete() end
-FileRead = function() return _written18 end
 local _u18_reject = nil
 -- Stub the SOAP TCP client (runs after the download; we only assert FileSetDir).
 function C4:CreateTCPClient()
@@ -540,10 +540,10 @@ Test.assertEqual(_handshake, "c29tZXNwZWNpYWxrZXk=++11",
 --     never appears on reread) and assert updateAll rejects (#87 / Codex).
 --------------------------------------------------------------------------------
 function C4:FileSetDir() end
-function C4:FileExists() return false end  -- write never persists
+function C4:FileExists() return false end  -- write never persists (size check fails)
 function C4:FileOpen() return 1 end
 function C4:FileWrite() end
-FileRead = function() return nil end       -- verify reread finds nothing
+function C4:FileGetSize() return 0 end
 
 local _base = #_urlgets
 local _u20_reject = nil

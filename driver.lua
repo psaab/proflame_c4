@@ -4326,23 +4326,31 @@ function GitHubUpdater:downloadOutdatedDrivers(dir, repo, driverFilenames, inclu
           return reject(string.format("asset %s download is empty", asset.name))
         end
         C4:FileSetDir(dir)
-        local currentContents = C4:FileExists(asset.name) and FileRead(asset.name) or nil
         FileWrite(asset.name, response.body, true)
         -- Do NOT trust FileWrite's return value: the drivers-common-public
         -- global FileWrite (which shadows lib_helpers') discards C4:FileWrite's
         -- result, so a denied C4Z_ROOT write returns "success". Verify the
-        -- write actually landed by re-reading it (#87). Without this, a failed
-        -- root write is a silent no-op: the updater logs "Downloaded…" and
-        -- triggers UpdateProjectC4i, which reinstalls the unchanged old .c4z.
-        local written = C4:FileExists(asset.name) and FileRead(asset.name) or nil
-        if written == nil or string.len(written) ~= downloadSize then
-          -- Restore the previous contents if the write failed/clobbered.
-          if currentContents ~= nil then
-            FileWrite(asset.name, currentContents, true)
+        -- write actually landed by checking the ON-DISK SIZE (#87). Without
+        -- this, a failed root write is a silent no-op: the updater logs
+        -- "Downloaded…" and triggers UpdateProjectC4i, which reinstalls the
+        -- unchanged old .c4z. We compare FileGetSize (a number) rather than
+        -- re-reading the binary .c4z — FileRead's binary-safety on the C4
+        -- runtime is unverified, and a false length mismatch on a good write
+        -- would break updates the other way (Codex review).
+        local persistedSize = nil
+        pcall(function()
+          if C4:FileExists(asset.name) then
+            local f = C4:FileOpen(asset.name)
+            if type(f) == "number" and f ~= -1 then
+              persistedSize = C4:FileGetSize(f)
+              C4:FileClose(f)
+            end
           end
+        end)
+        if persistedSize ~= downloadSize then
           return reject(string.format(
-            "failed to write asset %s to %s (wrote %s of %d bytes — is the C4Z_ROOT FileSetDir handshake active?)",
-            asset.name, tostring(dir), written and tostring(string.len(written)) or "nil", downloadSize))
+            "failed to write asset %s to %s (on-disk %s vs %d bytes — is the C4Z_ROOT FileSetDir handshake active?)",
+            asset.name, tostring(dir), tostring(persistedSize), downloadSize))
         end
         log:info("Downloaded asset %s (%d bytes)", asset.name, downloadSize)
         return asset.name
