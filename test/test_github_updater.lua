@@ -287,10 +287,12 @@ Test.assertEqual(ExecuteCommand("Force Reinstall Latest Release", {}), true, "Fo
 Test.assertEqual(dispatched, "force", "Force Reinstall dispatched")
 
 -- Actions-tab BUTTON clicks: Control4 sends strCommand="LUA_ACTION" with the
--- action's <name> in tParams.ACTION (NOT the command name). These must dispatch
--- to the same handlers and return true (regression guard for the "Unhandled
--- ExecuteCommand: LUA_ACTION" bug). The ACTION strings must match driver.xml's
--- <action><name> values.
+-- action's <command> value in tParams.ACTION (observed on-device: NOT the
+-- <name>, despite the docs). The handler re-dispatches that value through
+-- ExecuteCommand, so the existing command branches handle it. Regression guard
+-- for both the "Unhandled ExecuteCommand: LUA_ACTION" bug and the Force-Reinstall
+-- name/command mismatch ("Unhandled LUA_ACTION (action=Force Reinstall Latest
+-- Release)").
 dispatched = nil
 Test.assertEqual(ExecuteCommand("LUA_ACTION", { ACTION = "Check for Update" }), true,
     "LUA_ACTION 'Check for Update' returns true")
@@ -301,10 +303,19 @@ Test.assertEqual(ExecuteCommand("LUA_ACTION", { ACTION = "Install Latest Release
     "LUA_ACTION 'Install Latest Release' returns true")
 Test.assertEqual(dispatched, "install", "LUA_ACTION 'Install Latest Release' dispatched")
 
+-- The REAL on-device value for the Force Reinstall button: its <command>
+-- "Force Reinstall Latest Release" (NOT its "(Recovery)" <name>).
+dispatched = nil
+Test.assertEqual(ExecuteCommand("LUA_ACTION", { ACTION = "Force Reinstall Latest Release" }), true,
+    "LUA_ACTION 'Force Reinstall Latest Release' (command value) returns true")
+Test.assertEqual(dispatched, "force", "LUA_ACTION command-value Force Reinstall dispatched")
+
+-- And the <name> variant ("(Recovery)") is normalized to the command, so a
+-- firmware that sends the name still works.
 dispatched = nil
 Test.assertEqual(ExecuteCommand("LUA_ACTION", { ACTION = "Force Reinstall Latest Release (Recovery)" }), true,
-    "LUA_ACTION 'Force Reinstall (Recovery)' returns true")
-Test.assertEqual(dispatched, "force", "LUA_ACTION 'Force Reinstall (Recovery)' dispatched")
+    "LUA_ACTION 'Force Reinstall (Recovery)' (name variant) returns true")
+Test.assertEqual(dispatched, "force", "LUA_ACTION name-variant Force Reinstall dispatched")
 
 -- An unrecognized action must NOT crash and must return false (the diagnostic
 -- branch dumps tParams).

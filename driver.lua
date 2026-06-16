@@ -12,7 +12,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061509"
+DRIVER_VERSION = "2026061510"
 DRIVER_DATE = "2026-06-16"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
@@ -9919,25 +9919,30 @@ function ExecuteCommand(strCommand, tParams)
         return true
     elseif strCommand == "LUA_ACTION" then
         -- Actions-tab BUTTON clicks (driver.xml <actions>) arrive here, NOT as
-        -- the command name. Per the DriverWorks docs, Composer always sends
-        -- strCommand = "LUA_ACTION" for an action and puts the action's <name>
-        -- in tParams.ACTION. Dispatch on that name to the same handlers the
-        -- programming commands use. These strings MUST match the <action><name>
-        -- values in driver.xml's <actions> block.
+        -- the command name. Composer sends strCommand = "LUA_ACTION" and puts
+        -- the action's <command> value in tParams.ACTION. (Observed on-device:
+        -- the DriverWorks docs say it's the <name>, but it's actually the
+        -- <command> — e.g. the "Force Reinstall Latest Release (Recovery)"
+        -- button (its <name>) sends ACTION = "Force Reinstall Latest Release"
+        -- (its <command>).) Those <command> values are exactly the programming
+        -- command strings handled above, so we re-dispatch through
+        -- ExecuteCommand — but only for the allowlisted update actions.
         local action = tParams and tParams.ACTION
-        dbg_info("LUA_ACTION: " .. tostring(action))
-        if action == "Check for Update" then
-            CheckForUpdateNow()
-            return true
-        elseif action == "Install Latest Release" then
-            InstallLatestReleaseNow()
-            return true
-        elseif action == "Force Reinstall Latest Release (Recovery)" then
-            ForceReinstallLatestRelease()
-            return true
+        -- Defensive: if a firmware variant ever sends the <name> instead of the
+        -- <command>, normalize the one action whose name differs from command.
+        if action == "Force Reinstall Latest Release (Recovery)" then
+            action = "Force Reinstall Latest Release"
         end
-        -- Unrecognized action: dump tParams so the log reveals the real key/
-        -- value structure if the ACTION-key assumption is ever wrong.
+        -- Allowlist the update-action <command> values declared in driver.xml's
+        -- <actions> (Codex review of #84): re-dispatch is restricted to these, so
+        -- a stray LUA_ACTION can't reach arbitrary device commands (e.g. Turn On),
+        -- and any unknown action keeps the diagnostic dump below.
+        if type(action) == "string" and LUA_ACTION_COMMANDS[action] then
+            dbg_info("LUA_ACTION -> " .. action)
+            return ExecuteCommand(action, tParams)
+        end
+        -- Unrecognized/empty ACTION: dump tParams so the log reveals the real
+        -- structure if the ACTION-key assumption is ever wrong again.
         local dump = {}
         if type(tParams) == "table" then
             for k, v in pairs(tParams) do
@@ -10228,6 +10233,18 @@ end
 -- we hard-code the filename of our .c4z install.
 GITHUB_UPDATER_REPO = "psaab/proflame_c4"
 GITHUB_UPDATER_FILENAMES = { "proflame_wifi_connect.c4z" }
+
+-- Allowlist of <command> values that an Actions-tab LUA_ACTION may re-dispatch
+-- to (Codex review of #84). These are the <command> values of the update
+-- entries in driver.xml's <actions> block; restricting re-dispatch to them keeps
+-- a stray LUA_ACTION from reaching arbitrary device commands. Keep in sync with
+-- driver.xml <actions> if more buttons are ever added. (Defined as a global so
+-- it's available wherever ExecuteCommand runs.)
+LUA_ACTION_COMMANDS = {
+    ["Check for Update"] = true,
+    ["Install Latest Release"] = true,
+    ["Force Reinstall Latest Release"] = true,
+}
 
 -- Tracks an in-flight Install Latest Release attempt so the Composer property
 -- can show progress.
