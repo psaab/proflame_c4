@@ -434,12 +434,13 @@ print("test_websocket_integration: lifecycle teardown assertions passed")
 --------------------------------------------------------------------------------
 -- Test 4: PROFLAMEPONG echo is swallowed, not dead-property UI (#70)
 --
--- C1 Phase 2 dropped the hand-rolled PROFLAMEPING keepalive, so nothing
--- solicits a PROFLAMEPONG, and the 2026-06-02 probe showed the device does
--- not emit it spontaneously. The old "Last Ping Response" Composer property
--- therefore never updated and was removed in #70. ParseStatusMessage must
--- still gracefully swallow a stray PROFLAMEPONG (so it isn't logged as an
--- unknown frame) WITHOUT touching any "Last Ping Response" property.
+-- B4/#86 restored the app-level PROFLAMEPING keepalive, so the device once
+-- again replies PROFLAMEPONG. The keepalive watchdog reset keys off ANY
+-- inbound frame (OnWebSocketMessage), so ParseStatusMessage just swallows the
+-- PROFLAMEPONG itself — and the old "Last Ping Response" Composer property
+-- removed in #70 is NOT reinstated. ParseStatusMessage must swallow a
+-- PROFLAMEPONG (so it isn't logged as an unknown frame) WITHOUT touching any
+-- "Last Ping Response" property.
 --------------------------------------------------------------------------------
 
 Test.clearPropertyUpdates()

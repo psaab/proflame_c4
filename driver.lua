@@ -12,7 +12,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061511"
+DRIVER_VERSION = "2026061601"
 DRIVER_DATE = "2026-06-16"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
@@ -131,6 +131,19 @@ KNOWN_IGNORED_STATUS_KEYS = {
 if gPingTimerId then
     pcall(function() gPingTimerId:Cancel() end)
     gPingTimerId = nil
+end
+-- Cancel a stale app-level keepalive timer from a previous instance of THIS
+-- code (the restored PROFLAMEPING keepalive, B4/#86). Mirrors the gPingTimerId
+-- guard above: a C4:SetTimer handle survives the Lua reload as a global, so
+-- without this the old repeating timer keeps firing OnKeepaliveTimer against
+-- a torn-down socket.
+if gKeepaliveTimerId then
+    pcall(function() gKeepaliveTimerId:Cancel() end)
+    gKeepaliveTimerId = nil
+end
+if gKeepaliveReconnectTimerId then
+    pcall(function() gKeepaliveReconnectTimerId:Cancel() end)
+    gKeepaliveReconnectTimerId = nil
 end
 pcall(function()
     local port = 88
@@ -363,6 +376,9 @@ gHandshakeComplete = false
 gReconnectTimerId = nil
 gConnectTimeoutTimerId = nil
 gStatusRefreshTimerId = nil
+gKeepaliveTimerId = nil
+gKeepaliveReconnectTimerId = nil
+gMissedKeepalives = 0
 gUpdateCheckTimerId = nil
 gInitialUpdateCheckTimerId = nil
 gTimerModeDelayTimer = nil
@@ -7944,7 +7960,14 @@ function wsObject:ConnectionChanged (strStatus)
 		local _timer = function (timer)
 			self:Ping ()
 		end
-		SetTimer (self.timerPrefix .. 'Ping', self.ping_interval * ONE_SECOND, _timer, true)
+		-- A ping_interval of 0 (or nil) disables the RFC 6455 WS-level ping.
+		-- Some devices close the connection on receipt of a control-frame
+		-- ping or do not count it toward their inbound-idle timeout; callers
+		-- set self.ping_interval = 0 to opt out and supply their own
+		-- app-level keepalive (proflame_c4 B4/#86).
+		if (self.ping_interval and self.ping_interval > 0) then
+			SetTimer (self.timerPrefix .. 'Ping', self.ping_interval * ONE_SECOND, _timer, true)
+		end
 		self.metrics:SetCounter ('Connected')
 		print ('WS ' .. self.url .. ' connected')
 	else
@@ -8310,14 +8333,15 @@ end
 -- TIMERS
 -- =============================================================================
 
--- C1 Phase 2 dropped the hand-rolled PROFLAMEPING text-frame keepalive
--- (StartPingTimer/StopPingTimer/OnPingTimer) and the associated
--- "Ping Interval (seconds)" Composer property + gPingTimerId global. The
--- vendored drivers-common-public/module/websocket.lua now runs a 30s
--- WS-level ping/pong (opcode 0x09/0x0A) with a 10s pong-response timeout
--- — that's the correct keepalive mechanism per RFC 6455, and the 2026-06-03
--- probe (tools/probes/evidence/characterize-20260603T024355Z.json
--- ws_ping.ws_pong_received=true) confirms the device replies to it.
+-- C1 Phase 2 (#68) dropped the hand-rolled PROFLAMEPING text-frame keepalive
+-- in favor of the vendored 30s RFC 6455 WS-level ping/pong. On-device that
+-- regressed badly (B4/#86): the Proflame dongle closes the connection ~30s
+-- after every connect, in lock-step with the WS ping firing. The device
+-- enforces an inbound-idle session timeout and does not treat the WS
+-- control-frame ping as activity (a one-off probe once saw a pong, but the
+-- repeating 30s ping is both too slow and not idle-resetting in practice).
+-- B4/#86 restores the app-level keepalive below and disables the WS-level
+-- ping (Connect sets ws.ping_interval = 0). See StartKeepaliveTimer.
 function OnReconnectTimer()
     gReconnectTimerId = nil
     if not gConnected and not gConnecting then
@@ -8334,8 +8358,9 @@ end
 --
 -- This periodically resends PROFLAMECONNECTION which triggers the device's
 -- full status dump (5 frames, ~85 status pairs), letting us pick up any
--- local-side changes. Default 5 minutes; 0 disables. The PROFLAMEPING
--- keepalive at 5s continues to run independently.
+-- local-side changes. Default 5 minutes; 0 disables. This is independent of
+-- the app-level PROFLAMEPING keepalive (StartKeepaliveTimer, B4/#86), which
+-- runs on a much shorter cadence purely to hold the connection open.
 function StartStatusRefreshTimer()
     StopStatusRefreshTimer()
     local minutes = tonumber(Properties["Status Refresh Interval (minutes)"]) or 5
@@ -8357,6 +8382,63 @@ function StopStatusRefreshTimer()
         gStatusRefreshTimerId:Cancel()
         gStatusRefreshTimerId = nil
     end
+end
+
+-- App-level PROFLAMEPING keepalive (B4/#86), restored after C1 Phase 2 (#68)
+-- replaced it with the vendored WS-level ping the device closes on. We send a
+-- PROFLAMEPING text frame every "Keepalive Interval (seconds)" (default 15,
+-- 0 disables); the device keeps the session alive and replies PROFLAMEPONG.
+-- gMissedKeepalives doubles as a half-open-link watchdog (the liveness check
+-- the WS ping/pong used to provide): every inbound frame resets it to 0
+-- (OnWebSocketMessage), and three consecutive intervals with no device
+-- traffic at all force a reconnect.
+function StartKeepaliveTimer()
+    StopKeepaliveTimer()
+    local seconds = tonumber(Properties["Keepalive Interval (seconds)"]) or 15
+    if seconds <= 0 then
+        dbg_info("Keepalive timer disabled (Keepalive Interval <= 0)")
+        return
+    end
+    gMissedKeepalives = 0
+    gKeepaliveTimerId = C4:SetTimer(seconds * 1000, function(timer) OnKeepaliveTimer() end, true)
+end
+
+function StopKeepaliveTimer()
+    if gKeepaliveTimerId then
+        gKeepaliveTimerId:Cancel()
+        gKeepaliveTimerId = nil
+    end
+    -- Also drop any pending deferred-reconnect one-shot (B4/#86, AGY review):
+    -- if a natural Offline or a user Disconnect lands inside the watchdog's
+    -- 1ms defer window, the orphaned one-shot would otherwise still fire
+    -- Reconnect() and tear down a freshly re-established connection. Every
+    -- teardown path (Disconnect / OnWebSocketOffline / destroy) calls this.
+    if gKeepaliveReconnectTimerId then
+        gKeepaliveReconnectTimerId:Cancel()
+        gKeepaliveReconnectTimerId = nil
+    end
+end
+
+function OnKeepaliveTimer()
+    if not (gConnected and gHandshakeComplete) then return end
+    gMissedKeepalives = (gMissedKeepalives or 0) + 1
+    if gMissedKeepalives >= 3 then
+        dbg_warn("Keepalive: no device traffic across 3 intervals; forcing reconnect")
+        gMissedKeepalives = 0
+        -- Defer the reconnect out of this repeating-timer callback. Reconnect
+        -- → Disconnect → StopKeepaliveTimer would cancel gKeepaliveTimerId,
+        -- i.e. the very timer currently firing; C4's self-cancel-during-fire
+        -- semantics aren't documented, so hop to a fresh 1ms one-shot first.
+        -- Track the handle so a teardown inside the 1ms window can cancel it
+        -- (StopKeepaliveTimer); clear it as the one-shot's first act so the
+        -- nested StopKeepaliveTimer doesn't try to cancel its own firing timer.
+        gKeepaliveReconnectTimerId = C4:SetTimer(1, function(timer)
+            gKeepaliveReconnectTimerId = nil
+            Reconnect()
+        end, false)
+        return
+    end
+    SendWebSocketMessage("PROFLAMEPING")
 end
 
 function ScheduleReconnect()
@@ -8482,6 +8564,16 @@ function Connect()
         return
     end
     gWebSocket = ws
+    -- Disable the vendored RFC 6455 WS-level ping for this device (B4/#86).
+    -- The Proflame dongle (FW 625.04.673) closes the connection ~30s after
+    -- connect when the only client traffic is the vendored 30s control-frame
+    -- ping — it enforces an inbound-idle session timeout and does not treat
+    -- the WS ping as activity. We keep the link alive with an app-level
+    -- PROFLAMEPING text frame instead (StartKeepaliveTimer). Setting the
+    -- field to 0 makes ConnectionChanged skip arming the Ping timer (the
+    -- vendored module guards `ping_interval > 0`); plumb a positive value
+    -- here to re-enable the WS ping for a future device that supports it.
+    ws.ping_interval = 0
     ws:SetEstablishedFunction(OnWebSocketEstablished)
     ws:SetProcessMessageFunction(OnWebSocketMessage)
     ws:SetOfflineFunction(OnWebSocketOffline)
@@ -8548,6 +8640,7 @@ end
 
 function Disconnect()
     StopStatusRefreshTimer()
+    StopKeepaliveTimer()
     StopConnectTimeoutTimer()
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()
@@ -8717,13 +8810,12 @@ end
 function ParseStatusMessage(data)
     if not data then return end
     if data == "PROFLAMEPONG" then
-        -- PROFLAMEPING is gone (C1 Phase 2 dropped the app-level keepalive),
-        -- so we never solicit a PROFLAMEPONG. The device also does not emit it
-        -- spontaneously (the 2026-06-02 probe saw 0 frames in a 10s silent
-        -- window), which made the old "Last Ping Response" property dead UI —
-        -- it was removed in #70. We still swallow any stray PROFLAMEPONG echo
-        -- here so it is not logged as an unknown frame.
-        dbg_debug("PROFLAMEPONG echo received")
+        -- Reply to our app-level PROFLAMEPING keepalive (B4/#86). The
+        -- watchdog reset already happened in OnWebSocketMessage (any inbound
+        -- frame counts as liveness), so here we just swallow it so it is not
+        -- logged as an unknown frame. The old "Last Ping Response" property
+        -- was removed in #70 and is not reinstated.
+        dbg_debug("PROFLAMEPONG received")
         return
     end
     if data == "PROFLAMECONNECTIONOPEN" then
@@ -9280,6 +9372,10 @@ function OnPropertyChanged(strProperty)
         if gConnected and gHandshakeComplete then
             StartStatusRefreshTimer()  -- Restart with new interval (or stop if 0)
         end
+    elseif strProperty == "Keepalive Interval (seconds)" then
+        if gConnected and gHandshakeComplete then
+            StartKeepaliveTimer()  -- Restart with new interval (or stop if 0)
+        end
     elseif strProperty == "Update Check Interval (hours)" then
         StartUpdateCheckTimer()  -- Restart with new interval (or stop if 0)
     end
@@ -9334,6 +9430,7 @@ function OnWebSocketEstablished(ws)
     C4:UpdateProperty("Connection Status", "Connected")
     HandleConnectionEvent(true)
     StartStatusRefreshTimer()
+    StartKeepaliveTimer()
     RequestAllStatus()
     UpdateAllProxies()
     SetupExtras()
@@ -9343,6 +9440,17 @@ end
 -- (vendor module strips RFC 6455 framing/masking + reassembles fragments).
 -- Drive that straight into the existing app-protocol decoder.
 function OnWebSocketMessage(ws, data)
+    -- Any inbound app frame proves the device is alive — reset the keepalive
+    -- watchdog (B4/#86). PROFLAMEPONG, status JSON, anything the vendored
+    -- module surfaces here counts. (The WS ping is disabled for this device,
+    -- so there are no control-frame pongs handled inside the vendor module.)
+    gMissedKeepalives = 0
+    -- ...and abort a watchdog reconnect still pending in its 1ms defer window
+    -- (Codex review): the link just proved healthy, so don't tear it down.
+    if gKeepaliveReconnectTimerId then
+        gKeepaliveReconnectTimerId:Cancel()
+        gKeepaliveReconnectTimerId = nil
+    end
     HandleProflameMessage(data)
 end
 
@@ -9361,6 +9469,7 @@ function OnWebSocketOffline(ws)
     gConnecting = false
     gHandshakeComplete = false
     StopStatusRefreshTimer()
+    StopKeepaliveTimer()
     HandleConnectionEvent(false)
     C4:UpdateProperty("Connection Status", "Disconnected")
     ScheduleReconnect()
@@ -10171,6 +10280,7 @@ function ResetDriverState()
     StopReconnectTimer()
     StopConnectTimeoutTimer()
     StopStatusRefreshTimer()
+    StopKeepaliveTimer()
     CancelPendingTimerCommandTimers()
     CancelTurnOffConfirmTimer()
     CancelTurnOffRetryTimer()

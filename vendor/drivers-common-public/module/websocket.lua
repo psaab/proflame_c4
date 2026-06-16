@@ -520,7 +520,14 @@ function wsObject:ConnectionChanged (strStatus)
 		local _timer = function (timer)
 			self:Ping ()
 		end
-		SetTimer (self.timerPrefix .. 'Ping', self.ping_interval * ONE_SECOND, _timer, true)
+		-- A ping_interval of 0 (or nil) disables the RFC 6455 WS-level ping.
+		-- Some devices close the connection on receipt of a control-frame
+		-- ping or do not count it toward their inbound-idle timeout; callers
+		-- set self.ping_interval = 0 to opt out and supply their own
+		-- app-level keepalive (proflame_c4 B4/#86).
+		if (self.ping_interval and self.ping_interval > 0) then
+			SetTimer (self.timerPrefix .. 'Ping', self.ping_interval * ONE_SECOND, _timer, true)
+		end
 		self.metrics:SetCounter ('Connected')
 		print ('WS ' .. self.url .. ' connected')
 	else
