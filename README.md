@@ -581,7 +581,7 @@ The driver exposes three Composer **Actions** commands plus an `Update Status` r
 
 1. Query `https://api.github.com/repos/psaab/proflame_c4/releases` and select the **highest-versioned** non-draft, non-prerelease entry via the vendored semver comparator (the array is scanned for max version, not assumed newest-first).
 2. Compare that release's tag to the installed `DRIVER_VERSION`.
-3. On **Install Latest Release**, if newer: download the matching `proflame_wifi_connect.c4z` asset, write it to the controller's c4z directory (resolved via `C4:GetC4zDir()`; the old `C4Z_ROOT` `FileSetDir` alias was removed in OS 3.3.0), and drive Composer's local SOAP endpoint at `127.0.0.1:5020` to invoke `UpdateProjectC4i` — Composer tears down the running driver instance and loads the new one. (On OS 3.3.0+ the in-driver install step may still be limited by driver-security restrictions; if it fails, `Update Status` points to the reliable manual install.)
+3. On **Install Latest Release**, if newer: download the matching `proflame_wifi_connect.c4z` asset, write it to the allowed `C4Z` `FileSetDir` alias (the per-driver c4z folder; the old `C4Z_ROOT` alias and `GetC4zDir()`'s c4z-root path are both restricted on OS 3.3.0+), and drive Composer's local SOAP endpoint at `127.0.0.1:5020` to invoke `UpdateProjectC4i` — Composer tears down the running driver instance and loads the new one. (On OS 3.3.0+ the in-driver install step may still be limited by driver-security restrictions; if it fails, `Update Status` points to the reliable manual install.)
 
 The three commands:
 

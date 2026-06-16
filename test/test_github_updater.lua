@@ -461,14 +461,15 @@ Test.assert(DescribeUpdaterError(nil):find("unknown error", 1, true),
     "nil falls back to a non-crashing 'unknown error'")
 
 --------------------------------------------------------------------------------
--- 18. The download path must FileSetDir to C4:GetC4zDir()'s real path, NOT the
---     obsolete "C4Z_ROOT" token (removed in OS 3.3.0 -> "Restricted path
---     specified: C4Z_ROOT"). Drive updateAll(force=true) far enough to reach
---     the FileSetDir call and capture its argument.
+-- 18. The download path must FileSetDir to the documented allowed "C4Z" alias
+--     (the per-driver writable c4z folder), NOT the obsolete "C4Z_ROOT" token
+--     (removed in OS 3.3.0) and NOT C4:GetC4zDir()'s c4z-ROOT path (also
+--     rejected on-device: "Restricted path specified: /opt/control4/var/drivers/
+--     c4z/."). Drive updateAll(force=true) to the FileSetDir call and capture it.
 --------------------------------------------------------------------------------
-local _C4Z_SENTINEL = "/opt/control4/var/drivers/c4z"
 local _fileSetDirArg = nil
-function C4:GetC4zDir() return _C4Z_SENTINEL end
+-- GetC4zDir returns the (restricted) ROOT; the fix must NOT use it.
+function C4:GetC4zDir() return "/opt/control4/var/drivers/c4z/." end
 function C4:FileSetDir(dir) _fileSetDirArg = dir end
 -- Minimal file-op stubs so the FileWrite helper runs without erroring.
 function C4:FileExists() return false end
@@ -503,8 +504,10 @@ for i, g in ipairs(_urlgets) do if g.url:find("/dl/proflame_wifi_connect%.c4z$")
 Test.assert(_dlTicket, "updateAll(force) fetched the asset download URL")
 ReceivedAsync(_dlTicket, "C4Z_PACKAGE_BYTES", 200, {}, nil)
 
-Test.assertEqual(_fileSetDirArg, _C4Z_SENTINEL,
-    "download FileSetDir uses C4:GetC4zDir() path, not the obsolete C4Z_ROOT")
+Test.assertEqual(_fileSetDirArg, "C4Z",
+    "download FileSetDir uses the allowed 'C4Z' alias (per-driver writable folder)")
 Test.assert(_fileSetDirArg ~= "C4Z_ROOT", "never passes the removed C4Z_ROOT alias")
+Test.assert(_fileSetDirArg ~= "/opt/control4/var/drivers/c4z/.",
+    "never passes GetC4zDir's restricted c4z-ROOT path")
 
 print("test_github_updater OK")
