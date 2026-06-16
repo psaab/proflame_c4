@@ -9,7 +9,7 @@
   <manufacturer>SIT Group / Proflame</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026061511</version>
+  <version>2026061601</version>
   <created>12/02/2025 12:00 PM</created>
   <modified>06/15/2026 12:00 AM</modified>
   <!-- auto_update governs Control4's NATIVE driver-update path, which queries
@@ -80,6 +80,14 @@
         <minimum>5</minimum>
         <maximum>300</maximum>
         <default>10</default>
+        <readonly>false</readonly>
+      </property>
+      <property>
+        <name>Keepalive Interval (seconds)</name>
+        <type>RANGED_INTEGER</type>
+        <minimum>0</minimum>
+        <maximum>120</maximum>
+        <default>15</default>
         <readonly>false</readonly>
       </property>
       <property>
