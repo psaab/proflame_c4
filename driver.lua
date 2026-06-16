@@ -12,7 +12,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061510"
+DRIVER_VERSION = "2026061511"
 DRIVER_DATE = "2026-06-16"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
@@ -3945,9 +3945,8 @@ function XMLTag(strName, content, tagSubTables, xmlEncodeElements, tAttribs)
     return table.concat(parts)
 end
 
--- C4Z_ROOT is the symbolic directory name passed to C4:FileSetDir. The
--- template defines it as a literal string; replicate that.
-C4Z_ROOT = C4Z_ROOT or "C4Z_ROOT"
+-- (The old `C4Z_ROOT` global was removed — it was the dead FileSetDir token
+-- restricted away in OS 3.3.0; the updater now uses the allowed "C4Z" alias.)
 
 -- The bundler expects the file to end with a `return` statement and an
 -- assignment global. We don't have a singleton to return; provide an empty
@@ -4346,11 +4345,16 @@ function GitHubUpdater:updateAll(repo, driverFilenames, includePrereleases, forc
   -- DIVERGENCE FROM TEMPLATE: the upstream control4-driver-template passes the
   -- literal "C4Z_ROOT" to C4:FileSetDir. That was the old root-of-the-c4z-store
   -- alias, REMOVED in OS 3.3.0's FileSetDir security tightening — on 3.3.0+ it
-  -- fails with "Restricted path specified: C4Z_ROOT". Use the sanctioned
-  -- C4:GetC4zDir() (>=2.10.0), which returns the real directory where .c4z files
-  -- reside (an allowed full path FileSetDir accepts for backwards-compat); fall
-  -- back to the documented "C4Z" alias if GetC4zDir is somehow unavailable.
-  local c4zDir = (type(C4.GetC4zDir) == "function" and C4:GetC4zDir()) or "C4Z"
+  -- fails with "Restricted path specified: C4Z_ROOT".
+  --
+  -- Per the DriverWorks FileSetDir docs the ALLOWED aliases are SANDBOX/LOGGING/
+  -- MEDIA/C4Z, where "C4Z" -> /opt/control4/var/drivers/c4z/<driver_name> (this
+  -- driver's own, writable c4z folder). NOTE: C4:GetC4zDir() returns the c4z
+  -- ROOT (/opt/control4/var/drivers/c4z/.), which is NOT writable by a sandboxed
+  -- driver — on-device that path was ALSO rejected ("Restricted path specified:
+  -- /opt/control4/var/drivers/c4z/."). So we use the documented "C4Z" ALIAS,
+  -- the allowed per-driver location, not GetC4zDir's root path.
+  local c4zDir = "C4Z"
   return self
     :downloadOutdatedDrivers(c4zDir, repo, installedDriverFilenames, includePrereleases, forceUpdate)
     :next(function(downloadedDriverFilenames)
@@ -10255,10 +10259,11 @@ function UpdateUpdateStatusProperty(text)
 end
 
 -- Trigger the full template github_updater. Downloads any .c4z whose
--- DRIVER_VERSION is older than the latest release tag, writes it to the c4z
--- directory (resolved via C4:GetC4zDir() — the old "C4Z_ROOT" alias was removed
--- in OS 3.3.0), then drives Composer's local SOAP endpoint to install it.
--- Status updates surface in the "Update Status" property.
+-- DRIVER_VERSION is older than the latest release tag, writes it to the allowed
+-- "C4Z" FileSetDir alias (the per-driver c4z folder; the old "C4Z_ROOT" alias
+-- and GetC4zDir's c4z-root path are both restricted on OS 3.3.0+), then drives
+-- Composer's local SOAP endpoint to install it. Status surfaces in the
+-- "Update Status" property.
 --
 -- `force` (the "Force Reinstall Latest Release" command) passes forceUpdate=true
 -- to updateAll so the latest release is re-downloaded and re-installed even when

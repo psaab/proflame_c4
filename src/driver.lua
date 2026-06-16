@@ -8,7 +8,7 @@
 -- =============================================================================
 
 DRIVER_NAME = "Proflame WiFi Fireplace"
-DRIVER_VERSION = "2026061510"
+DRIVER_VERSION = "2026061511"
 DRIVER_DATE = "2026-06-16"
 
 -- The WebSocket network binding is now allocated dynamically by the vendored
@@ -2977,10 +2977,11 @@ function UpdateUpdateStatusProperty(text)
 end
 
 -- Trigger the full template github_updater. Downloads any .c4z whose
--- DRIVER_VERSION is older than the latest release tag, writes it to the c4z
--- directory (resolved via C4:GetC4zDir() — the old "C4Z_ROOT" alias was removed
--- in OS 3.3.0), then drives Composer's local SOAP endpoint to install it.
--- Status updates surface in the "Update Status" property.
+-- DRIVER_VERSION is older than the latest release tag, writes it to the allowed
+-- "C4Z" FileSetDir alias (the per-driver c4z folder; the old "C4Z_ROOT" alias
+-- and GetC4zDir's c4z-root path are both restricted on OS 3.3.0+), then drives
+-- Composer's local SOAP endpoint to install it. Status surfaces in the
+-- "Update Status" property.
 --
 -- `force` (the "Force Reinstall Latest Release" command) passes forceUpdate=true
 -- to updateAll so the latest release is re-downloaded and re-installed even when

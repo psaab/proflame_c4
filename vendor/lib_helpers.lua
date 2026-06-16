@@ -189,9 +189,8 @@ function XMLTag(strName, content, tagSubTables, xmlEncodeElements, tAttribs)
     return table.concat(parts)
 end
 
--- C4Z_ROOT is the symbolic directory name passed to C4:FileSetDir. The
--- template defines it as a literal string; replicate that.
-C4Z_ROOT = C4Z_ROOT or "C4Z_ROOT"
+-- (The old `C4Z_ROOT` global was removed — it was the dead FileSetDir token
+-- restricted away in OS 3.3.0; the updater now uses the allowed "C4Z" alias.)
 
 -- The bundler expects the file to end with a `return` statement and an
 -- assignment global. We don't have a singleton to return; provide an empty
