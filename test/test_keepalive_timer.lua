@@ -113,16 +113,25 @@ OnKeepaliveTimer()
 Test.assertEqual(_ping_calls, 2, "fire 2 sends a ping")
 Test.assertEqual(gMissedKeepalives, 2, "fire 2 increments miss counter")
 
--- Third consecutive silent fire trips the watchdog: reconnect, no ping.
+-- Third consecutive silent fire trips the watchdog. The reconnect is DEFERRED
+-- to a fresh 1ms one-shot (so we never cancel the firing repeating timer from
+-- inside its own callback), so Reconnect is not called synchronously — it runs
+-- only when that one-shot fires.
+_timers = {}
 OnKeepaliveTimer()
-Test.assertEqual(_reconnects, 1, "fire 3 forces a reconnect")
 Test.assertEqual(_ping_calls, 2, "watchdog fire does not also send a ping")
 Test.assertEqual(gMissedKeepalives, 0, "watchdog resets the miss counter")
+Test.assertEqual(_reconnects, 0, "watchdog does not reconnect synchronously")
+Test.assertEqual(#_timers, 1, "watchdog scheduled one deferred timer")
+Test.assertEqual(_timers[1].delay_ms, 1, "deferred reconnect is a 1ms one-shot")
+Test.assertEqual(_timers[1].repeating, false, "deferred reconnect is not repeating")
+_timers[1].fn()
+Test.assertEqual(_reconnects, 1, "deferred one-shot fires the reconnect")
 
 -- Inbound traffic resets the counter so a live device never trips the watchdog.
 gMissedKeepalives = 2
 OnWebSocketMessage(nil, "PROFLAMEPONG")
-Test.assertEqual(gMissedKeepalives, 0, "any inbound frame resets the miss counter")
+Test.assertEqual(gMissedKeepalives, 0, "any inbound app frame resets the miss counter")
 
 SendWebSocketMessage = original_SendWebSocketMessage
 Reconnect = original_Reconnect

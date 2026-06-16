@@ -8391,7 +8391,7 @@ function StartKeepaliveTimer()
     StopKeepaliveTimer()
     local seconds = tonumber(Properties["Keepalive Interval (seconds)"]) or 15
     if seconds <= 0 then
-        dbg_info("Keepalive timer disabled (Keepalive Interval = 0)")
+        dbg_info("Keepalive timer disabled (Keepalive Interval <= 0)")
         return
     end
     gMissedKeepalives = 0
@@ -8411,7 +8411,11 @@ function OnKeepaliveTimer()
     if gMissedKeepalives >= 3 then
         dbg_warn("Keepalive: no device traffic across 3 intervals; forcing reconnect")
         gMissedKeepalives = 0
-        Reconnect()
+        -- Defer the reconnect out of this repeating-timer callback. Reconnect
+        -- → Disconnect → StopKeepaliveTimer would cancel gKeepaliveTimerId,
+        -- i.e. the very timer currently firing; C4's self-cancel-during-fire
+        -- semantics aren't documented, so hop to a fresh 1ms one-shot first.
+        C4:SetTimer(1, function(timer) Reconnect() end, false)
         return
     end
     SendWebSocketMessage("PROFLAMEPING")
@@ -9416,8 +9420,10 @@ end
 -- (vendor module strips RFC 6455 framing/masking + reassembles fragments).
 -- Drive that straight into the existing app-protocol decoder.
 function OnWebSocketMessage(ws, data)
-    -- Any inbound frame proves the device is alive — reset the keepalive
-    -- watchdog (B4/#86). PROFLAMEPONG, status JSON, anything counts.
+    -- Any inbound app frame proves the device is alive — reset the keepalive
+    -- watchdog (B4/#86). PROFLAMEPONG, status JSON, anything the vendored
+    -- module surfaces here counts. (The WS ping is disabled for this device,
+    -- so there are no control-frame pongs handled inside the vendor module.)
     gMissedKeepalives = 0
     HandleProflameMessage(data)
 end

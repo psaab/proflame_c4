@@ -86,7 +86,7 @@
         <name>Keepalive Interval (seconds)</name>
         <type>RANGED_INTEGER</type>
         <minimum>0</minimum>
-        <maximum>120</maximum>
+        <maximum>25</maximum>
         <default>15</default>
         <readonly>false</readonly>
       </property>
