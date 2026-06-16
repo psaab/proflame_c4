@@ -448,8 +448,8 @@ ParseStatusMessage("PROFLAMEPONG")
 local pong_updates = Test.getPropertyUpdates()
 Test.assert(pong_updates["Last Keepalive Response"] ~= nil,
     "PROFLAMEPONG stamps the 'Last Keepalive Response' property")
-Test.assert(tostring(pong_updates["Last Keepalive Response"]):match("%d%d%d%d%-%d%d%-%d%d"),
-    "'Last Keepalive Response' is a date-stamped string")
+Test.assert(tostring(pong_updates["Last Keepalive Response"]):match("^%d%d%d%d%-%d%d%-%d%d %d%d:%d%d:%d%d$"),
+    "'Last Keepalive Response' is a full YYYY-MM-DD HH:MM:SS timestamp")
 Test.assertEqual(pong_updates["Last Ping Response"], nil,
     "PROFLAMEPONG does NOT update the old (removed) 'Last Ping Response' name")
 
