@@ -24,11 +24,14 @@ A report-only check also runs automatically ~10 s after the driver loads and the
 ---
 
 ## Table of Contents
-1. [Proflame WiFi Protocol](#proflame-wifi-protocol)
-2. [Control4 Driver Architecture](#control4-driver-architecture)
-3. [Control4 Thermostat Extras Menu](#control4-thermostat-extras-menu)
-4. [Control4 Proxy Communication](#control4-proxy-communication)
-5. [Complete XML Examples](#complete-xml-examples)
+1. [Driver Updates](#driver-updates)
+2. [Proflame WiFi Protocol](#proflame-wifi-protocol)
+3. [Control4 Driver Architecture](#control4-driver-architecture) (incl. [Composer Properties](#composer-properties))
+4. [Control4 Thermostat Extras Menu](#control4-thermostat-extras-menu)
+5. [Control4 Proxy Communication](#control4-proxy-communication)
+6. [Complete XML Examples](#complete-xml-examples)
+7. [Key Lessons Learned](#key-lessons-learned)
+8. [Appendix: Lua Helper Functions](#appendix-lua-helper-functions)
 
 ---
 
@@ -199,6 +202,52 @@ The device sends status updates as JSON with indexed status/value pairs:
 
 ### Key Capability: has_extras
 The `<has_extras>true</has_extras>` capability MUST be set to enable the Extras tab in the Control4 UI. Note: Use lowercase `true`, not `True`.
+
+### Composer Properties
+
+The driver exposes these properties on the device's **Properties** tab in Composer Pro. Read-only status properties are populated from device status frames; editable properties are configuration.
+
+**Connection & live status (read-only):**
+
+| Property | Notes |
+|----------|-------|
+| `Driver Version` | Running `DRIVER_VERSION` + build stamp. |
+| `Firmware Versions` | Composed device firmware (main / IFC-C / IFC-S / BLE / RC). |
+| `Connection Status` | `Connecting…` / `Connected` / `Disconnected` / `Not Configured`. |
+| `Last Keepalive Response` | Timestamp of the last `PROFLAMEPONG` reply to the keepalive (default `Never`). Round-trip liveness at a glance. |
+| `WiFi Signal Strength` | Device-reported RSSI. |
+| `Operating Mode`, `Flame Level`, `Fan Level`, `Light Level`, `Temperature Setpoint`, `Room Temperature`, `Thermostat Enabled`, `Pilot Status`, `Aux Output`, `Front Flame (Split)`, `Timer Active`, `Timer Remaining`, `Burner Status`, `Temperature Unit` | Live mirrors of the corresponding device status fields. |
+
+**Connection configuration (editable):**
+
+| Property | Default | Notes |
+|----------|---------|-------|
+| `IP Address` | — | Fireplace IP. |
+| `Port` | `88` | WebSocket port. |
+| `Keepalive Interval (seconds)` | `15` | App-level `PROFLAMEPING` cadence (range 0–25; `0` disables). Holds the connection open — see [Keep-Alive Protocol](#keep-alive-protocol). |
+| `Reconnect Delay (seconds)` | `10` | Delay before reconnecting after a drop. |
+| `Connect Timeout (seconds)` | `30` | Connect-attempt watchdog. |
+| `Status Refresh Interval (minutes)` | `5` | Periodic full-status re-request (`PROFLAMECONNECTION`); `0` disables. |
+
+**Behavior defaults (editable):**
+
+| Property | Default | Notes |
+|----------|---------|-------|
+| `Default On Mode` | `Smart (Thermostat)` | Mode applied by `Turn On`. |
+| `Default Flame Level` | `6` | Flame applied by `Turn On`. |
+| `Default Timer (minutes)` | `180` | Auto-off timer applied by `Turn On` (see [Default Timer Scope](#default-timer-scope)). |
+| `Command Format (non-Turn-Off)` | `Legacy Only` | Wire format for non-Turn-Off commands (compatibility testing). |
+
+**Updater & debug (editable):**
+
+| Property | Default | Notes |
+|----------|---------|-------|
+| `Update Status` | `Idle` | Read-only result/progress of the GitHub updater (see [Driver Updates](#driver-updates)). |
+| `Update Check Interval (hours)` | `24` | Report-only auto-check cadence; `0` disables. Installs are always manual. |
+| `Debug Mode` | `On` | Enables debug logging. |
+| `Debug Level` | `Debug` | Log verbosity (`Error`/`Warn`/`Info`/`Debug`). |
+
+> Adding or renaming a property here is a **static-surface change**: after an in-driver self-update it won't appear until Composer re-reads `driver.xml` (Refresh Navigators, or a Director reload). The Lua keeps writing the value either way; the field just isn't registered in the UI until the refresh.
 
 ### Static XML vs Runtime UI Capabilities
 Treat `driver.xml` as the stable install-time contract. Static proxy, connection, property, command, and capability changes can cause heavier Control4 reload behavior than Lua-only/runtime UI refreshes. Prefer runtime proxy notifications for Navigator experiments whenever the ThermostatV2 SDK provides an equivalent.
@@ -557,10 +606,10 @@ scripts/package.sh [path/to/proflame_wifi_connect.c4z]
 | `vendor/http.lua` | snap-one DriverWorks template | HTTP client w/ retry+watchdog |
 | `vendor/github_updater.lua` | snap-one DriverWorks template | GitHub Releases auto-updater |
 | `vendor/drivers-common-public/global/lib.lua` | [snap-one/drivers-common-public@`64663d5`](https://github.com/snap-one/drivers-common-public/tree/64663d5deacaec25327418d207dc4b0e5e0f27ab) | `Select`/`CopyTable`/persist helpers/etc. (transitive dep of the WebSocket module) |
-| `vendor/drivers-common-public/global/timer.lua` | [snap-one/drivers-common-public@`64663d5`](https://github.com/snap-one/drivers-common-public/tree/64663d5deacaec25327418d207dc4b0e5e0f27ab) | `SetTimer`/`CancelTimer`/`ONE_SECOND` etc. (used by `websocket.lua` for WS-level ping/pong) |
+| `vendor/drivers-common-public/global/timer.lua` | [snap-one/drivers-common-public@`64663d5`](https://github.com/snap-one/drivers-common-public/tree/64663d5deacaec25327418d207dc4b0e5e0f27ab) | `SetTimer`/`CancelTimer`/`ONE_SECOND` etc. (used by `websocket.lua`; the WS-level ping is disabled by this driver — see [Keep-Alive Protocol](#keep-alive-protocol)) |
 | `vendor/drivers-common-public/global/handlers.lua` | [snap-one/drivers-common-public@`64663d5`](https://github.com/snap-one/drivers-common-public/tree/64663d5deacaec25327418d207dc4b0e5e0f27ab) | framework handler dispatch tables `OCS`/`RFN`/`OPC`/etc. — driver's top-level `OnConnectionStatusChanged` / `ReceivedFromNetwork` delegate to `OCS[netBinding]` / `RFN[netBinding]` for WebSocket-owned bindings |
 | `vendor/drivers-common-public/module/metrics.lua` | [snap-one/drivers-common-public@`64663d5`](https://github.com/snap-one/drivers-common-public/tree/64663d5deacaec25327418d207dc4b0e5e0f27ab) | `Metrics` factory (counters consumed by `websocket.lua`) |
-| `vendor/drivers-common-public/module/websocket.lua` | [snap-one/drivers-common-public@`64663d5`](https://github.com/snap-one/drivers-common-public/tree/64663d5deacaec25327418d207dc4b0e5e0f27ab) | `WebSocket:new()` factory — owns RFC 6455 handshake/framing/masking/ping-pong; replaced 9 hand-rolled helpers in C1 Phase 2 (driver `2026060302`) |
+| `vendor/drivers-common-public/module/websocket.lua` | [snap-one/drivers-common-public@`64663d5`](https://github.com/snap-one/drivers-common-public/tree/64663d5deacaec25327418d207dc4b0e5e0f27ab) | `WebSocket:new()` factory — owns RFC 6455 handshake/framing/masking; replaced 9 hand-rolled helpers in C1 Phase 2 (driver `2026060302`). Its RFC 6455 control-frame ping is **disabled** by this driver (`ws.ping_interval = 0`) because the Proflame device closes on it; an app-level `PROFLAMEPING` keepalive is used instead. |
 
 The `vendor/drivers-common-public/` tree mirrors upstream's directory layout exactly and the files are byte-identical to upstream master at the linked commit. They `require()` each other; a small `require` shim in `src/driver.lua` maps those calls to the bundled globals so the side-effect top-level code in each vendor file works under the bundled single-file deployment model.
 
