@@ -52,6 +52,7 @@ This driver enables Control4 home automation systems to control Proflame WiFi-en
 | IP Address | STRING | - | Fireplace WiFi module IP |
 | Port | INTEGER | 88 | WebSocket port |
 | Reconnect Delay | INTEGER | 10 | Delay before reconnect (seconds) |
+| Keepalive Interval (seconds) | INTEGER | 15 | App-level `PROFLAMEPING` cadence (0-25; 0 disables). Holds the connection open — see §2.6 / §8.5 |
 | Connect Timeout | INTEGER | 30 | Connect-attempt watchdog (seconds, 5-120). Forces teardown + reschedule if neither Established nor Offline arrives in time (issue #71). Not disablable — a safety mechanism |
 | Status Refresh Interval | INTEGER | 5 | Periodic full-status re-request (minutes); 0 disables |
 | Default On Mode | LIST | Smart (Thermostat) | Mode when turning on: Manual, Smart (Thermostat), Eco |
@@ -60,7 +61,11 @@ This driver enables Control4 home automation systems to control Proflame WiFi-en
 | Command Format (non-Turn-Off) | LIST | Legacy Only | Outbound format for non-Turn-Off device commands |
 | Update Check Interval | INTEGER | 24 | Report-only GitHub release check (hours, 0-168); 0 disables. Surfaces availability in Update Status; install stays manual |
 | Debug Mode | LIST | On | Enable/disable debug logging |
-| Debug Level | LIST | Debug | Error, Warning, Info, Debug, Trace |
+| Debug Level | LIST | Debug | Error, Warn, Info, Debug |
+
+**Read-only status properties** (populated from device status, not user-editable): `Driver Version`, `Firmware Versions`, `Connection Status`, `Last Keepalive Response` (timestamp of the last `PROFLAMEPONG` keepalive reply, default `Never` — round-trip liveness at a glance), `WiFi Signal Strength`, `Update Status`, and live mirrors of device state (`Operating Mode`, `Flame Level`, `Fan Level`, `Light Level`, `Temperature Setpoint`, `Room Temperature`, `Thermostat Enabled`, `Pilot Status`, `Aux Output`, `Front Flame (Split)`, `Timer Active`, `Timer Remaining`, `Burner Status`, `Temperature Unit`).
+
+> Adding/renaming a static property is a static-surface change: after an in-driver self-update it won't appear in Composer until `driver.xml` is re-read (Refresh Navigators / Director reload).
 
 ### 1.5 Driver Updates
 
@@ -75,6 +80,8 @@ These are exposed as **clickable buttons in the device's Actions tab** in Compos
 | **Force Reinstall Latest Release (Recovery)** | Re-downloads/re-installs the latest release even when versions match (recovery/repair). Can reinstall an older build if the latest release is behind the running one — the button is labeled "(Recovery)" to flag the downgrade risk. (Underlying command string remains `Force Reinstall Latest Release`.) |
 
 Detection also runs automatically: a report-only check fires ~10 s after driver load and then every `Update Check Interval` hours (default 24; set 0 to disable). **Installs are always manual.** A release must exist with a tag newer than the running `DRIVER_VERSION` and an asset named exactly `proflame_wifi_connect.c4z`, or nothing is detected.
+
+**OS 3.3.0+ install mechanism.** `UpdateProjectC4i` installs the `.c4z` from the c4z store **root** (`C4Z_ROOT`) by name. On OS 3.3.0+, `FileSetDir("C4Z_ROOT")` is restricted for unsigned community drivers, so `OnDriverLateInit` first performs the community-standard shared-secret handshake `C4:FileSetDir("c29tZXNwZWNpYWxrZXk=++11")` to re-unlock root access; the updater then writes there and verifies the on-disk size before triggering the SOAP install (rejecting loudly on a denied/short write rather than silently reinstalling the old build). **Bootstrap:** the release that first *adds* the handshake must be installed manually once (Composer → Driver → Add or Update Driver…); subsequent updates self-install from the buttons. See the changelog (2026061602) for the full root-cause.
 
 ---
 
@@ -163,9 +170,9 @@ After WebSocket handshake completes:
 
 ### 2.6 Keep-Alive
 
-Send `PROFLAMEPING` text message every 5 seconds (configurable). The device responds with `PROFLAMEPONG`.
+Send a `PROFLAMEPING` **text** message every `Keepalive Interval (seconds)` (default 15, 0-25, 0 disables). The device replies `PROFLAMEPONG`, and the `Last Keepalive Response` property is timestamped.
 
-**Note**: This is NOT standard WebSocket ping/pong frames, but text messages.
+**Note**: This is NOT a standard RFC 6455 WebSocket ping/pong control frame — it's an app-level text message. The vendored WebSocket module's RFC 6455 control-frame ping is **disabled** for this device (`ws.ping_interval = 0`): the Proflame dongle closes the connection ~30 s after connect when a control-frame ping is the only client traffic (it enforces an inbound-idle session timeout and doesn't count the control ping as activity). The app-level `PROFLAMEPING` is what keeps the session alive. A half-open-link watchdog forces a reconnect after 3 consecutive intervals with no inbound traffic. See §8.5 and changelog 2026061601.
 
 ### 2.7 Operating Modes
 
@@ -958,7 +965,9 @@ end
 
 ### 8.2 WebSocket Implementation
 
-Since Control4 doesn't provide a WebSocket library, implement manually:
+> **Historical / superseded.** As of C1 Phase 2 (driver `2026060302`) the driver no longer hand-rolls WebSocket framing. The vendored Snap One module `vendor/drivers-common-public/module/websocket.lua` owns the RFC 6455 handshake, framing, masking, and fragmentation; `Connect()` builds a `ws://<ip>:<port>/` URL and calls `WebSocket:new(url)`. The hand-rolled helpers below (`GenerateWebSocketKey`/`BuildWebSocketHandshake`/`CreateWebSocketFrame`/…) were deleted then and are kept here only as a wire-format reference. Note the driver sets `ws.ping_interval = 0` to disable the module's RFC 6455 control-frame ping (see §2.6 / §8.5).
+
+Since Control4 doesn't provide a WebSocket library, the original driver implemented it manually (now vendored — see note above):
 
 ```lua
 function GenerateWebSocketKey()
@@ -1072,17 +1081,30 @@ end
 
 ### 8.5 Ping Keep-Alive
 
+The app-level `PROFLAMEPING` keepalive (the RFC 6455 control-frame ping is disabled for this device — see §2.6). Sent every `Keepalive Interval (seconds)` (default 15, 0-25, 0 disables); `gMissedKeepalives` is a half-open-link watchdog that forces a reconnect after 3 silent intervals, deferred to a 1 ms one-shot so the firing timer is never self-cancelled. Any inbound frame resets the miss counter.
+
 ```lua
-function StartPingTimer()
-    StopPingTimer()
-    local interval = (tonumber(Properties["Ping Interval (seconds)"]) or 5) * 1000
-    gPingTimerId = C4:SetTimer(interval, function()
-        if gConnected and gHandshakeComplete then
-            SendWebSocketMessage("PROFLAMEPING")
-        end
-    end, true)  -- Repeating
+function StartKeepaliveTimer()
+    StopKeepaliveTimer()
+    local seconds = tonumber(Properties["Keepalive Interval (seconds)"]) or 15
+    if seconds <= 0 then return end          -- 0 disables
+    gMissedKeepalives = 0
+    gKeepaliveTimerId = C4:SetTimer(seconds * 1000, function() OnKeepaliveTimer() end, true)
+end
+
+function OnKeepaliveTimer()
+    if not (gConnected and gHandshakeComplete) then return end
+    gMissedKeepalives = (gMissedKeepalives or 0) + 1
+    if gMissedKeepalives >= 3 then            -- no device traffic for 3 intervals
+        gMissedKeepalives = 0
+        gKeepaliveReconnectTimerId = C4:SetTimer(1, function() Reconnect() end, false)
+        return
+    end
+    SendWebSocketMessage("PROFLAMEPING")      -- device replies PROFLAMEPONG
 end
 ```
+
+> Historical: pre-C1-Phase-2 this read the now-removed `Ping Interval (seconds)` property; C1 Phase 2 replaced it with the vendored 30 s RFC 6455 ping, which the device closed on — B4/#86 restored the app-level keepalive above on the `Keepalive Interval (seconds)` property. See changelog 2026061601.
 
 ---
 
@@ -1535,6 +1557,8 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 ---
 
 ## Appendix A: Sample Lua Code Structure
+
+> **Illustrative skeleton from the original design — not the current API.** Several names below predate later refactors: C1 Phase 2 (`2026060302`) deleted the hand-rolled WebSocket helpers (`GenerateWebSocketKey`/`BuildWebSocketHandshake`/`CreateWebSocketFrame`/`ParseWebSocketFrame`) and the static `NETWORK_BINDING_ID = 6001` in favor of the vendored `websocket.lua`; B4/#86 replaced `StartPingTimer`/`StopPingTimer`/`gPingTimerId`/`Ping Interval` with `StartKeepaliveTimer`/`StopKeepaliveTimer`/`OnKeepaliveTimer`/`gKeepaliveTimerId` on the `Keepalive Interval (seconds)` property (§8.5). Treat this as a shape-of-the-driver overview; see `src/driver.lua` for the authoritative current API.
 
 ```lua
 -- Constants
