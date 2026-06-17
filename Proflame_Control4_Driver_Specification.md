@@ -329,25 +329,22 @@ end
 
 ### 3.3 Driver Load Cleanup
 
-**Important**: When the Lua file loads/reloads, cleanup code runs immediately (before callbacks):
+**Important**: When the Lua file loads/reloads, cleanup code runs immediately (before callbacks). The current cleanup (post-C1-Phase-2) cancels the keepalive/reconnect timers, tears down the vendored WebSocket (`gWebSocket`) and its dynamically-allocated binding, and resets state. The example below is illustrative of the *pattern*:
 
 ```lua
--- Force cleanup of any existing timers from previous driver instance
-if gPingTimerId then
-    pcall(function() gPingTimerId:Cancel() end)
-    gPingTimerId = nil
-end
+-- Cancel the app-level keepalive timer from a previous instance
+-- (and the deferred-reconnect one-shot); reload-safe.
+if gKeepaliveTimerId then pcall(function() gKeepaliveTimerId:Cancel() end); gKeepaliveTimerId = nil end
+if gKeepaliveReconnectTimerId then pcall(function() gKeepaliveReconnectTimerId:Cancel() end); gKeepaliveReconnectTimerId = nil end
 
--- Force disconnect if we were connected
-if gConnected then
-    pcall(function()
-        C4:NetDisconnect(NETWORK_BINDING_ID, port)
-    end)
-end
+-- Tear down the vendored WebSocket + its binding from the previous instance
+if gWebSocket then pcall(function() gWebSocket:Close() end); gWebSocket = nil end
 
--- Reset global state to ensure clean state on driver reload
+-- Reset global state to ensure clean state on driver reload (see §7.5)
 gState = { ... }
 ```
+
+> **Note:** a legacy `gPingTimerId` cancel is also kept *only* as OTA cleanup for pre-Phase-2 installs (the live keepalive timer is `gKeepaliveTimerId`). There is no `NETWORK_BINDING_ID` / static binding `6001` anymore — the vendored `websocket.lua` allocates the binding dynamically (6100-6199); the legacy disconnect targets the hard-coded old `6001` defensively. See §8 and changelog `2026060302`.
 
 ### 3.4 Property System
 
@@ -386,28 +383,27 @@ timer:Cancel()
 
 ### 3.6 Network Connections
 
+> **Superseded by the vendored WebSocket module (C1 Phase 2, `2026060302`).** The driver no longer calls `C4:CreateNetworkConnection`/`NetConnect`/`SendToNetwork` directly. `Connect()` builds a `ws://<ip>:<port>/` URL and calls `WebSocket:new(url)`; the vendored `websocket.lua` owns the binding (allocated dynamically in 6100-6199) and the raw socket calls. Outbound app frames go through `SendWebSocketMessage` → `gWebSocket:Send`. The low-level API below is kept as background reference for how Control4 networking works underneath the module.
+
 ```lua
--- Create connection (binding ID is arbitrary unique number)
-C4:CreateNetworkConnection(6001, ipAddress)
-
--- Connect
-C4:NetConnect(6001, port)
-
--- Disconnect
-C4:NetDisconnect(6001, port)
-
--- Send data
-C4:SendToNetwork(6001, port, data)
+-- (Underlying Control4 network API — now driven by the vendored module, not the driver directly)
+C4:CreateNetworkConnection(binding, ipAddress)
+C4:NetConnect(binding, port)
+C4:NetDisconnect(binding, port)
+C4:SendToNetwork(binding, port, data)
 ```
 
-Network callbacks:
+Network callbacks: the driver's top-level `OnConnectionStatusChanged` / `ReceivedFromNetwork` are thin shims that delegate to the vendored dispatchers (`OCS[idBinding]` / `RFN[idBinding]`) for the WebSocket-owned binding — the driver itself no longer branches on `ONLINE`/`OFFLINE` or parses raw frames:
+
 ```lua
 function OnConnectionStatusChanged(idBinding, nPort, strStatus)
-    -- strStatus: "ONLINE" or "OFFLINE"
+    -- delegates to OCS[idBinding] (vendored); the module then calls back into
+    -- OnWebSocketEstablished / OnWebSocketOffline.
 end
 
 function ReceivedFromNetwork(idBinding, nPort, strData)
-    -- Called when data arrives
+    -- delegates to RFN[idBinding] (vendored); the module strips framing and
+    -- surfaces one decoded payload via OnWebSocketMessage → HandleProflameMessage.
 end
 ```
 
@@ -630,6 +626,7 @@ In capabilities:
       <object type="list" id="pf_mode" label="Mode" command="SELECT_MODE">
         <list maxselections="1" minselections="1">
           <!-- Items reordered with current mode first (Ecobee-style) -->
+          <item text="Off" value="off"/>
           <item text="Manual" value="manual"/>
           <item text="Smart Thermostat" value="smart"/>
           <item text="Eco" value="eco"/>
@@ -787,17 +784,11 @@ end
 
 ### 6.6 Slider Countdown Display
 
-To make the slider count down with the timer:
+To make the slider count down with the timer, the `timer_count` status handler detects a whole-minute change and refreshes the Extras immediately. The handler uses **`floor`** for this minute-change detection (it does not consult `timer_status`):
 
 ```lua
 local newCount = tonumber(value) or 0
--- Use ceil when timer is active so we show at least 1m until it truly expires
-local newMinutes
-if timerStatus == 1 and newCount > 0 then
-    newMinutes = math.ceil(newCount / 60000)
-else
-    newMinutes = math.floor(newCount / 60000)
-end
+local newMinutes = math.floor(newCount / 60000)
 
 local oldCount = tonumber(gState.timer_count) or 0
 local oldMinutes = math.floor(oldCount / 60000)
@@ -809,6 +800,8 @@ if oldMinutes ~= newMinutes then
     UpdateTimerExtras()  -- Immediate, not throttled
 end
 ```
+
+> The `ceil`-when-active rounding (so an active timer shows at least 1 m until it truly expires) lives in **`GetExtrasXML()`** for the slider's rendered `value`/label — not in this minute-change detector.
 
 ### 6.7 Timer Display Format
 
@@ -898,8 +891,10 @@ gState = {
 gConnected = false
 gConnecting = false
 gHandshakeComplete = false
-gReceiveBuffer = ""
+gMissedKeepalives = 0   -- keepalive watchdog (§8.5)
 ```
+
+(The old `gReceiveBuffer` hand-rolled-framing buffer was removed in C1 Phase 2 — the vendored WebSocket module owns buffering now.)
 
 ### 7.3 UI State
 
@@ -943,13 +938,18 @@ function ResetDriverState()
     gConnected = false
     gConnecting = false
     gHandshakeComplete = false
-    gReceiveBuffer = ""
     gExtrasThrottle = false
-    gSuppressTimerUpdates = false
+    SetTimerSuppression(false, "driver state reset")  -- not a bare gSuppressTimerUpdates = false
     gTimerExpired = false
     gState = { ... }  -- Reset to defaults
+    -- Also resets gLastMainMode / gLastConnectionOnline / gStatusSeen /
+    -- gTurnOffInProgress / gTimerSafetyOffPending / gFirmwareVersions, and cancels
+    -- every timer (reconnect, connect-timeout, status-refresh, keepalive,
+    -- pending-command, turn-off confirm/retry, timer-safety).
 end
 ```
+
+(The real `ResetDriverState()` is more thorough than this sketch; it no longer touches the removed `gReceiveBuffer`.)
 
 ---
 
@@ -1069,13 +1069,14 @@ function ScheduleReconnect()
     end, false)
 end
 
-function OnConnectionStatusChanged(idBinding, nPort, strStatus)
-    if strStatus == "OFFLINE" then
-        gConnected = false
-        gHandshakeComplete = false
-        StopPingTimer()
-        ScheduleReconnect()
-    end
+-- The offline → reconnect transition now flows through the vendored module's
+-- callback into OnWebSocketOffline (not the driver branching on strStatus here):
+function OnWebSocketOffline(ws)
+    gConnected = false
+    gHandshakeComplete = false
+    StopStatusRefreshTimer()
+    StopKeepaliveTimer()       -- (was StopPingTimer, pre-#86)
+    ScheduleReconnect()
 end
 ```
 
@@ -1124,8 +1125,8 @@ end
   <manufacturer>Manufacturer</manufacturer>
   <driver>DriverWorks</driver>
   <control>lua_gen</control>
-  <version>2026051731</version>
-  <auto_update>true</auto_update>
+  <version>2026061604</version>
+  <auto_update>false</auto_update>  <!-- GitHub-release self-updater, not Control4's native menu (§1.5) -->
 
   <proxies>
     <proxy proxybindingid="5001" name="Display Name"
@@ -1183,30 +1184,10 @@ end
 
 ### 9.3 Connection Definitions
 
+> **No static network/TCP binding.** C1 Phase 2 (`2026060302`) removed the static `<connection id="6001">` TCP binding; the vendored `websocket.lua` now allocates a network binding dynamically (scanning 6100-6199). The current `driver.xml` declares only the two proxy/UI connections below (`5001` thermostat and `7000` room selection).
+
 ```xml
 <connections>
-  <!-- Network connection -->
-  <connection>
-    <id>6001</id>
-    <facing>6</facing>
-    <connectionname>Proflame Network</connectionname>
-    <type>4</type>
-    <consumer>True</consumer>
-    <classes>
-      <class>
-        <classname>TCP</classname>
-        <ports>
-          <port>
-            <number>88</number>
-            <auto_connect>False</auto_connect>
-            <monitor_connection>False</monitor_connection>
-            <keep_connection>False</keep_connection>
-          </port>
-        </ports>
-      </class>
-    </classes>
-  </connection>
-
   <!-- Thermostat proxy connection -->
   <connection>
     <id>5001</id>
@@ -1381,11 +1362,10 @@ gState = { ... }  -- Reset
 
 -- In OnDriverUpdated:
 function OnDriverUpdated()
-    StopPingTimer()
     StopReconnectTimer()
-    Disconnect()
+    Disconnect()                 -- internally runs StopKeepaliveTimer (the old StopPingTimer is gone)
     ResetDriverState()
-    C4:UpdateProperty("Driver Version", DRIVER_VERSION)
+    C4:UpdateProperty("Driver Version", DRIVER_VERSION .. " (" .. DRIVER_DATE .. ")")
     C4:SetTimer(1000, function()
         SetupExtras()
         Connect()
@@ -1395,10 +1375,10 @@ end
 
 ### 10.9 WebSocket Frame Parsing
 
-**Problem**: Partial frames or multiple frames in single receive
-**Solution**: Buffer received data and parse complete frames
+> **Superseded by the vendored WebSocket module (C1 Phase 2).** Partial/coalesced-frame buffering and reassembly are now handled inside `vendor/drivers-common-public/module/websocket.lua`; the driver no longer keeps a `gReceiveBuffer` or runs `ParseWebSocketFrame`/`HandleWebSocketMessage` (all removed). The current top-level `ReceivedFromNetwork` just forwards to the vendored `RFN[idBinding]` dispatcher, and the module surfaces one already-decoded payload at a time via `OnWebSocketMessage` → `HandleProflameMessage`. The historical hand-rolled approach was:
 
 ```lua
+-- HISTORICAL (pre-C1-Phase-2) — buffer + parse complete frames manually:
 gReceiveBuffer = ""
 
 function ReceivedFromNetwork(idBinding, nPort, strData)
@@ -1456,7 +1436,7 @@ Manual command-format verification should exercise `main_mode`, `flame_control`,
 | `SET_SCALE` | SCALE | Change temperature scale |
 | `GET_EXTRAS_SETUP` | - | Request extras XML |
 | `GET_EXTRAS_STATE` | - | Request extras state |
-| `SELECT_MODE` | VALUE | Select mode from extras (manual/smart/eco) |
+| `SELECT_MODE` | VALUE | Select mode from extras (`off`/`manual`/`smart`/`eco`; `off` calls `CommandTurnOff()`) |
 | `SET_FLAME_LEVEL` | VALUE | Set flame from extras (1-6); switches to Manual first if needed |
 | `SET_FAN_LEVEL` | VALUE | Set fan from extras (0-6) |
 | `SET_LIGHT_LEVEL` | VALUE | Set lamp from extras (0-6) |
