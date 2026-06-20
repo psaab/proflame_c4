@@ -57,7 +57,7 @@ This driver enables Control4 home automation systems to control Proflame WiFi-en
 | Status Refresh Interval | INTEGER | 5 | Periodic full-status re-request (minutes); 0 disables |
 | Default On Mode | LIST | Smart (Thermostat) | Mode when turning on: Manual, Smart (Thermostat), Eco |
 | Default Flame Level | INTEGER | 6 | Initial flame level (1-6) |
-| Default Timer | INTEGER | 180 | Auto-off timer used only by Turn On; 0 disables timer arming and causes timer safety to force the fireplace off |
+| Default Timer | INTEGER | 180 | Auto-off timer armed by Turn On and by the timer-required safety policy (incl. when the device is turned on by the physical remote); `0` disables timer arming, so an on-state with no running timer is forced off instead |
 | Command Format (non-Turn-Off) | LIST | Legacy Only | Outbound format for non-Turn-Off device commands |
 | Update Check Interval | INTEGER | 24 | Report-only GitHub release check (hours, 0-168); 0 disables. Surfaces availability in Update Status; install stays manual |
 | Debug Mode | LIST | On | Enable/disable debug logging |
@@ -232,8 +232,8 @@ All controllable parameters plus:
 
 | Parameter | Description |
 |-----------|-------------|
-| `room_temperature` | Current temp (Fx10) |
-| `temperature_read` | Alias for room_temperature |
+| `room_temperature` | Current temp (Fx10). Readings that decode outside −40…140°F are treated as a firmware sentinel and dropped (some firmware reports raw `6845` = 684.5°F when no real sensor value is available); the last good reading is retained |
+| `temperature_read` | Alias for room_temperature (same plausibility guard) |
 | `timer_count` | Remaining time in ms |
 | `timer_read` | Alias for timer_count |
 | `burner_status` | Burner state bitmap |
@@ -827,7 +827,7 @@ end
 
 ### 6.8 Auto-Timer on Turn-On
 
-When explicitly turning on the fireplace, automatically set timer and flame. `Default Timer (minutes)` is used only by Turn On. Mode-only changes such as selecting Manual, Smart, or Eco send only the mode command; the driver does not adjust flame or timer values. Set Timer uses the requested `Minutes` value, including when it first turns on an off fireplace. Because on states require a running timer, Default Timer `0` means Turn On will be forced back off after confirmed status shows no running timer.
+When explicitly turning on the fireplace, automatically set timer and flame. `Default Timer (minutes)` is used by Turn On and is also re-used by the timer-required safety policy (§6.9) when the device is turned on by other means, such as the physical remote. Mode-only changes such as selecting Manual, Smart, or Eco send only the mode command; the driver does not adjust flame or timer values. Set Timer uses the requested `Minutes` value, including when it first turns on an off fireplace. Because on states require a running timer, Default Timer `0` means Turn On (and any other on-state without a timer) will be forced back off after confirmed status shows no running timer.
 
 ```lua
 -- In SET_MODE_HVAC handler when mode == "Heat":
@@ -849,14 +849,15 @@ end, false)
 
 ### 6.9 Timer-Required Safety Policy
 
-Manual, Smart, and Eco are treated as on states that require an active auto-off timer. Confirmed status processing enforces this policy after `main_mode`, `timer_status`, or timer-expiry updates:
+Manual, Smart, and Eco are treated as on states that require an active auto-off timer. Confirmed status processing enforces this policy after `main_mode`, `timer_status`, or timer-expiry updates. When the fireplace is on and `timer_status` is not `1`, the response depends on *why* no timer is running:
 
-- If the fireplace is on and `timer_status` is not `1`, the driver logs the safety action and sends the existing Turn Off sequence.
+- **No timer was ever armed** (e.g. the physical remote turned the fireplace on): the driver arms the configured `Default Timer (minutes)` and lets the device keep running, then mirrors the resulting state. It does **not** force the fireplace off. Forcing off here produced an on/off war with the remote — the device re-asserts the on mode, the driver slams it off, and the two fight every ~1 s. Arming sets `gSuppressTimerUpdates`, so on-mode echoes that arrive while the timer is being armed are skipped until `timer_status` settles to `1`; this prevents both the war and any arm spam.
+- **The auto-off timer expired** (`gTimerExpired`): the driver logs the safety action and sends the existing Turn Off sequence. Auto-off still works exactly as before — an expired timer turns the fireplace off rather than re-arming forever.
+- **`Default Timer (minutes)` is `0`** (timer arming disabled): there is no timer to arm, so the driver falls back to forcing the fireplace off after confirmed status shows no running timer. This is the documented escape hatch for users who do not want automatic timer arming.
 - If `main_mode` is on but `timer_status` has not arrived yet, the driver defers briefly. If `timer_status` remains unknown after that status-sync grace period, it is treated as not running.
 - Enforcement is skipped while `gSuppressTimerUpdates` is true so normal Turn On and Set Timer flows are not interrupted while the timer is being armed.
-- A pending safety force-off is tracked so stale on-state echoes do not repeatedly spam off commands.
-- This intentionally changes earlier behavior: Cancel Timer while the fireplace is on also satisfies the force-off condition and results in Turn Off.
-- Turn On with `Default Timer (minutes)` set to `0` will also be forced back off after confirmed status shows no running timer.
+- A pending safety force-off is tracked (for the expired / Default-Timer-0 force-off paths) so stale on-state echoes do not repeatedly spam off commands.
+- This intentionally changes earlier behavior: Cancel Timer while the fireplace is on no longer forces Turn Off when a Default Timer is configured — it re-arms the Default Timer instead.
 - The unknown-`timer_status` grace period is 1500 ms, long enough for the normal initial status burst to deliver adjacent timer fields before enforcement treats the timer state as missing.
 
 ---
@@ -1513,7 +1514,10 @@ For PRs that change command behavior, run the shorter Composer Command Smoke Tes
 - [ ] Default Flame Level is applied when turning on
 - [ ] Default Timer is started by Turn On only
 - [ ] Set Timer while off uses the requested timer value, not Default Timer
-- [ ] Cancel Timer while on triggers the timer-required safety policy and turns the fireplace off
+- [ ] Cancel Timer while on triggers the timer-required safety policy, which re-arms the Default Timer (or, with Default Timer 0, turns the fireplace off)
+- [ ] Turning the fireplace on with the physical remote arms the Default Timer instead of fighting it off; the driver mirrors the running state
+- [ ] An expired auto-off timer still turns the fireplace off (does not re-arm)
+- [ ] An implausible device room-temperature reading (e.g. raw `6845` = 684.5°F) is dropped; the property keeps the last good value
 - [ ] Command Format testing records selected format and status echo for main_mode, flame_control, fan_control, lamp_control, temperature_set, timer_set, and timer_status
 - [ ] Mode changes from extras do not change flame or timer
 - [ ] Set Flame Level changes operating mode to Manual when invoked from Smart, Eco, or Off
@@ -1647,6 +1651,7 @@ function HandleThermostatCommand(strCommand, tParams) ... end
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2026061901 | 2026-06-19 | **Fix: the timer-required safety policy fought the physical remote, and an implausible room-temperature reading displayed as 684.5°F.** (1) **Timer policy (§6.9).** When the fireplace was turned on by the physical remote (on-mode with `timer_status=0`), the driver force-turned-it-off; the remote re-asserted on, the driver slammed it off again — an on/off war that the on-device log shows repeating every ~1 s for tens of seconds (`Timer safety policy forcing fireplace off: mode=6, timer_status=0`). `EnforceTimerRequiredForOnState` now **arms the configured Default Timer** for an on-state that never had a timer (via `SetTimerValueAndArm`), letting the device keep running and just mirroring its state. The two original force-off cases are preserved: an **expired** timer (`gTimerExpired`) still turns the fireplace off (auto-off works), and `Default Timer 0` still forces off (documented escape hatch). New `test/test_timer_safety.lua` covers arm-on-remote-turn-on, force-off-on-expiry, and the off-state no-op. (2) **Room temperature.** This firmware (FW 625.04.673) steadily reports raw `room_temperature":"6845"` (684.5°F after the Fx10 decode) alongside `temperature_set":"320"` / `burner_status":"32672"` sentinels when no real sensor value is available. `ApplyDeviceStatus` now drops any room-temperature reading that decodes outside −40…140°F so the bogus value never reaches the property or the thermostat proxy; the last good reading is retained. New `test/test_room_temperature_guard.lua`. No `driver.xml` capability/property/command/proxy change (only `<version>`), so no Director reload required. |
 | 2026061604 | 2026-06-16 | **Add "Last Keepalive Response" Composer property (#89).** A read-only STRING (default `Never`) timestamped each time the device replies `PROFLAMEPONG` to the app-level keepalive — so Composer shows round-trip liveness at a glance. This is the property #70 removed as dead UI back when C1 Phase 2 had dropped the keepalive (nothing solicited a pong then); the B4/#86 keepalive makes it live again, now under the clearer name. `ParseStatusMessage` stamps it via `os.date` (pcall-guarded); `test_websocket_integration` Test 4 updated to assert the stamp. **Static surface:** adds one read-only property — Director reload / driver re-add picks it up; existing installs default to `Never` until the first pong. |
 | 2026061603 | 2026-06-16 | **Test/verification release — no functional change.** Version bump only, to confirm the self-updater fixed in 2026061602 (#87 shared-secret `FileSetDir` handshake + `C4Z_ROOT` write) now installs end-to-end from the **Install Latest Release** button. With 2026061602 installed, the updater should detect `v2026061603 > 2026061602`, write the new `.c4z` to `C4Z_ROOT`, and Director should reload to `Driver loading - Version 2026061603` (no manual install needed this time). If it still reloads the old version, the size-verify/`FileSetDir`-denial guards added in 2026061602 will surface a real error in `Update Status` instead of a false success. |
 | 2026061602 | 2026-06-16 | **Fix: in-driver "Install Latest Release" silently reinstalled the OLD version** (downloaded the new `.c4z`, logged "triggered Composer install", then reloaded the same version — confirmed on-device 2026-06-16). Root cause: `UpdateProjectC4i` installs the `.c4z` from the c4z store **root** (`C4Z_ROOT`) by name, but the #83/#85 workarounds — chasing the OS 3.3.0 "Restricted path specified" error — redirected the *write* to the per-driver `C4Z` subfolder / `GetC4zDir()` root, locations `UpdateProjectC4i` never reads. The correct fix is not a different write path: OS 3.3.0+ exposes a **shared-secret `FileSetDir` handshake** (`C4:FileSetDir("c29tZXNwZWNpYWxrZXk=++11")`, the community-standard unlock string used verbatim by finitelabs/black-ops-drivers/etc.) that re-unlocks root `FileSetDir` access for unsigned community drivers. Added that handshake to `OnDriverLateInit` and reverted the updater write target to `C4Z_ROOT` (matching the upstream template + every working self-updater). `test_github_updater` §18 now asserts the `C4Z_ROOT` write, §19 asserts the late-init handshake. **Bootstrap:** this fix can't install itself via the (still-broken) button — install 2026061602 manually once; subsequent updates then work from the Actions buttons. (Carries the 2026061601 keepalive fix forward.) |
