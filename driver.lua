@@ -413,7 +413,14 @@ gTimerSafetyArming = false
 gWebSocket = nil
 gExtrasThrottle = false
 gSuppressTimerUpdates = false  -- Suppress device timer_count updates while we're setting timer
-gTimerExpired = false  -- Set when timer reaches 0, cleared when timer_status goes to 1
+gTimerExpired = false  -- Set whenever no timer is running (count reached 0 OR timer_status went to 0); gates stale timer_count echoes. NOT a reliable "auto-off fired" signal — use gTimerCountExpired for that.
+-- True only when the auto-off timer counted DOWN to zero (genuine expiry), as
+-- opposed to the many other ways timer_status becomes "0" (remote turned the
+-- fireplace on, Cancel Timer, device standby defaults). The timer-required
+-- safety policy uses this to decide force-off (real expiry) vs. arm-default
+-- (on-state that simply never had a timer). Cleared when a timer starts or the
+-- fireplace goes off.
+gTimerCountExpired = false
 
 gLastMainMode = nil
 gLastConnectionOnline = false
@@ -8960,6 +8967,7 @@ function ApplyDeviceStatus(status, value)
         end
         if IsFireplaceOffMode(value) and not gSuppressTimerUpdates then
             gTimerSafetyOffPending = false
+            gTimerCountExpired = false  -- off clears the one-shot expiry; next on-state arms again
             CancelTimerSafetyCheck()
             gState.timer_set = "0"
             gState.timer_count = "0"
@@ -8973,9 +8981,10 @@ function ApplyDeviceStatus(status, value)
             return
         end
         gState.timer_status = value
-        -- If timer becomes active, clear the expired flag
+        -- If timer becomes active, clear the expired flags
         if value == "1" then
             gTimerExpired = false
+            gTimerCountExpired = false
             gTimerSafetyOffPending = false
             CancelTimerSafetyCheck()
         end
@@ -9030,6 +9039,7 @@ function ApplyDeviceStatus(status, value)
         if newCount == 0 and oldCount > 0 then
             dbg_info("Timer expired (count reached 0)")
             gTimerExpired = true
+            gTimerCountExpired = true  -- genuine auto-off: safety policy should force off, not re-arm
             gState.timer_count = "0"
             gState.timer_set = "0"
             return { status = status, value = value, timerExpired = true, timerExtras = true }
@@ -9677,18 +9687,21 @@ function EnforceTimerRequiredForOnState(reason, allowUnknownTimerStatus)
         ScheduleTimerSafetyCheck(reason)
         return
     end
-    -- On-state without a running timer. Two cases:
-    --   * Timer just expired (gTimerExpired): honor auto-off and turn the
-    --     fireplace off — that is the timer doing its job.
-    --   * No timer ever armed (e.g. the physical remote turned the fireplace
-    --     on): arm the default timer and let the device keep running instead of
-    --     fighting it off. This requires a configured Default Timer (> 0); with
-    --     Default Timer 0 the documented escape hatch is to force off.
+    -- On-state without a running timer. Two cases, distinguished by WHY no timer
+    -- is running — gTimerCountExpired (the timer counted down to zero), NOT
+    -- gTimerExpired (which is also set on every timer_status=0, e.g. when the
+    -- physical remote turns the fireplace on or on Cancel Timer):
+    --   * Genuine auto-off (gTimerCountExpired): turn the fireplace off — that is
+    --     the timer doing its job.
+    --   * No timer ever armed (remote turn-on, cancel): arm the default timer and
+    --     let the device keep running instead of fighting it off. Requires a
+    --     configured Default Timer (> 0); with Default Timer 0 the documented
+    --     escape hatch is to force off.
     -- Arming sets gSuppressTimerUpdates, so re-entry from on-mode echoes is
     -- skipped above until timer_status settles to "1" and enforcement is
     -- satisfied — no force-off/echo war and no arm spam.
     local defaultTimer = GetDefaultTimerMinutes()
-    if not gTimerExpired and defaultTimer and defaultTimer > 0 then
+    if not gTimerCountExpired and defaultTimer and defaultTimer > 0 then
         dbg_warn("Timer safety policy arming default timer (" .. tostring(defaultTimer)
             .. " min) for on state: mode=" .. tostring(mode)
             .. ", timer_status=" .. tostring(gState.timer_status) .. ", reason=" .. tostring(reason))
@@ -9842,6 +9855,7 @@ function SetTimerValueAndArm(minutes, updateTimerExtras)
     local msValue = minutes * 60000
     SetTimerSuppression(true, "setting timer")
     gTimerExpired = false
+    gTimerCountExpired = false
     gTimerSafetyOffPending = false
     CancelTimerSafetyCheck()
     if not SendDeviceControl("timer_set", tostring(msValue)) then
@@ -10374,6 +10388,7 @@ function ResetDriverState()
     gTurnOffInProgress = false
     gTimerSafetyOffPending = false
     gTimerSafetyArming = false
+    gTimerCountExpired = false
 
     -- Cancel any pending timers. The WS-level ping/pong timer is owned by
     -- the vendored WebSocket module and gets cleaned up by gWebSocket:Close()

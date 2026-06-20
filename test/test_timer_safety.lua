@@ -30,11 +30,16 @@ end
 
 --------------------------------------------------------------------------------
 -- 1. On without a timer -> arm the default timer, do NOT turn off.
+--    Reproduces the real device flow: the status dump carries timer_status="0",
+--    which sets gTimerExpired=true *before* main_mode reaches an on-state. The
+--    arm decision must key off gTimerCountExpired (genuine count-down), NOT
+--    gTimerExpired, or the remote turn-on is force-offed (the original bug).
 --------------------------------------------------------------------------------
 reset_sent()
 gSuppressTimerUpdates = false
 gTurnOffInProgress = false
-gTimerExpired = false
+gTimerExpired = true            -- set by the device's timer_status=0 (NOT a count-down)
+gTimerCountExpired = false      -- the timer never counted down to zero
 gTimerSafetyOffPending = false
 gState.main_mode = "6"          -- High flame == on
 gState.timer_status = "0"       -- no running timer
@@ -58,6 +63,7 @@ gSuppressTimerUpdates = false
 gTurnOffInProgress = false
 gTimerSafetyOffPending = false
 gTimerExpired = true            -- timer ran down to 0
+gTimerCountExpired = true       -- genuine count-down expiry
 gState.main_mode = "6"
 gState.timer_status = "0"
 gStatusSeen["timer_status"] = true
@@ -76,6 +82,7 @@ reset_sent()
 gSuppressTimerUpdates = false
 gTurnOffInProgress = false
 gTimerExpired = false
+gTimerCountExpired = false
 gTimerSafetyOffPending = false
 gTimerSafetyArming = false
 gState.main_mode = "6"
@@ -110,5 +117,35 @@ gStatusSeen["timer_status"] = true
 EnforceTimerRequiredForOnState("test: off state", false)
 
 Test.assertEqual(#sent, 0, "no commands sent when the fireplace is already off")
+
+--------------------------------------------------------------------------------
+-- 5. End-to-end through the real status pipeline (ProcessStatusUpdate).
+--    The device's status dump delivers timer_status="0" (which sets
+--    gTimerExpired) BEFORE main_mode reaches an on-state — exactly the on-device
+--    sequence that made the original fix a no-op. The remote turn-on must still
+--    ARM, not force off.
+--------------------------------------------------------------------------------
+reset_sent()
+gSuppressTimerUpdates = false
+gTurnOffInProgress = false
+gTimerExpired = false
+gTimerCountExpired = false
+gTimerSafetyOffPending = false
+gTimerSafetyArming = false
+gState.main_mode = "0"
+gState.timer_status = "1"
+gStatusSeen = {}
+
+ProcessStatusUpdate("timer_status", "0")   -- device reports no timer
+Test.assertEqual(gTimerExpired, true, "timer_status=0 sets gTimerExpired (stale-count guard)")
+Test.assertEqual(gTimerCountExpired, false, "timer_status=0 alone is NOT a genuine count-down expiry")
+
+reset_sent()
+ProcessStatusUpdate("main_mode", "6")      -- remote turns the fireplace on
+Test.assert(any_sent('"timer_set"'), "remote turn-on (with gTimerExpired set) still ARMS the default timer")
+Test.assert(
+    not any_sent('"main_mode","value0":"0"'),
+    "remote turn-on is NOT force-offed end-to-end (regression guard for the gTimerExpired-vs-count-down bug)"
+)
 
 print("test_timer_safety OK")
